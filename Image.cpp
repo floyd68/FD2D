@@ -30,8 +30,15 @@ namespace FD2D
 
     Size Image::Measure(Size available)
     {
-        // 윈도우 크기에 맞게 항상 available size 사용
-        // Aspect Ratio는 OnRender에서 처리
+        // Thumbnail/Preview 용도에서는 targetSize를 fixed desired size로 사용 (thumb strip 레이아웃을 위해)
+        if ((m_request.purpose == ImageCore::ImagePurpose::Thumbnail || m_request.purpose == ImageCore::ImagePurpose::Preview) &&
+            (m_request.targetSize.w > 0.0f && m_request.targetSize.h > 0.0f))
+        {
+            m_desired = { m_request.targetSize.w, m_request.targetSize.h };
+            return m_desired;
+        }
+
+        // FullResolution은 윈도우 크기에 맞게 항상 available size 사용 (Aspect Ratio는 OnRender에서 처리)
         if (available.w > 0.0f && available.h > 0.0f)
         {
             m_desired = available;
