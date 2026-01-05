@@ -3,7 +3,6 @@
 #include <windows.h>
 #include <d2d1.h>
 #include <dwrite.h>
-#include <wincodec.h>
 #include <wrl/client.h>
 
 namespace FD2D
@@ -24,16 +23,14 @@ namespace FD2D
 
         static ID2D1Factory* D2DFactory();
         static IDWriteFactory* DWriteFactory();
-        static IWICImagingFactory* WicFactory();
         static HINSTANCE Instance();
 
     private:
         static bool s_initialized;
-        static bool s_coInitialized;
         static HINSTANCE s_instance;
         static ComPtr<ID2D1Factory> s_d2dFactory;
         static ComPtr<IDWriteFactory> s_dwriteFactory;
-        static ComPtr<IWICImagingFactory> s_wicFactory;
     };
 }
+
 

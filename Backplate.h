@@ -32,6 +32,9 @@ namespace FD2D
     class Backplate
     {
     public:
+        // Worker thread -> UI thread redraw 요청용 커스텀 메시지
+        static constexpr UINT WM_FD2D_REQUEST_REDRAW = WM_APP + 0x4D2; // 'FD2'
+
         Backplate();
         explicit Backplate(const std::wstring& name);
         ~Backplate() = default;

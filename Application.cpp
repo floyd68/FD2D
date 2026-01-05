@@ -1,4 +1,6 @@
 #include "Application.h"
+// Tear down ImageCore before FD2D::Core shutdown and before app CoUninitialize
+#include "../ImageCore/ImageLoader.h"
 
 namespace FD2D
 {
@@ -29,6 +31,7 @@ namespace FD2D
     void Application::Shutdown()
     {
         m_backplates.clear();
+        ImageCore::ImageLoader::Instance().Shutdown();
         Core::Shutdown();
         m_initialized = false;
     }
@@ -41,7 +44,8 @@ namespace FD2D
         }
 
         auto backplate = std::make_shared<Backplate>(name);
-        m_backplates.emplace(name, backplate);
+        // emplace 대신 insert 사용 (Release 모드 최적화 문제 방지)
+        m_backplates[name] = backplate;
         return backplate;
     }
 
@@ -59,7 +63,8 @@ namespace FD2D
             return nullptr;
         }
 
-        m_backplates.emplace(name, backplate);
+        // emplace 대신 insert 사용 (Release 모드 최적화 문제 방지)
+        m_backplates[name] = backplate;
         return backplate;
     }
 

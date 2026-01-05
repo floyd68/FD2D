@@ -1,5 +1,6 @@
 #pragma once
 
+#include "FD2D_Export.h"
 #include "Core.h"
 #include "Backplate.h"
 #include "Wnd.h"

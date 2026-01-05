@@ -24,7 +24,8 @@ namespace FD2D
             {
                 SetWindowLongPtr(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
                 self->m_window = hWnd;
-                self->EnsureRenderTarget();
+                // WM_NCCREATE 시점에는 창이 완전히 생성되지 않았으므로 렌더 타겟 생성을 지연
+                // WM_CREATE 또는 첫 WM_SIZE에서 생성됨
             }
         }
 
@@ -51,6 +52,14 @@ namespace FD2D
 
         switch (message)
         {
+        case WM_CREATE:
+        {
+            // 창이 완전히 생성된 후 렌더 타겟 생성
+            EnsureRenderTarget();
+            result = 0;
+            return true;
+        }
+
         case WM_SIZE:
         {
             Resize(LOWORD(lParam), HIWORD(lParam));
@@ -64,6 +73,17 @@ namespace FD2D
             BeginPaint(m_window, &ps);
             Render();
             EndPaint(m_window, &ps);
+            result = 0;
+            return true;
+        }
+
+        case Backplate::WM_FD2D_REQUEST_REDRAW:
+        {
+            // worker thread에서 PostMessage로 들어온 redraw 요청
+            if (m_window)
+            {
+                InvalidateRect(m_window, nullptr, FALSE);
+            }
             result = 0;
             return true;
         }
@@ -105,13 +125,23 @@ namespace FD2D
             return true;
         }
 
+        HINSTANCE hInstance = options.instance;
+        if (hInstance == nullptr)
+        {
+            hInstance = Core::Instance();
+            if (hInstance == nullptr)
+            {
+                return false;
+            }
+        }
+
         WNDCLASSEXW wcex {};
         wcex.cbSize = sizeof(WNDCLASSEX);
         wcex.style = CS_HREDRAW | CS_VREDRAW;
         wcex.lpfnWndProc = Backplate::WndProc;
         wcex.cbClsExtra = 0;
         wcex.cbWndExtra = 0;
-        wcex.hInstance = options.instance != nullptr ? options.instance : Core::Instance();
+        wcex.hInstance = hInstance;
         wcex.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
         wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wcex.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
@@ -121,6 +151,13 @@ namespace FD2D
 
         if (RegisterClassExW(&wcex) == 0)
         {
+            DWORD error = GetLastError();
+            // 클래스가 이미 등록되어 있으면 성공으로 간주
+            if (error == ERROR_ALREADY_EXISTS)
+            {
+                m_classRegistered = true;
+                return true;
+            }
             return false;
         }
 
@@ -163,7 +200,12 @@ namespace FD2D
         WindowOptions opts = options;
         if (opts.instance == nullptr)
         {
-            opts.instance = Core::Instance();
+            HINSTANCE coreInstance = Core::Instance();
+            if (coreInstance == nullptr)
+            {
+                return E_POINTER;
+            }
+            opts.instance = coreInstance;
         }
 
         if (!RegisterClass(opts))
