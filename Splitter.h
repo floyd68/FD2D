@@ -30,6 +30,10 @@ namespace FD2D
         void SetSnapThreshold(float threshold);
         float SnapThreshold() const { return m_snapThreshold; }
 
+        // Update internal ratio without invoking callbacks (used by SplitPanel clamping)
+        void SetRatio(float ratio);
+        float Ratio() const { return m_currentRatio; }
+
         void SetParentBounds(const Rect& bounds);
         void OnSplitChanged(std::function<void(float ratio)> handler);
 

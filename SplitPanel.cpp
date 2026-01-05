@@ -1,4 +1,5 @@
 #include "SplitPanel.h"
+#include <algorithm>
 
 namespace FD2D
 {
@@ -72,9 +73,83 @@ namespace FD2D
         Invalidate();
     }
 
+    void SplitPanel::SetSecondPaneMinExtent(float extent)
+    {
+        m_secondPaneMinExtent = (std::max)(0.0f, extent);
+        Invalidate();
+    }
+
+    void SplitPanel::SetSecondPaneMaxExtent(float extent)
+    {
+        m_secondPaneMaxExtent = (std::max)(0.0f, extent);
+        Invalidate();
+    }
+
+    float SplitPanel::ClampRatioForSecondPane(const Rect& childArea, float splitterExtent, float ratio) const
+    {
+        float availableExtent = 0.0f;
+        if (m_orientation == SplitterOrientation::Horizontal)
+        {
+            availableExtent = childArea.w - splitterExtent;
+        }
+        else
+        {
+            availableExtent = childArea.h - splitterExtent;
+        }
+
+        if (availableExtent <= 0.0f)
+        {
+            return (std::max)(0.0f, (std::min)(1.0f, ratio));
+        }
+
+        float secondExtent = availableExtent * (1.0f - ratio);
+
+        float minE = m_secondPaneMinExtent;
+        float maxE = m_secondPaneMaxExtent;
+
+        if (maxE > 0.0f)
+        {
+            maxE = (std::min)(maxE, availableExtent);
+        }
+
+        if (minE > availableExtent)
+        {
+            minE = availableExtent;
+        }
+
+        if (minE > 0.0f)
+        {
+            secondExtent = (std::max)(secondExtent, minE);
+        }
+        if (maxE > 0.0f)
+        {
+            secondExtent = (std::min)(secondExtent, maxE);
+        }
+
+        float clampedRatio = 1.0f - (secondExtent / availableExtent);
+        clampedRatio = (std::max)(0.0f, (std::min)(1.0f, clampedRatio));
+        return clampedRatio;
+    }
+
     void SplitPanel::OnSplitRatioChanged(float ratio)
     {
-        m_splitRatio = ratio;
+        // Clamp ratio based on current bounds and second-pane constraints
+        Rect inset = Inset(m_bounds, m_margin);
+        Rect childArea = Inset(inset, m_padding);
+
+        float splitterExtent = 0.0f;
+        if (m_splitter)
+        {
+            Size s = m_splitter->Measure({ childArea.w, childArea.h });
+            splitterExtent = (m_orientation == SplitterOrientation::Horizontal) ? s.w : s.h;
+        }
+
+        float clamped = ClampRatioForSecondPane(childArea, splitterExtent, ratio);
+        m_splitRatio = clamped;
+        if (m_splitter)
+        {
+            m_splitter->SetRatio(clamped);
+        }
         
         // 레이아웃을 다시 계산하기 위해 Measure/Arrange 호출
         if (BackplateRef() && m_bounds.w > 0.0f && m_bounds.h > 0.0f)
@@ -137,6 +212,12 @@ namespace FD2D
             float splitterWidth = m_splitter ? m_splitter->Measure({ childArea.w, childArea.h }).w : 0.0f;
             float availableWidth = totalWidth - splitterWidth;
 
+            m_splitRatio = ClampRatioForSecondPane(childArea, splitterWidth, m_splitRatio);
+            if (m_splitter)
+            {
+                m_splitter->SetRatio(m_splitRatio);
+            }
+
             float firstWidth = availableWidth * m_splitRatio;
             float secondWidth = availableWidth * (1.0f - m_splitRatio);
 
@@ -172,6 +253,12 @@ namespace FD2D
             float totalHeight = childArea.h;
             float splitterHeight = m_splitter ? m_splitter->Measure({ childArea.w, childArea.h }).h : 0.0f;
             float availableHeight = totalHeight - splitterHeight;
+
+            m_splitRatio = ClampRatioForSecondPane(childArea, splitterHeight, m_splitRatio);
+            if (m_splitter)
+            {
+                m_splitter->SetRatio(m_splitRatio);
+            }
 
             float firstHeight = availableHeight * m_splitRatio;
             float secondHeight = availableHeight * (1.0f - m_splitRatio);

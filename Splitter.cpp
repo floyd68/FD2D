@@ -38,6 +38,18 @@ namespace FD2D
         m_snapThreshold = (std::max)(0.0f, (std::min)(0.5f, threshold));
     }
 
+    void Splitter::SetRatio(float ratio)
+    {
+        float clamped = (std::max)(0.0f, (std::min)(1.0f, ratio));
+        clamped = CalculateRatio(clamped);
+
+        if (clamped != m_currentRatio)
+        {
+            m_currentRatio = clamped;
+            Invalidate();
+        }
+    }
+
     void Splitter::OnSplitChanged(std::function<void(float ratio)> handler)
     {
         m_splitChanged = std::move(handler);

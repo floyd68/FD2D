@@ -19,14 +19,21 @@ namespace FD2D
         void SetSplitRatio(float ratio);  // 0.0 ~ 1.0
         float SplitRatio() const { return m_splitRatio; }
 
+        // Constrain the second pane extent (width for Horizontal, height for Vertical)
+        void SetSecondPaneMinExtent(float extent);
+        void SetSecondPaneMaxExtent(float extent);
+
         Size Measure(Size available) override;
         void Arrange(Rect finalRect) override;
 
     private:
         void OnSplitRatioChanged(float ratio);
+        float ClampRatioForSecondPane(const Rect& childArea, float splitterExtent, float ratio) const;
 
         SplitterOrientation m_orientation { SplitterOrientation::Horizontal };
         float m_splitRatio { 0.5f };
+        float m_secondPaneMinExtent { 0.0f }; // 0 = no limit
+        float m_secondPaneMaxExtent { 0.0f }; // 0 = no limit
         std::shared_ptr<Wnd> m_firstChild {};
         std::shared_ptr<Wnd> m_secondChild {};
         std::shared_ptr<Splitter> m_splitter {};

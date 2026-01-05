@@ -34,7 +34,24 @@ namespace FD2D
         if ((m_request.purpose == ImageCore::ImagePurpose::Thumbnail || m_request.purpose == ImageCore::ImagePurpose::Preview) &&
             (m_request.targetSize.w > 0.0f && m_request.targetSize.h > 0.0f))
         {
-            m_desired = { m_request.targetSize.w, m_request.targetSize.h };
+            // StackPanel(Horizontal)은 childRect의 height를 childArea.h(=윈도우 높이)에 맞추기 때문에,
+            // height가 줄어들면 Image::OnRender의 aspect-fit 로직이 셀 내부 여백을 크게 만들 수 있다.
+            // 썸네일 모드에서는 available에 맞춰 셀 자체를 줄여(정사각형) "간격이 벌어져 보이는" 현상을 완화한다.
+            float size = m_request.targetSize.h;
+            if (m_request.targetSize.w > 0.0f)
+            {
+                size = (std::min)(size, m_request.targetSize.w);
+            }
+            if (available.w > 0.0f)
+            {
+                size = (std::min)(size, available.w);
+            }
+            if (available.h > 0.0f)
+            {
+                size = (std::min)(size, available.h);
+            }
+
+            m_desired = { size, size };
             return m_desired;
         }
 
