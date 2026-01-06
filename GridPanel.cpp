@@ -79,17 +79,17 @@ namespace FD2D
         std::vector<float> rowAuto(m_rows.size(), 0.0f);
 
         // Measure each child and collect auto sizes.
-        for (auto& kv : Children())
+        for (auto& child : ChildrenInOrder())
         {
-            if (!kv.second)
+            if (!child)
             {
                 continue;
             }
 
-            const GridCell cell = m_cells.count(kv.second.get()) ? m_cells[kv.second.get()] : GridCell {};
+            const GridCell cell = m_cells.count(child.get()) ? m_cells[child.get()] : GridCell {};
 
             Size childAvail { available.w, available.h };
-            Size desired = kv.second->Measure(childAvail);
+            Size desired = child->Measure(childAvail);
 
             // Only handle span == 1 for auto sizing.
             if (cell.col < static_cast<int>(colAuto.size()) && cell.colSpan == 1 && m_columns[cell.col].type == GridLength::Type::Auto)
@@ -127,15 +127,15 @@ namespace FD2D
         std::vector<float> rowAuto(rowCount, 0.0f);
 
         // Use desired sizes for auto columns/rows
-        for (auto& kv : Children())
+        for (auto& child : ChildrenInOrder())
         {
-            if (!kv.second)
+            if (!child)
             {
                 continue;
             }
 
-            const GridCell cell = m_cells.count(kv.second.get()) ? m_cells[kv.second.get()] : GridCell {};
-            Size desired = kv.second->Measure({ finalRect.w, finalRect.h });
+            const GridCell cell = m_cells.count(child.get()) ? m_cells[child.get()] : GridCell {};
+            Size desired = child->Measure({ finalRect.w, finalRect.h });
 
             if (cell.col < static_cast<int>(colCount) && cell.colSpan == 1 && m_columns[cell.col].type == GridLength::Type::Auto)
             {
@@ -204,14 +204,14 @@ namespace FD2D
             rowOffsets[i + 1] = rowOffsets[i] + rowHeights[i];
         }
 
-        for (auto& kv : Children())
+        for (auto& child : ChildrenInOrder())
         {
-            if (!kv.second)
+            if (!child)
             {
                 continue;
             }
 
-            const GridCell cell = m_cells.count(kv.second.get()) ? m_cells[kv.second.get()] : GridCell {};
+            const GridCell cell = m_cells.count(child.get()) ? m_cells[child.get()] : GridCell {};
 
             size_t c = (std::min)(static_cast<size_t>(cell.col), colCount - 1);
             size_t r = (std::min)(static_cast<size_t>(cell.row), rowCount - 1);
@@ -223,7 +223,7 @@ namespace FD2D
             float w = colOffsets[c + cs] - colOffsets[c];
             float h = rowOffsets[r + rs] - rowOffsets[r];
 
-            kv.second->Arrange({ x, y, w, h });
+            child->Arrange({ x, y, w, h });
         }
 
         m_bounds = finalRect;

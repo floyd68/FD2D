@@ -73,6 +73,18 @@ namespace FD2D
         Invalidate();
     }
 
+    void SplitPanel::SetFirstPaneMinExtent(float extent)
+    {
+        m_firstPaneMinExtent = (std::max)(0.0f, extent);
+        Invalidate();
+    }
+
+    void SplitPanel::SetFirstPaneMaxExtent(float extent)
+    {
+        m_firstPaneMaxExtent = (std::max)(0.0f, extent);
+        Invalidate();
+    }
+
     void SplitPanel::SetSecondPaneMinExtent(float extent)
     {
         m_secondPaneMinExtent = (std::max)(0.0f, extent);
@@ -85,7 +97,13 @@ namespace FD2D
         Invalidate();
     }
 
-    float SplitPanel::ClampRatioForSecondPane(const Rect& childArea, float splitterExtent, float ratio) const
+    void SplitPanel::SetConstraintPropagation(ConstraintPropagation policy)
+    {
+        m_propagation = policy;
+        Invalidate();
+    }
+
+    float SplitPanel::ClampRatioForPaneConstraints(const Rect& childArea, float splitterExtent, float ratio) const
     {
         float availableExtent = 0.0f;
         if (m_orientation == SplitterOrientation::Horizontal)
@@ -102,33 +120,59 @@ namespace FD2D
             return (std::max)(0.0f, (std::min)(1.0f, ratio));
         }
 
-        float secondExtent = availableExtent * (1.0f - ratio);
+        // Convert constraints into a ratio range.
+        // firstExtent  = availableExtent * ratio
+        // secondExtent = availableExtent * (1 - ratio)
+        float minRatio = 0.0f;
+        float maxRatio = 1.0f;
 
-        float minE = m_secondPaneMinExtent;
-        float maxE = m_secondPaneMaxExtent;
+        const float firstMin = m_firstPaneMinExtent;
+        const float firstMax = m_firstPaneMaxExtent;
+        const float secondMin = m_secondPaneMinExtent;
+        const float secondMax = m_secondPaneMaxExtent;
 
-        if (maxE > 0.0f)
+        if (firstMin > 0.0f)
         {
-            maxE = (std::min)(maxE, availableExtent);
+            minRatio = (std::max)(minRatio, firstMin / availableExtent);
+        }
+        if (firstMax > 0.0f)
+        {
+            maxRatio = (std::min)(maxRatio, firstMax / availableExtent);
         }
 
-        if (minE > availableExtent)
+        if (secondMin > 0.0f)
         {
-            minE = availableExtent;
+            maxRatio = (std::min)(maxRatio, 1.0f - (secondMin / availableExtent));
+        }
+        if (secondMax > 0.0f)
+        {
+            minRatio = (std::max)(minRatio, 1.0f - (secondMax / availableExtent));
         }
 
-        if (minE > 0.0f)
+        minRatio = (std::max)(0.0f, (std::min)(1.0f, minRatio));
+        maxRatio = (std::max)(0.0f, (std::min)(1.0f, maxRatio));
+
+        float clamped = ratio;
+
+        // If constraints are feasible, clamp directly.
+        if (minRatio <= maxRatio)
         {
-            secondExtent = (std::max)(secondExtent, minE);
-        }
-        if (maxE > 0.0f)
-        {
-            secondExtent = (std::min)(secondExtent, maxE);
+            clamped = (std::max)(minRatio, (std::min)(maxRatio, clamped));
+            return clamped;
         }
 
-        float clampedRatio = 1.0f - (secondExtent / availableExtent);
-        clampedRatio = (std::max)(0.0f, (std::min)(1.0f, clampedRatio));
-        return clampedRatio;
+        // Best-effort when constraints conflict: treat mins as hard, relax maxes.
+        clamped = (std::max)(0.0f, (std::min)(1.0f, clamped));
+        if (firstMin > 0.0f)
+        {
+            clamped = (std::max)(clamped, firstMin / availableExtent);
+        }
+        if (secondMin > 0.0f)
+        {
+            clamped = (std::min)(clamped, 1.0f - (secondMin / availableExtent));
+        }
+        clamped = (std::max)(0.0f, (std::min)(1.0f, clamped));
+        return clamped;
     }
 
     void SplitPanel::OnSplitRatioChanged(float ratio)
@@ -144,7 +188,7 @@ namespace FD2D
             splitterExtent = (m_orientation == SplitterOrientation::Horizontal) ? s.w : s.h;
         }
 
-        float clamped = ClampRatioForSecondPane(childArea, splitterExtent, ratio);
+        float clamped = ClampRatioForPaneConstraints(childArea, splitterExtent, ratio);
         m_splitRatio = clamped;
         if (m_splitter)
         {
@@ -187,6 +231,16 @@ namespace FD2D
             // 좌우 분할
             float totalWidth = firstSize.w + splitterSize.w + secondSize.w;
             float maxHeight = (std::max)(firstSize.h, (std::max)(secondSize.h, splitterSize.h));
+
+            // Upward constraint propagation (min width)
+            if (m_propagation != ConstraintPropagation::None)
+            {
+                float minFirst = m_firstPaneMinExtent;
+                float minSecond = m_secondPaneMinExtent;
+                float minTotal = minFirst + splitterSize.w + minSecond;
+                totalWidth = (std::max)(totalWidth, minTotal);
+            }
+
             m_desired = { totalWidth, maxHeight };
         }
         else
@@ -194,10 +248,73 @@ namespace FD2D
             // 상하 분할
             float totalHeight = firstSize.h + splitterSize.h + secondSize.h;
             float maxWidth = (std::max)(firstSize.w, (std::max)(secondSize.w, splitterSize.w));
+
+            // Upward constraint propagation (min height)
+            if (m_propagation != ConstraintPropagation::None)
+            {
+                float minFirst = m_firstPaneMinExtent;
+                float minSecond = m_secondPaneMinExtent;
+                float minTotal = minFirst + splitterSize.h + minSecond;
+                totalHeight = (std::max)(totalHeight, minTotal);
+            }
+
             m_desired = { maxWidth, totalHeight };
         }
 
         return m_desired;
+    }
+
+    Size SplitPanel::MinSize() const
+    {
+        // Child intrinsic mins (may be 0 for many leaf controls)
+        Size firstMin {};
+        Size secondMin {};
+        if (m_firstChild)
+        {
+            firstMin = m_firstChild->MinSize();
+        }
+        if (m_secondChild)
+        {
+            secondMin = m_secondChild->MinSize();
+        }
+
+        const float splitterExtent = m_splitter ? m_splitter->HitAreaThickness() : 0.0f;
+
+        // Apply SplitPanel constraints only when propagation is enabled.
+        const bool propagate = (m_propagation != ConstraintPropagation::None);
+
+        float minW = 0.0f;
+        float minH = 0.0f;
+
+        if (m_orientation == SplitterOrientation::Horizontal)
+        {
+            float a = firstMin.w;
+            float b = secondMin.w;
+            if (propagate)
+            {
+                a = (std::max)(a, m_firstPaneMinExtent);
+                b = (std::max)(b, m_secondPaneMinExtent);
+            }
+            minW = a + splitterExtent + b;
+            minH = (std::max)(firstMin.h, secondMin.h);
+        }
+        else
+        {
+            float a = firstMin.h;
+            float b = secondMin.h;
+            if (propagate)
+            {
+                a = (std::max)(a, m_firstPaneMinExtent);
+                b = (std::max)(b, m_secondPaneMinExtent);
+            }
+            minH = a + splitterExtent + b;
+            minW = (std::max)(firstMin.w, secondMin.w);
+        }
+
+        // Include this node's margin/padding (same convention as Wnd::Arrange)
+        minW += 2.0f * m_margin + 2.0f * m_padding;
+        minH += 2.0f * m_margin + 2.0f * m_padding;
+        return { minW, minH };
     }
 
     void SplitPanel::Arrange(Rect finalRect)
@@ -212,7 +329,7 @@ namespace FD2D
             float splitterWidth = m_splitter ? m_splitter->Measure({ childArea.w, childArea.h }).w : 0.0f;
             float availableWidth = totalWidth - splitterWidth;
 
-            m_splitRatio = ClampRatioForSecondPane(childArea, splitterWidth, m_splitRatio);
+            m_splitRatio = ClampRatioForPaneConstraints(childArea, splitterWidth, m_splitRatio);
             if (m_splitter)
             {
                 m_splitter->SetRatio(m_splitRatio);
@@ -254,7 +371,7 @@ namespace FD2D
             float splitterHeight = m_splitter ? m_splitter->Measure({ childArea.w, childArea.h }).h : 0.0f;
             float availableHeight = totalHeight - splitterHeight;
 
-            m_splitRatio = ClampRatioForSecondPane(childArea, splitterHeight, m_splitRatio);
+            m_splitRatio = ClampRatioForPaneConstraints(childArea, splitterHeight, m_splitRatio);
             if (m_splitter)
             {
                 m_splitter->SetRatio(m_splitRatio);

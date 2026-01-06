@@ -1,9 +1,15 @@
 #include "Application.h"
 // Tear down ImageCore before FD2D::Core shutdown and before app CoUninitialize
 #include "../ImageCore/ImageLoader.h"
+#include <vector>
 
 namespace FD2D
 {
+    static unsigned long long NowMs()
+    {
+        return static_cast<unsigned long long>(GetTickCount64());
+    }
+
     Application& Application::Instance()
     {
         static Application instance;
@@ -81,14 +87,104 @@ namespace FD2D
 
     int Application::RunMessageLoop()
     {
-        MSG msg {};
-        while (GetMessage(&msg, nullptr, 0, 0) > 0)
+        for (;;)
         {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
+            // Build the set of async redraw events (one per backplate).
+            std::vector<HANDLE> events;
+            events.reserve(m_backplates.size());
+            for (const auto& kv : m_backplates)
+            {
+                if (kv.second)
+                {
+                    HANDLE ev = kv.second->AsyncRedrawEvent();
+                    if (ev)
+                    {
+                        events.push_back(ev);
+                    }
+                }
+            }
 
-        return static_cast<int>(msg.wParam);
+            const DWORD waitCount = static_cast<DWORD>(events.size());
+
+            // If any backplate has an active animation, wake at ~60fps to paint smoothly.
+            // Otherwise, keep a safety heartbeat (prevents "stuck forever" if a wakeup is missed).
+            DWORD timeoutMs = 1000;
+            const unsigned long long now = NowMs();
+            for (const auto& kv : m_backplates)
+            {
+                if (kv.second && kv.second->HasActiveAnimation(now))
+                {
+                    timeoutMs = 16;
+                    break;
+                }
+            }
+
+            const DWORD waitRes = MsgWaitForMultipleObjectsEx(
+                waitCount,
+                waitCount > 0 ? events.data() : nullptr,
+                timeoutMs,
+                QS_ALLINPUT,
+                MWMO_INPUTAVAILABLE);
+
+            if (waitRes == WAIT_FAILED)
+            {
+                return -1;
+            }
+
+            // One of our async redraw events fired.
+            if (waitRes >= WAIT_OBJECT_0 && waitRes < WAIT_OBJECT_0 + waitCount)
+            {
+                for (const auto& kv : m_backplates)
+                {
+                    if (kv.second)
+                    {
+                        kv.second->ProcessAsyncRedraw();
+                    }
+                }
+                // Do NOT continue here:
+                // When worker completions arrive frequently (e.g., heavy I/O), we can starve the animation tick
+                // and make spinners/fades appear to "pause". We'll fall through to drain messages and run a
+                // throttled animation tick each loop.
+            }
+
+            // Animation tick timeout (no messages/events, but animations are active).
+            if (waitRes == WAIT_TIMEOUT)
+            {
+                const unsigned long long t = NowMs();
+                for (const auto& kv : m_backplates)
+                {
+                    if (kv.second)
+                    {
+                        kv.second->ProcessAnimationTick(t);
+                    }
+                }
+                continue;
+            }
+
+            // Process all pending Windows messages.
+            MSG msg {};
+            while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+            {
+                if (msg.message == WM_QUIT)
+                {
+                    return static_cast<int>(msg.wParam);
+                }
+
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+
+            // Important: animations must advance even when the message queue is busy and we never hit WAIT_TIMEOUT.
+            // So after draining messages, run a throttled animation tick.
+            const unsigned long long t = NowMs();
+            for (const auto& kv : m_backplates)
+            {
+                if (kv.second)
+                {
+                    kv.second->ProcessAnimationTick(t);
+                }
+            }
+        }
     }
 
     HINSTANCE Application::HInstance() const

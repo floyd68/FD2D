@@ -26,11 +26,11 @@ namespace FD2D
     {
         // Base Panel defers to children Measure pass; default desired is max of children.
         Size maxSize {};
-        for (auto& kv : Children())
+        for (auto& child : ChildrenInOrder())
         {
-            if (kv.second)
+            if (child)
             {
-                Size s = kv.second->Measure(available);
+                Size s = child->Measure(available);
                 maxSize.w = (std::max)(maxSize.w, s.w);
                 maxSize.h = (std::max)(maxSize.h, s.h);
             }
@@ -44,11 +44,11 @@ namespace FD2D
     {
         m_bounds = finalRect;
         m_layoutRect = ToD2D(finalRect);
-        for (auto& kv : Children())
+        for (auto& child : ChildrenInOrder())
         {
-            if (kv.second)
+            if (child)
             {
-                kv.second->Arrange(finalRect);
+                child->Arrange(finalRect);
             }
         }
     }

@@ -50,10 +50,16 @@
     <ClInclude Include="SplitPanel.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+    <ClInclude Include="ScrollView.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
     <ClInclude Include="Splitter.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
     <ClInclude Include="StackPanel.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="Spinner.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
     <ClInclude Include="Text.h">
@@ -94,10 +100,16 @@
     <ClCompile Include="SplitPanel.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
+    <ClCompile Include="ScrollView.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
     <ClCompile Include="Splitter.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
     <ClCompile Include="StackPanel.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="Spinner.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
     <ClCompile Include="Text.cpp">

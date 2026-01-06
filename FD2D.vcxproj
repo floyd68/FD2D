@@ -112,6 +112,7 @@
       <PreprocessorDefinitions Condition="'$(FD2D_LINK_TYPE)'=='Dynamic'">_DEBUG;FD2D_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
       <AdditionalIncludeDirectories>$(ProjectDir);$(SolutionDir)ImageCore;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemDefinitionGroup>
@@ -127,7 +128,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <DebugInformationFormat>None</DebugInformationFormat>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
-      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
       <AdditionalIncludeDirectories>$(ProjectDir);$(SolutionDir)ImageCore;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link Condition="'$(FD2D_LINK_TYPE)'=='Dynamic'">
@@ -152,7 +153,9 @@
     <ClInclude Include="Panel.h" />
     <ClInclude Include="SplitPanel.h" />
     <ClInclude Include="Splitter.h" />
+    <ClInclude Include="ScrollView.h" />
     <ClInclude Include="StackPanel.h" />
+    <ClInclude Include="Spinner.h" />
     <ClInclude Include="Text.h" />
     <ClInclude Include="Wnd.h" />
   </ItemGroup>
@@ -168,7 +171,9 @@
     <ClCompile Include="Panel.cpp" />
     <ClCompile Include="SplitPanel.cpp" />
     <ClCompile Include="Splitter.cpp" />
+    <ClCompile Include="ScrollView.cpp" />
     <ClCompile Include="StackPanel.cpp" />
+    <ClCompile Include="Spinner.cpp" />
     <ClCompile Include="Text.cpp" />
     <ClCompile Include="Wnd.cpp" />
   </ItemGroup>

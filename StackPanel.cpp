@@ -23,11 +23,11 @@ namespace FD2D
         float main = 0.0f;
         float cross = 0.0f;
 
-        for (auto& kv : Children())
+        for (auto& child : ChildrenInOrder())
         {
-            if (kv.second)
+            if (child)
             {
-                Size s = kv.second->Measure(available);
+                Size s = child->Measure(available);
                 if (m_orientation == Orientation::Vertical)
                 {
                     main += s.h;
@@ -61,25 +61,25 @@ namespace FD2D
         Rect childArea = Inset(inset, m_padding);
         float offset = (m_orientation == Orientation::Vertical) ? childArea.y : childArea.x;
 
-        for (auto& kv : Children())
+        for (auto& child : ChildrenInOrder())
         {
-            if (!kv.second)
+            if (!child)
             {
                 continue;
             }
 
-            Size desired = kv.second->Measure({ childArea.w, childArea.h });
+            Size desired = child->Measure({ childArea.w, childArea.h });
 
             if (m_orientation == Orientation::Vertical)
             {
                 Rect childRect { childArea.x, offset, childArea.w, desired.h };
-                kv.second->Arrange(childRect);
+                child->Arrange(childRect);
                 offset += desired.h + m_spacing;
             }
             else
             {
                 Rect childRect { offset, childArea.y, desired.w, childArea.h };
-                kv.second->Arrange(childRect);
+                child->Arrange(childRect);
                 offset += desired.w + m_spacing;
             }
         }

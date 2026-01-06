@@ -15,4 +15,6 @@
 #include "GridPanel.h"
 #include "Splitter.h"
 #include "SplitPanel.h"
+#include "ScrollView.h"
+#include "Spinner.h"
 

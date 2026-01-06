@@ -57,16 +57,21 @@ namespace FD2D
         float m_snapThreshold { 0.02f };  // 2% 이내면 snap
 
         bool m_hovered { false };
+        bool m_trackingMouseLeave { false };
         bool m_dragging { false };
         POINT m_dragStart {};
         float m_dragStartRatio { 0.5f };
         float m_currentRatio { 0.5f };
         Rect m_dragStartParentBounds {};  // 드래그 시작 시점의 부모 bounds
 
+        // Hover fade animation (0 = normal, 1 = hover).
+        float m_hoverT { 0.0f };
+        unsigned long long m_lastHoverAnimMs { 0 };
+        unsigned int m_hoverFadeMs { 140 };
+
         std::function<void(float)> m_splitChanged;
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brushNormal {};
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brushHover {};
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brushDrag {};
     };
 }

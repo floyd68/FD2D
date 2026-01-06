@@ -5,6 +5,13 @@
 
 namespace FD2D
 {
+    enum class ConstraintPropagation
+    {
+        None,       // 부모에 영향 없음
+        Minimum,    // 최소 크기만 전파 (Measure의 desired에 반영)
+        Strict      // (현재 엔진에서는 Minimum과 동일. 추후 overflow 정책/윈도우 min-size와 연계 가능)
+    };
+
     class SplitPanel : public Panel
     {
     public:
@@ -19,21 +26,30 @@ namespace FD2D
         void SetSplitRatio(float ratio);  // 0.0 ~ 1.0
         float SplitRatio() const { return m_splitRatio; }
 
-        // Constrain the second pane extent (width for Horizontal, height for Vertical)
+        // Constrain pane extents (width for Horizontal, height for Vertical)
+        void SetFirstPaneMinExtent(float extent);
+        void SetFirstPaneMaxExtent(float extent);
         void SetSecondPaneMinExtent(float extent);
         void SetSecondPaneMaxExtent(float extent);
 
+        void SetConstraintPropagation(ConstraintPropagation policy);
+        ConstraintPropagation PropagationPolicy() const { return m_propagation; }
+
         Size Measure(Size available) override;
+        Size MinSize() const override;
         void Arrange(Rect finalRect) override;
 
     private:
         void OnSplitRatioChanged(float ratio);
-        float ClampRatioForSecondPane(const Rect& childArea, float splitterExtent, float ratio) const;
+        float ClampRatioForPaneConstraints(const Rect& childArea, float splitterExtent, float ratio) const;
 
         SplitterOrientation m_orientation { SplitterOrientation::Horizontal };
         float m_splitRatio { 0.5f };
+        float m_firstPaneMinExtent { 0.0f };  // 0 = no limit
+        float m_firstPaneMaxExtent { 0.0f };  // 0 = no limit
         float m_secondPaneMinExtent { 0.0f }; // 0 = no limit
         float m_secondPaneMaxExtent { 0.0f }; // 0 = no limit
+        ConstraintPropagation m_propagation { ConstraintPropagation::None };
         std::shared_ptr<Wnd> m_firstChild {};
         std::shared_ptr<Wnd> m_secondChild {};
         std::shared_ptr<Splitter> m_splitter {};

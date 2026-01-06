@@ -16,11 +16,11 @@ namespace FD2D
     {
         // OverlayPanel은 자식들의 최대 크기를 사용하되, available size를 초과하지 않음
         Size maxSize {};
-        for (auto& kv : Children())
+        for (auto& child : ChildrenInOrder())
         {
-            if (kv.second)
+            if (child)
             {
-                Size s = kv.second->Measure(available);
+                Size s = child->Measure(available);
                 maxSize.w = (std::max)(maxSize.w, s.w);
                 maxSize.h = (std::max)(maxSize.h, s.h);
             }
@@ -42,11 +42,11 @@ namespace FD2D
 
     void OverlayPanel::Arrange(Rect finalRect)
     {
-        for (auto& kv : Children())
+        for (auto& child : ChildrenInOrder())
         {
-            if (kv.second)
+            if (child)
             {
-                kv.second->Arrange(finalRect);
+                child->Arrange(finalRect);
             }
         }
 

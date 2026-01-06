@@ -1,15 +1,126 @@
 #include "Backplate.h"
 #include "Core.h"
+#include <cmath>
+#include <dxgi1_3.h>
+#include <string>
+#include <algorithm>
 
 namespace FD2D
 {
+    static bool IsDeviceRemovedHr(HRESULT hr)
+    {
+        return hr == DXGI_ERROR_DEVICE_REMOVED
+            || hr == DXGI_ERROR_DEVICE_RESET
+            || hr == DXGI_ERROR_DRIVER_INTERNAL_ERROR;
+    }
+
+    static unsigned long long NowMs()
+    {
+        return static_cast<unsigned long long>(GetTickCount64());
+    }
+
+    static D2D1_BITMAP_PROPERTIES1 MakeSwapChainBitmapProps()
+    {
+        const float dpi = 96.0f;
+
+        D2D1_BITMAP_PROPERTIES1 bp {};
+        bp.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        // Swapchain alpha is DXGI_ALPHA_MODE_IGNORE, so the D2D target must match.
+        bp.pixelFormat.alphaMode = D2D1_ALPHA_MODE_IGNORE;
+        bp.dpiX = dpi;
+        bp.dpiY = dpi;
+        // Recommended for swapchain-backed targets (can be set as target, but not used as a source).
+        bp.bitmapOptions = static_cast<D2D1_BITMAP_OPTIONS>(
+            D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW);
+        return bp;
+    }
+
     Backplate::Backplate()
     {
+        m_asyncRedrawEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     }
 
     Backplate::Backplate(const std::wstring& name)
         : m_name(name)
     {
+        m_asyncRedrawEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    }
+
+    Backplate::~Backplate()
+    {
+        if (m_asyncRedrawEvent)
+        {
+            CloseHandle(m_asyncRedrawEvent);
+            m_asyncRedrawEvent = nullptr;
+        }
+    }
+
+    void Backplate::RequestAsyncRedraw()
+    {
+        if (!m_asyncRedrawEvent || !m_window)
+        {
+            return;
+        }
+
+        // Coalesce multiple worker completions into a single wakeup.
+        const bool wasPending = m_asyncRedrawPending.exchange(true);
+        if (!wasPending)
+        {
+            SetEvent(m_asyncRedrawEvent);
+        }
+    }
+
+    void Backplate::ProcessAsyncRedraw()
+    {
+        if (!m_window || !m_asyncRedrawEvent)
+        {
+            return;
+        }
+
+        // Drain the pending flag and reset the event for future signals.
+        m_asyncRedrawPending.store(false);
+        ResetEvent(m_asyncRedrawEvent);
+
+        // Trigger a prompt repaint (once per coalesced burst).
+        RedrawWindow(m_window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+    }
+
+    void Backplate::RequestAnimationFrame()
+    {
+        m_lastAnimationRequestMs.store(NowMs());
+    }
+
+    bool Backplate::HasActiveAnimation(unsigned long long nowMs) const
+    {
+        const unsigned long long last = m_lastAnimationRequestMs.load();
+        // Consider animation active if someone requested frames recently.
+        // Use a generous window so we don't accidentally drop out of 60fps ticking mid-fade
+        // (e.g., due to a brief message burst / scheduling hiccup).
+        return (last != 0) && (nowMs - last <= 2000ULL);
+    }
+
+    void Backplate::ProcessAnimationTick(unsigned long long nowMs)
+    {
+        if (!m_window)
+        {
+            return;
+        }
+
+        if (!HasActiveAnimation(nowMs))
+        {
+            return;
+        }
+
+        const unsigned long long lastTick = m_lastAnimationTickMs.load();
+        if (lastTick != 0 && (nowMs - lastTick) < 16ULL)
+        {
+            return;
+        }
+        m_lastAnimationTickMs.store(nowMs);
+
+        // Trigger one paint at most per tick.
+        InvalidateRect(m_window, nullptr, FALSE);
+        UpdateWindow(m_window);
     }
 
     LRESULT CALLBACK Backplate::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -52,6 +163,60 @@ namespace FD2D
 
         switch (message)
         {
+        case WM_ERASEBKGND:
+        {
+            // We render via swapchain; prevent GDI background erase to avoid flicker.
+            result = 1;
+            return true;
+        }
+
+        case WM_GETMINMAXINFO:
+        {
+            // Enforce upward constraints (e.g., SplitPanel min sizes) at the window level.
+            MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+            if (mmi != nullptr && m_window != nullptr)
+            {
+                float minClientW = 0.0f;
+                float minClientH = 0.0f;
+
+                for (const auto& pair : m_children)
+                {
+                    if (pair.second)
+                    {
+                        Size ms = pair.second->MinSize();
+                        minClientW = (std::max)(minClientW, ms.w);
+                        minClientH = (std::max)(minClientH, ms.h);
+                    }
+                }
+
+                if (minClientW > 0.0f || minClientH > 0.0f)
+                {
+                    RECT rc { 0, 0, static_cast<LONG>(std::ceil(minClientW)), static_cast<LONG>(std::ceil(minClientH)) };
+                    const DWORD style = static_cast<DWORD>(GetWindowLongPtr(m_window, GWL_STYLE));
+                    const DWORD exStyle = static_cast<DWORD>(GetWindowLongPtr(m_window, GWL_EXSTYLE));
+                    const BOOL hasMenu = (GetMenu(m_window) != nullptr) ? TRUE : FALSE;
+
+                    if (AdjustWindowRectEx(&rc, style, hasMenu, exStyle))
+                    {
+                        const LONG minTrackW = rc.right - rc.left;
+                        const LONG minTrackH = rc.bottom - rc.top;
+
+                        if (minTrackW > 0)
+                        {
+                            mmi->ptMinTrackSize.x = (std::max)(mmi->ptMinTrackSize.x, minTrackW);
+                        }
+                        if (minTrackH > 0)
+                        {
+                            mmi->ptMinTrackSize.y = (std::max)(mmi->ptMinTrackSize.y, minTrackH);
+                        }
+                    }
+                }
+            }
+
+            result = 0;
+            return true;
+        }
+
         case WM_CREATE:
         {
             // 창이 완전히 생성된 후 렌더 타겟 생성
@@ -82,7 +247,29 @@ namespace FD2D
             // worker thread에서 PostMessage로 들어온 redraw 요청
             if (m_window)
             {
+                // Fast but cheap:
+                // - InvalidateRect is low overhead and coalesces dirty regions
+                // - We schedule a single UI-thread "flush" message to call UpdateWindow()
+                //   so paint happens promptly without forcing RDW_UPDATENOW for every completion.
                 InvalidateRect(m_window, nullptr, FALSE);
+
+                if (!m_flushRedrawQueued)
+                {
+                    m_flushRedrawQueued = true;
+                    PostMessage(m_window, Backplate::WM_FD2D_FLUSH_REDRAW, 0, 0);
+                }
+            }
+            result = 0;
+            return true;
+        }
+
+        case Backplate::WM_FD2D_FLUSH_REDRAW:
+        {
+            m_flushRedrawQueued = false;
+            if (m_window)
+            {
+                // If there is an invalid region, this synchronously triggers WM_PAINT once.
+                UpdateWindow(m_window);
             }
             result = 0;
             return true;
@@ -144,7 +331,8 @@ namespace FD2D
         wcex.hInstance = hInstance;
         wcex.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
         wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
-        wcex.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        // No GDI background brush; the swapchain is the only surface we want presented.
+        wcex.hbrBackground = nullptr;
         wcex.lpszMenuName = nullptr;
         wcex.lpszClassName = options.className;
         wcex.hIconSm = LoadIcon(nullptr, IDI_APPLICATION);
@@ -192,7 +380,7 @@ namespace FD2D
             return hr;
         }
 
-        return CreateRenderTarget();
+        return EnsureRenderTarget();
     }
 
     HRESULT Backplate::CreateWindowed(const WindowOptions& options)
@@ -244,6 +432,8 @@ namespace FD2D
         GetClientRect(window, &rc);
         m_size = D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top);
 
+        m_rendererId = (opts.rendererId != nullptr) ? opts.rendererId : L"";
+
         return S_OK;
     }
 
@@ -276,16 +466,46 @@ namespace FD2D
 
     HRESULT Backplate::EnsureRenderTarget()
     {
-        if (!m_renderTarget)
+        // D2D-only path (compatibility renderer)
+        if (m_rendererId == L"d2d_hwndrt")
         {
-            return CreateRenderTarget();
+            return EnsureRenderTargetD2D();
+        }
+
+        HRESULT hr = S_OK;
+        if (!m_d3dDevice || !m_d3dContext || !m_d2dDevice || !m_d2dContext || !m_swapChain)
+        {
+            hr = CreateRenderTarget();
+            if (FAILED(hr))
+            {
+                return FallbackToD2DOnly(hr);
+            }
+        }
+
+        if (!m_rtv || !m_d2dTargetBitmap)
+        {
+            hr = RecreateSwapChainTargets();
+            if (FAILED(hr))
+            {
+                return FallbackToD2DOnly(hr);
+            }
         }
 
         return S_OK;
     }
 
-    HRESULT Backplate::CreateRenderTarget()
+    HRESULT Backplate::EnsureRenderTargetD2D()
     {
+        if (!m_hwndRenderTarget)
+        {
+            return CreateRenderTargetD2D();
+        }
+        return S_OK;
+    }
+
+    HRESULT Backplate::CreateRenderTargetD2D()
+    {
+        // Tear down D3D/DXGI resources if we are switching or if they exist.
         DiscardDeviceResources();
 
         if (m_window == nullptr)
@@ -299,19 +519,268 @@ namespace FD2D
             return E_POINTER;
         }
 
+        RECT rc {};
+        GetClientRect(m_window, &rc);
+        m_size = D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top);
+
+        const D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+            // DEFAULT lets D2D decide the most compatible path (HW when possible).
+            D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
+            96.0f,
+            96.0f);
+
+        const D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps = D2D1::HwndRenderTargetProperties(
+            m_window,
+            m_size,
+            D2D1_PRESENT_OPTIONS_NONE);
+
+        HRESULT hr = factory->CreateHwndRenderTarget(props, hwndProps, &m_hwndRenderTarget);
+        return hr;
+    }
+
+    HRESULT Backplate::FallbackToD2DOnly(HRESULT causeHr)
+    {
+        // Switch to D2D-only renderer as a compatibility fallback.
+        // Note: this disables the D3D pass (e.g. GPU-native DDS), but keeps the app usable.
+        UNREFERENCED_PARAMETER(causeHr);
+
+        m_rendererId = L"d2d_hwndrt";
+        return EnsureRenderTargetD2D();
+    }
+
+    HRESULT Backplate::RecreateSwapChainTargets()
+    {
+        if (!m_swapChain || !m_d3dDevice || !m_d2dContext)
+        {
+            return E_POINTER;
+        }
+
+        DiscardD2DTargets();
+
+        // Recreate RTV from swapchain backbuffer.
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> backBufferTex;
+        HRESULT hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBufferTex));
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        hr = m_d3dDevice->CreateRenderTargetView(backBufferTex.Get(), nullptr, &m_rtv);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        // Recreate D2D target bitmap from swapchain surface.
+        Microsoft::WRL::ComPtr<IDXGISurface> backBuffer;
+        hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        const D2D1_BITMAP_PROPERTIES1 bp = MakeSwapChainBitmapProps();
+        hr = m_d2dContext->CreateBitmapFromDxgiSurface(backBuffer.Get(), &bp, &m_d2dTargetBitmap);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        m_d2dContext->SetTarget(m_d2dTargetBitmap.Get());
+        return S_OK;
+    }
+
+    HRESULT Backplate::CreateRenderTarget()
+    {
+        DiscardDeviceResources();
+
+        if (m_window == nullptr)
+        {
+            return E_INVALIDARG;
+        }
+
+        // --- Create D3D11 device (BGRA required for D2D interop) ---
+        UINT deviceFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+#if defined(_DEBUG)
+        deviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+
+        D3D_FEATURE_LEVEL featureLevels[] =
+        {
+            D3D_FEATURE_LEVEL_11_1,
+            D3D_FEATURE_LEVEL_11_0,
+            D3D_FEATURE_LEVEL_10_1,
+            D3D_FEATURE_LEVEL_10_0,
+        };
+
+        D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_0;
+        HRESULT hr = D3D11CreateDevice(
+            nullptr,
+            D3D_DRIVER_TYPE_HARDWARE,
+            nullptr,
+            deviceFlags,
+            featureLevels,
+            static_cast<UINT>(std::size(featureLevels)),
+            D3D11_SDK_VERSION,
+            &m_d3dDevice,
+            &featureLevel,
+            &m_d3dContext);
+        if (FAILED(hr))
+        {
+            // Retry without debug device if not installed/available.
+            deviceFlags &= ~D3D11_CREATE_DEVICE_DEBUG;
+            hr = D3D11CreateDevice(
+                nullptr,
+                D3D_DRIVER_TYPE_HARDWARE,
+                nullptr,
+                deviceFlags,
+                featureLevels,
+                static_cast<UINT>(std::size(featureLevels)),
+                D3D11_SDK_VERSION,
+                &m_d3dDevice,
+                &featureLevel,
+                &m_d3dContext);
+        }
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        // --- Create D2D device/context from the DXGI device ---
+        Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+        hr = m_d3dDevice.As(&dxgiDevice);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        ID2D1Factory1* factory1 = Core::D2DFactory1();
+        if (factory1 == nullptr)
+        {
+            return E_POINTER;
+        }
+
+        hr = factory1->CreateDevice(dxgiDevice.Get(), &m_d2dDevice);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        hr = m_d2dDevice->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &m_d2dContext);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
         RECT clientRect {};
         GetClientRect(m_window, &clientRect);
         m_size = D2D1::SizeU(clientRect.right - clientRect.left, clientRect.bottom - clientRect.top);
 
-        return factory->CreateHwndRenderTarget(
-            D2D1::RenderTargetProperties(),
-            D2D1::HwndRenderTargetProperties(m_window, m_size),
-            &m_renderTarget);
+        // --- Create swap chain for the window ---
+        Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+        hr = dxgiDevice->GetAdapter(&adapter);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        Microsoft::WRL::ComPtr<IDXGIFactory2> dxgiFactory;
+        hr = adapter->GetParent(IID_PPV_ARGS(&dxgiFactory));
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        DXGI_SWAP_CHAIN_DESC1 scd {};
+        scd.Width = m_size.width;
+        scd.Height = m_size.height;
+        scd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        scd.Stereo = FALSE;
+        scd.SampleDesc.Count = 1;
+        scd.SampleDesc.Quality = 0;
+        scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        scd.BufferCount = 2;
+        scd.Scaling = DXGI_SCALING_STRETCH;
+        scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+        scd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+
+        hr = dxgiFactory->CreateSwapChainForHwnd(
+            m_d3dDevice.Get(),
+            m_window,
+            &scd,
+            nullptr,
+            nullptr,
+            &m_swapChain);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        // Create D2D target bitmap from swap chain back buffer
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> backBufferTex;
+        hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBufferTex));
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        hr = m_d3dDevice->CreateRenderTargetView(backBufferTex.Get(), nullptr, &m_rtv);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        Microsoft::WRL::ComPtr<IDXGISurface> backBuffer;
+        hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        const D2D1_BITMAP_PROPERTIES1 bp = MakeSwapChainBitmapProps();
+        hr = m_d2dContext->CreateBitmapFromDxgiSurface(backBuffer.Get(), &bp, &m_d2dTargetBitmap);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        m_d2dContext->SetTarget(m_d2dTargetBitmap.Get());
+        return S_OK;
+    }
+
+    void Backplate::DiscardD2DTargets()
+    {
+        if (m_d2dContext)
+        {
+            // Release swapchain backbuffer references held by D2D before any swapchain operations.
+            m_d2dContext->SetTarget(nullptr);
+            m_d2dContext->Flush();
+        }
+
+        m_rtv.Reset();
+        m_d2dTargetBitmap.Reset();
     }
 
     void Backplate::DiscardDeviceResources()
     {
-        m_renderTarget.Reset();
+        DiscardD2DTargets();
+
+        if (m_d3dContext)
+        {
+            // Force deferred destruction of swapchain-related resources before releasing the swapchain.
+            m_d3dContext->OMSetRenderTargets(0, nullptr, nullptr);
+            m_d3dContext->ClearState();
+            m_d3dContext->Flush();
+        }
+
+        m_d2dContext.Reset();
+        m_d2dDevice.Reset();
+        m_swapChain.Reset();
+        m_d3dContext.Reset();
+        m_d3dDevice.Reset();
+
+        m_hwndRenderTarget.Reset();
     }
 
     void Backplate::Resize(UINT width, UINT height)
@@ -327,9 +796,34 @@ namespace FD2D
             m_size = D2D1::SizeU(width, height);
         }
 
-        if (m_renderTarget)
+        if (m_hwndRenderTarget)
         {
-            m_renderTarget->Resize(m_size);
+            (void)m_hwndRenderTarget->Resize(m_size);
+        }
+        else if (m_swapChain && m_d2dContext)
+        {
+            m_d2dTargetBitmap.Reset();
+            (void)m_d2dContext->SetTarget(nullptr);
+            m_rtv.Reset();
+
+            // Resize swap chain buffers
+            (void)m_swapChain->ResizeBuffers(0, m_size.width, m_size.height, DXGI_FORMAT_UNKNOWN, 0);
+
+            Microsoft::WRL::ComPtr<ID3D11Texture2D> backBufferTex;
+            if (SUCCEEDED(m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBufferTex))))
+            {
+                (void)m_d3dDevice->CreateRenderTargetView(backBufferTex.Get(), nullptr, &m_rtv);
+            }
+
+            Microsoft::WRL::ComPtr<IDXGISurface> backBuffer;
+            if (SUCCEEDED(m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer))))
+            {
+                const D2D1_BITMAP_PROPERTIES1 bp = MakeSwapChainBitmapProps();
+                if (SUCCEEDED(m_d2dContext->CreateBitmapFromDxgiSurface(backBuffer.Get(), &bp, &m_d2dTargetBitmap)))
+                {
+                    m_d2dContext->SetTarget(m_d2dTargetBitmap.Get());
+                }
+            }
         }
 
         Rect root { 0.0f, 0.0f, static_cast<float>(m_size.width), static_cast<float>(m_size.height) };
@@ -356,27 +850,121 @@ namespace FD2D
         {
             Layout();
         }
-        if (FAILED(EnsureRenderTarget()))
+        HRESULT hrEnsure = EnsureRenderTarget();
+        if (FAILED(hrEnsure))
         {
+            // If D3D path failed, try automatic fallback to D2D-only once.
+            if (m_rendererId != L"d2d_hwndrt" && SUCCEEDED(FallbackToD2DOnly(hrEnsure)))
+            {
+                // Continue rendering with D2D-only below.
+            }
+            else
+            {
+                return;
+            }
+        }
+
+        // D2D-only renderer path (no D3D pass).
+        if (m_hwndRenderTarget)
+        {
+            m_hwndRenderTarget->BeginDraw();
+            m_hwndRenderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
+            m_hwndRenderTarget->Clear(D2D1::ColorF(0.184f, 0.310f, 0.310f, 1.0f));
+
+            for (auto& pair : m_children)
+            {
+                if (pair.second)
+                {
+                    pair.second->OnRender(m_hwndRenderTarget.Get());
+                }
+            }
+
+            HRESULT hr = m_hwndRenderTarget->EndDraw();
+            if (hr == D2DERR_RECREATE_TARGET)
+            {
+                m_hwndRenderTarget.Reset();
+            }
             return;
         }
 
-        m_renderTarget->BeginDraw();
-        m_renderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
-        m_renderTarget->Clear(D2D1::ColorF(D2D1::ColorF::DarkSlateGray));
+        // D3D pass (background + GPU images)
+        if (m_d3dContext && m_rtv)
+        {
+            const float clearColor[4] = { 0.184f, 0.310f, 0.310f, 1.0f }; // DarkSlateGray-ish
+            m_d3dContext->OMSetRenderTargets(1, m_rtv.GetAddressOf(), nullptr);
+            m_d3dContext->ClearRenderTargetView(m_rtv.Get(), clearColor);
+
+            D3D11_VIEWPORT vp {};
+            vp.TopLeftX = 0.0f;
+            vp.TopLeftY = 0.0f;
+            vp.Width = static_cast<float>(m_size.width);
+            vp.Height = static_cast<float>(m_size.height);
+            vp.MinDepth = 0.0f;
+            vp.MaxDepth = 1.0f;
+            m_d3dContext->RSSetViewports(1, &vp);
+
+            for (auto& pair : m_children)
+            {
+                if (pair.second)
+                {
+                    pair.second->OnRenderD3D(m_d3dContext.Get());
+                }
+            }
+
+            // IMPORTANT: ensure we release the swapchain backbuffer from the D3D OM stage
+            // before letting D2D draw to it.
+            ID3D11RenderTargetView* nullRTV[1] = { nullptr };
+            m_d3dContext->OMSetRenderTargets(1, nullRTV, nullptr);
+        }
+
+        // D2D pass (UI overlays)
+        bool d2dOk = true;
+        // Ensure we have a valid target for the UI pass.
+        if (!m_d2dTargetBitmap || !m_rtv)
+        {
+            (void)RecreateSwapChainTargets();
+        }
+
+        // We detach the target after each frame; ensure it is set for this draw.
+        if (m_d2dContext && m_d2dTargetBitmap)
+        {
+            m_d2dContext->SetTarget(m_d2dTargetBitmap.Get());
+        }
+
+        m_d2dContext->BeginDraw();
+        m_d2dContext->SetTransform(D2D1::Matrix3x2F::Identity());
 
         for (auto& pair : m_children)
         {
             if (pair.second)
             {
-                pair.second->OnRender(m_renderTarget.Get());
+                pair.second->OnRender(m_d2dContext.Get());
             }
         }
 
-        HRESULT hr = m_renderTarget->EndDraw();
-        if (hr == D2DERR_RECREATE_TARGET)
+        HRESULT hr = m_d2dContext->EndDraw();
+        if (FAILED(hr))
         {
-            DiscardDeviceResources();
+            d2dOk = false;
+            // Release the D2D target immediately so the swapchain backbuffer isn't held.
+            DiscardD2DTargets();
+
+            // Device lost -> full recreate next frame. Otherwise, just recreate targets.
+            if (IsDeviceRemovedHr(hr))
+            {
+                DiscardDeviceResources();
+            }
+        }
+
+        // Detach target before Present for clean interop.
+        if (m_d2dContext)
+        {
+            m_d2dContext->SetTarget(nullptr);
+        }
+
+        if (m_swapChain)
+        {
+            (void)m_swapChain->Present(1, 0);
         }
     }
 
@@ -447,9 +1035,14 @@ namespace FD2D
         return handled;
     }
 
-    ID2D1HwndRenderTarget* Backplate::RenderTarget() const
+    ID2D1RenderTarget* Backplate::RenderTarget() const
     {
-        return m_renderTarget.Get();
+        if (m_hwndRenderTarget)
+        {
+            return m_hwndRenderTarget.Get();
+        }
+        return m_d2dContext.Get();
     }
 }
+
 

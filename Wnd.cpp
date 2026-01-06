@@ -1,5 +1,6 @@
 #include "Wnd.h"
 #include "Backplate.h"
+#include <algorithm>
 
 namespace FD2D
 {
@@ -35,7 +36,7 @@ namespace FD2D
     Size Wnd::Measure(Size available)
     {
         // 기본 Wnd는 자식이 없으면 크기가 0
-        if (m_children.empty())
+        if (m_childrenOrdered.empty())
         {
             m_desired = { 0.0f, 0.0f };
             return m_desired;
@@ -43,11 +44,11 @@ namespace FD2D
 
         // 자식이 있으면 자식들의 최대 크기를 사용
         Size maxSize {};
-        for (auto& pair : m_children)
+        for (auto& child : m_childrenOrdered)
         {
-            if (pair.second)
+            if (child)
             {
-                Size childSize = pair.second->Measure(available);
+                Size childSize = child->Measure(available);
                 maxSize.w = (std::max)(maxSize.w, childSize.w);
                 maxSize.h = (std::max)(maxSize.h, childSize.h);
             }
@@ -55,6 +56,31 @@ namespace FD2D
 
         m_desired = { maxSize.w + 2 * m_margin, maxSize.h + 2 * m_margin };
         return m_desired;
+    }
+
+    Size Wnd::MinSize() const
+    {
+        // Default: if no children, no intrinsic minimum.
+        if (m_childrenOrdered.empty())
+        {
+            return { 0.0f, 0.0f };
+        }
+
+        Size maxSize {};
+        for (const auto& child : m_childrenOrdered)
+        {
+            if (child)
+            {
+                Size childMin = child->MinSize();
+                maxSize.w = (std::max)(maxSize.w, childMin.w);
+                maxSize.h = (std::max)(maxSize.h, childMin.h);
+            }
+        }
+
+        // Include this node's margin/padding.
+        maxSize.w += 2.0f * m_margin + 2.0f * m_padding;
+        maxSize.h += 2.0f * m_margin + 2.0f * m_padding;
+        return maxSize;
     }
 
     void Wnd::Arrange(Rect finalRect)
@@ -65,11 +91,11 @@ namespace FD2D
 
         Rect childArea = Inset(inset, m_padding);
 
-        for (auto& pair : m_children)
+        for (auto& child : m_childrenOrdered)
         {
-            if (pair.second)
+            if (child)
             {
-                pair.second->Arrange(childArea);
+                child->Arrange(childArea);
             }
         }
     }
@@ -104,6 +130,7 @@ namespace FD2D
         }
 
         m_children.emplace(childName, child);
+        m_childrenOrdered.push_back(child);
 
         if (m_backplate != nullptr)
         {
@@ -118,25 +145,30 @@ namespace FD2D
         return m_children;
     }
 
+    const std::vector<std::shared_ptr<Wnd>>& Wnd::ChildrenInOrder() const
+    {
+        return m_childrenOrdered;
+    }
+
     void Wnd::OnAttached(Backplate& backplate)
     {
         m_backplate = &backplate;
-        for (auto& pair : m_children)
+        for (auto& child : m_childrenOrdered)
         {
-            if (pair.second)
+            if (child)
             {
-                pair.second->OnAttached(backplate);
+                child->OnAttached(backplate);
             }
         }
     }
 
     void Wnd::OnDetached()
     {
-        for (auto& pair : m_children)
+        for (auto& child : m_childrenOrdered)
         {
-            if (pair.second)
+            if (child)
             {
-                pair.second->OnDetached();
+                child->OnDetached();
             }
         }
 
@@ -147,11 +179,24 @@ namespace FD2D
     {
         UNREFERENCED_PARAMETER(target);
 
-        for (auto& pair : m_children)
+        for (auto& child : m_childrenOrdered)
         {
-            if (pair.second)
+            if (child)
             {
-                pair.second->OnRender(target);
+                child->OnRender(target);
+            }
+        }
+    }
+
+    void Wnd::OnRenderD3D(ID3D11DeviceContext* context)
+    {
+        UNREFERENCED_PARAMETER(context);
+
+        for (auto& child : m_childrenOrdered)
+        {
+            if (child)
+            {
+                child->OnRenderD3D(context);
             }
         }
     }
@@ -164,9 +209,9 @@ namespace FD2D
 
         bool handled = false;
 
-        for (auto& pair : m_children)
+        for (auto& child : m_childrenOrdered)
         {
-            if (pair.second && pair.second->OnMessage(message, wParam, lParam))
+            if (child && child->OnMessage(message, wParam, lParam))
             {
                 handled = true;
             }
