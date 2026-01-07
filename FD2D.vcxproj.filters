@@ -119,6 +119,9 @@
       <Filter>소스 파일</Filter>
     </ClCompile>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="FD2D.def">
+      <Filter>소스 파일</Filter>
+    </None>
+  </ItemGroup>
 </Project>
-
-

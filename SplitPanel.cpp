@@ -206,6 +206,58 @@ namespace FD2D
         Invalidate();
     }
 
+    void SplitPanel::OnRender(ID2D1RenderTarget* target)
+    {
+        // Draw children first.
+        Wnd::OnRender(target);
+
+        if (target == nullptr || !m_splitter || !m_splitter->IsDragging())
+        {
+            return;
+        }
+
+        // While dragging: add subtle feedback on both panes (dim + outline).
+        if (!m_dragDimBrush)
+        {
+            (void)target->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.06f), &m_dragDimBrush);
+        }
+        if (!m_dragOutlineBrush)
+        {
+            (void)target->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.60f, 0.24f, 0.30f), &m_dragOutlineBrush);
+        }
+
+        auto drawPaneFeedback = [&](const std::shared_ptr<Wnd>& pane)
+        {
+            if (!pane)
+            {
+                return;
+            }
+            const D2D1_RECT_F r = pane->LayoutRect();
+            if (!(r.right > r.left && r.bottom > r.top))
+            {
+                return;
+            }
+
+            if (m_dragDimBrush)
+            {
+                target->FillRectangle(r, m_dragDimBrush.Get());
+            }
+            if (m_dragOutlineBrush)
+            {
+                // Slight inflate so the stroke is visible even if content is edge-to-edge.
+                D2D1_RECT_F o = r;
+                o.left += 1.0f;
+                o.top += 1.0f;
+                o.right -= 1.0f;
+                o.bottom -= 1.0f;
+                target->DrawRectangle(o, m_dragOutlineBrush.Get(), 1.5f);
+            }
+        };
+
+        drawPaneFeedback(m_firstChild);
+        drawPaneFeedback(m_secondChild);
+    }
+
     Size SplitPanel::Measure(Size available)
     {
         // 자식들의 desired size를 계산

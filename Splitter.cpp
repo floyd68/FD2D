@@ -367,9 +367,18 @@ namespace FD2D
         {
             target->CreateSolidColorBrush(D2D1::ColorF(0.3f, 0.3f, 0.3f, 0.5f), &m_brushNormal);
         }
+        if (!m_brushHoverOverlay)
+        {
+            // Slight overlay so the wide hit-area has feedback without looking "thick".
+            target->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.0f), &m_brushHoverOverlay);
+        }
         if (!m_brushDrag)
         {
             target->CreateSolidColorBrush(D2D1::ColorF(0.7f, 0.7f, 0.7f, 1.0f), &m_brushDrag);
+        }
+        if (!m_brushGrip)
+        {
+            target->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.65f), &m_brushGrip);
         }
 
         // Hover fade animation (time-based).
@@ -394,35 +403,99 @@ namespace FD2D
         }
         m_hoverT = Clamp01(m_hoverT);
 
-        // Splitter 그리기
+        // Splitter visuals:
+        // - Wide hit-area (rect) for usability
+        // - Thin center line for aesthetics
+        // - Grip dots that appear on hover/drag
+        const D2D1_COLOR_F accent = D2D1::ColorF(1.0f, 0.60f, 0.24f, 1.0f); // warm orange
+
+        // Update hover overlay alpha
+        if (m_brushHoverOverlay)
+        {
+            const float overlayA = 0.06f * m_hoverT + (m_dragging ? 0.06f : 0.0f);
+            m_brushHoverOverlay->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, overlayA));
+        }
+
+        // Line brush
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush = m_brushNormal;
         if (m_dragging)
         {
+            if (m_brushDrag)
+            {
+                m_brushDrag->SetColor(accent);
+            }
             brush = m_brushDrag;
         }
         else if (m_brushNormal)
         {
-            const D2D1_COLOR_F normal = D2D1::ColorF(0.3f, 0.3f, 0.3f, 0.5f);
-            const D2D1_COLOR_F hover = D2D1::ColorF(0.5f, 0.5f, 0.5f, 0.8f);
+            const D2D1_COLOR_F normal = D2D1::ColorF(0.30f, 0.30f, 0.30f, 0.45f);
+            const D2D1_COLOR_F hover = D2D1::ColorF(0.90f, 0.90f, 0.90f, 0.75f);
             m_brushNormal->SetColor(LerpColor(normal, hover, m_hoverT));
             brush = m_brushNormal;
         }
 
+        // Draw subtle overlay across the whole hit area (only visible on hover/drag)
+        if (m_brushHoverOverlay && (m_hoverT > 0.001f || m_dragging))
+        {
+            target->FillRectangle(rect, m_brushHoverOverlay.Get());
+        }
+
         if (brush)
         {
+            const float baseLineThickness = (std::min)(m_thickness, 3.0f);
+            const float lineThickness = baseLineThickness + (m_dragging ? 1.0f : 0.0f) + (m_hoverT * 1.0f);
+
             if (m_orientation == SplitterOrientation::Horizontal)
             {
                 // 좌우 분할: 세로 선
                 float centerX = (rect.left + rect.right) * 0.5f;
-                D2D1_RECT_F lineRect { centerX - m_thickness * 0.5f, rect.top, centerX + m_thickness * 0.5f, rect.bottom };
+                D2D1_RECT_F lineRect { centerX - lineThickness * 0.5f, rect.top, centerX + lineThickness * 0.5f, rect.bottom };
                 target->FillRectangle(&lineRect, brush.Get());
             }
             else
             {
                 // 상하 분할: 가로 선
                 float centerY = (rect.top + rect.bottom) * 0.5f;
-                D2D1_RECT_F lineRect { rect.left, centerY - m_thickness * 0.5f, rect.right, centerY + m_thickness * 0.5f };
+                D2D1_RECT_F lineRect { rect.left, centerY - lineThickness * 0.5f, rect.right, centerY + lineThickness * 0.5f };
                 target->FillRectangle(&lineRect, brush.Get());
+            }
+
+            // Grip dots (appear with hover/drag)
+            if (m_brushGrip && (m_hoverT > 0.001f || m_dragging))
+            {
+                const float gripT = Clamp01(m_hoverT + (m_dragging ? 0.35f : 0.0f));
+                const float dotAlpha = 0.25f + 0.55f * gripT;
+                m_brushGrip->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, dotAlpha));
+
+                const float cx = (rect.left + rect.right) * 0.5f;
+                const float cy = (rect.top + rect.bottom) * 0.5f;
+
+                const int dotCount = 5;
+                const float dotRadius = 1.35f + 0.25f * gripT;
+                const float dotSpacing = 5.0f;
+
+                if (m_orientation == SplitterOrientation::Horizontal)
+                {
+                    // Vertical splitter: dots stacked along Y
+                    const float startY = cy - (static_cast<float>(dotCount - 1) * dotSpacing) * 0.5f;
+                    for (int i = 0; i < dotCount; ++i)
+                    {
+                        const float y = startY + static_cast<float>(i) * dotSpacing;
+                        const D2D1_ELLIPSE e { D2D1::Point2F(cx, y), dotRadius, dotRadius };
+                        target->FillEllipse(e, m_brushGrip.Get());
+                    }
+                }
+                else
+                {
+                    // Horizontal splitter: dots stacked along X
+                    const float startX = cx - (static_cast<float>(dotCount - 1) * dotSpacing) * 0.5f;
+                    for (int i = 0; i < dotCount; ++i)
+                    {
+                        const float x = startX + static_cast<float>(i) * dotSpacing;
+                        const D2D1_ELLIPSE e { D2D1::Point2F(x, cy), dotRadius, dotRadius };
+                        target->FillEllipse(e, m_brushGrip.Get());
+                    }
+                }
             }
         }
 

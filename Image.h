@@ -9,6 +9,7 @@
 #include <d3d11_1.h>
 #include <functional>
 #include <mutex>
+#include <atomic>
 
 namespace FD2D
 {
@@ -64,7 +65,12 @@ namespace FD2D
         std::wstring m_loadedFilePath {};
         ImageCore::ImageRequest m_request {};
         ImageCore::ImageHandle m_currentHandle { 0 };
-        bool m_loading { false };
+        std::atomic<bool> m_loading { false };
+        std::atomic<unsigned long long> m_requestToken { 0 };
+        std::atomic<unsigned long long> m_inflightToken { 0 };
+        std::atomic<bool> m_forceCpuDecode { false };
+        std::wstring m_failedFilePath {};
+        HRESULT m_failedHr { S_OK };
 
         Microsoft::WRL::ComPtr<ID2D1Bitmap> m_bitmap {};
         Microsoft::WRL::ComPtr<ID2D1Bitmap> m_prevBitmap {};
@@ -83,6 +89,10 @@ namespace FD2D
         bool m_selected { false };
         ClickHandler m_onClick {};
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_selectionBrush {};
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_selectionShadowBrush {};
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_selectionFillBrush {};
+        unsigned long long m_selectionAnimStartMs { 0 };
+        unsigned long long m_selectionAnimMs { 150 }; // selection "pop" duration
         bool m_loadingSpinnerEnabled { true };
         std::shared_ptr<Spinner> m_loadingSpinner {};
 

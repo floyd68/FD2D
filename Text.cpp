@@ -1,4 +1,5 @@
 #include "Text.h"
+#include <windowsx.h>
 
 namespace FD2D
 {
@@ -33,6 +34,43 @@ namespace FD2D
         m_family = familyName;
         m_size = size;
         m_format.Reset();
+        m_ellipsisSign.Reset();
+    }
+
+    void Text::SetFixedWidth(float width)
+    {
+        m_fixedWidth = (width > 0.0f) ? width : 0.0f;
+    }
+
+    void Text::SetTextAlignment(DWRITE_TEXT_ALIGNMENT alignment)
+    {
+        m_textAlignment = alignment;
+        if (m_format)
+        {
+            (void)m_format->SetTextAlignment(alignment);
+        }
+    }
+
+    void Text::SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT alignment)
+    {
+        m_paragraphAlignment = alignment;
+        if (m_format)
+        {
+            (void)m_format->SetParagraphAlignment(alignment);
+        }
+    }
+
+    void Text::SetEllipsisTrimmingEnabled(bool enabled)
+    {
+        m_ellipsisTrimmingEnabled = enabled;
+        // Recreate format/resources so trimming sign gets applied.
+        m_format.Reset();
+        m_ellipsisSign.Reset();
+    }
+
+    void Text::SetOnClick(ClickHandler handler)
+    {
+        m_onClick = std::move(handler);
     }
 
     void Text::EnsureResources(ID2D1RenderTarget* target)
@@ -61,6 +99,27 @@ namespace FD2D
                     m_size,
                     L"",
                     &m_format);
+
+                if (m_format)
+                {
+                    (void)m_format->SetTextAlignment(m_textAlignment);
+                    (void)m_format->SetParagraphAlignment(m_paragraphAlignment);
+
+                    if (m_ellipsisTrimmingEnabled)
+                    {
+                        if (!m_ellipsisSign)
+                        {
+                            (void)factory->CreateEllipsisTrimmingSign(m_format.Get(), &m_ellipsisSign);
+                        }
+
+                        DWRITE_TRIMMING trimming {};
+                        trimming.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
+                        trimming.delimiter = 0;
+                        trimming.delimiterCount = 0;
+                        (void)m_format->SetTrimming(&trimming, m_ellipsisSign.Get());
+                        (void)m_format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+                    }
+                }
             }
         }
     }
@@ -69,19 +128,32 @@ namespace FD2D
     {
         if (m_text.empty())
         {
-            m_desired = { 0.0f, m_size };
+            const float w = (m_fixedWidth > 0.0f) ? m_fixedWidth : 0.0f;
+            m_desired = { w, m_size };
             return m_desired;
         }
 
-        // 텍스트 크기를 계산하기 위해 임시 format이 필요
-        // 실제 크기는 Arrange에서 계산되지만, 여기서는 폰트 크기 기반으로 추정
-        float estimatedWidth = static_cast<float>(m_text.length()) * m_size * 0.6f; // 대략적인 추정
-        if (available.w > 0.0f && estimatedWidth > available.w)
+        const float lineH = m_size * 1.2f;
+
+        if (m_fixedWidth > 0.0f)
         {
-            estimatedWidth = available.w;
+            float w = m_fixedWidth;
+            if (available.w > 0.0f)
+            {
+                w = (std::min)(w, available.w);
+            }
+            m_desired = { w, lineH };
+            return m_desired;
         }
-        
-        m_desired = { estimatedWidth, m_size * 1.2f }; // line height
+
+        // Fallback: approximate width based on font size.
+        float estimatedWidth = static_cast<float>(m_text.length()) * m_size * 0.6f;
+        if (available.w > 0.0f)
+        {
+            estimatedWidth = (std::min)(estimatedWidth, available.w);
+        }
+
+        m_desired = { estimatedWidth, lineH };
         return m_desired;
     }
 
@@ -103,6 +175,37 @@ namespace FD2D
         }
 
         Wnd::OnRender(target);
+    }
+
+    bool Text::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)
+    {
+        UNREFERENCED_PARAMETER(wParam);
+        switch (message)
+        {
+        case WM_LBUTTONDOWN:
+        {
+            if (!m_onClick)
+            {
+                break;
+            }
+            const int x = GET_X_LPARAM(lParam);
+            const int y = GET_Y_LPARAM(lParam);
+            const D2D1_RECT_F r = LayoutRect();
+            if (static_cast<float>(x) >= r.left &&
+                static_cast<float>(x) <= r.right &&
+                static_cast<float>(y) >= r.top &&
+                static_cast<float>(y) <= r.bottom)
+            {
+                m_onClick();
+                return true;
+            }
+            break;
+        }
+        default:
+            break;
+        }
+
+        return Wnd::OnMessage(message, wParam, lParam);
     }
 }
 

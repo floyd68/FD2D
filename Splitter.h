@@ -42,6 +42,8 @@ namespace FD2D
         bool OnMessage(UINT message, WPARAM wParam, LPARAM lParam) override;
         void OnRender(ID2D1RenderTarget* target) override;
 
+        bool IsDragging() const { return m_dragging; }
+
     private:
         bool HitTest(const POINT& pt) const;
         void StartDrag(const POINT& pt);
@@ -72,7 +74,9 @@ namespace FD2D
         std::function<void(float)> m_splitChanged;
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brushNormal {};
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brushHoverOverlay {};
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brushDrag {};
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brushGrip {};
     };
 }
 

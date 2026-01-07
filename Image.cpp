@@ -5,6 +5,8 @@
 #include <windowsx.h>
 #include <cmath>
 #include <d3dcompiler.h>
+#include <filesystem>
+#include <cwctype>
 
 namespace FD2D
 {
@@ -209,8 +211,10 @@ namespace FD2D
             // 1x1 backdrop SRV for drawing a stable letterbox under aspect-fit images.
             if (!g_backdropSrv)
             {
-                // Match the Backplate clear (DarkSlateGray-ish).
-                const UINT32 backdrop = 0xFF2F4F4F; // BGRA bytes: 4F 4F 2F FF
+                // Match the Backplate clear (dark neutral gray with tiny blue bias).
+                // IMPORTANT: this is AARRGGBB; in memory it's BGRA.
+                // (R,G,B)=(0x17,0x17,0x1A) => bytes: 1A 17 17 FF
+                const UINT32 backdrop = 0xFF17171A;
 
                 D3D11_TEXTURE2D_DESC td {};
                 td.Width = 1;
@@ -260,6 +264,40 @@ namespace FD2D
             }
             return v;
         }
+
+        static std::wstring NormalizePath(std::wstring_view p)
+        {
+            if (p.empty())
+            {
+                return {};
+            }
+
+            try
+            {
+                // Normalize lexically (no disk I/O) and use platform-preferred separators.
+                std::filesystem::path fp = std::filesystem::path(p).lexically_normal();
+                fp.make_preferred();
+
+                std::wstring out = fp.wstring();
+                for (auto& ch : out)
+                {
+                    ch = static_cast<wchar_t>(towlower(ch));
+                }
+                return out;
+            }
+            catch (...)
+            {
+                // Best-effort fallback: case-fold only.
+                std::wstring out(p);
+                for (auto& ch : out)
+                {
+                    ch = static_cast<wchar_t>(towlower(ch));
+                }
+                return out;
+            }
+        }
+
+        // (debug-only temp-file logging removed)
     }
 
     Image::Image()
@@ -335,8 +373,31 @@ namespace FD2D
 
     HRESULT Image::SetSourceFile(const std::wstring& filePath)
     {
+        const std::wstring normalized = NormalizePath(filePath);
+
+        // If this path is already the current requested source, don't cancel/restart.
+        // This is important for keyboard navigation with repeat + debounced apply, where the same selection
+        // can be "applied" more than once (e.g. queued timers). Restarting would create token churn and
+        // can lead to apparent "stuck spinner" states.
+        if (!normalized.empty() && normalized == m_filePath)
+        {
+            // If this file previously failed, allow an explicit retry by clearing failure state.
+            {
+                std::lock_guard<std::mutex> lock(m_pendingMutex);
+                if (m_failedFilePath == normalized && FAILED(m_failedHr))
+                {
+                    m_failedFilePath.clear();
+                    m_failedHr = S_OK;
+                }
+                else
+                {
+                    return S_FALSE;
+                }
+            }
+        }
+
         // If we're already showing this source, don't restart transitions (prevents "flash" on repeated clicks).
-        if (!filePath.empty() && filePath == m_filePath && m_loadedFilePath == m_filePath)
+        if (!normalized.empty() && normalized == m_filePath && m_loadedFilePath == m_filePath)
         {
             const bool cpuLoaded = (m_bitmap != nullptr);
             const bool gpuLoaded = (m_request.purpose == ImageCore::ImagePurpose::FullResolution &&
@@ -353,12 +414,28 @@ namespace FD2D
             m_currentHandle = 0;
         }
 
+        // Important: ImageLoader::Cancel() does not guarantee the worker callback runs.
+        // If we don't clear m_loading here, we can get stuck in an "infinite spinner" state where
+        // OnRender refuses to start the next request because it believes a request is still in-flight.
+        m_loading.store(false);
+
+        // Drop any pending (UI-thread) apply from the previous selection.
+        {
+            std::lock_guard<std::mutex> lock(m_pendingMutex);
+            m_pendingWicBitmap.Reset();
+            m_pendingScratchImage.reset();
+            m_pendingSourcePath.clear();
+        }
+
+        // Selection changed: clear any in-flight token so we can start a new request on next render.
+        m_inflightToken.store(0);
+
         // A) Fast reselect path: if SRV is cached, swap immediately (no disk/decode/upload).
         if (m_request.purpose == ImageCore::ImagePurpose::FullResolution && m_backplate)
         {
             Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> cachedSrv;
             UINT cw = 0, ch = 0;
-            if (TryGetSrvFromCache(filePath, cachedSrv, cw, ch))
+            if (TryGetSrvFromCache(normalized, cachedSrv, cw, ch))
             {
                 // Setup cross-fade on GPU path
                 if (m_gpuSrv)
@@ -375,25 +452,32 @@ namespace FD2D
                 m_gpuSrv = cachedSrv;
                 m_gpuWidth = cw;
                 m_gpuHeight = ch;
-                m_loadedFilePath = filePath;
-                m_filePath = filePath;
+                m_loadedFilePath = normalized;
+                m_filePath = normalized;
 
                 // Cancel CPU path bitmaps for main image
                 m_bitmap.Reset();
                 m_prevBitmap.Reset();
 
-                m_loading = false;
-                m_request.source = filePath;
+                m_loading.store(false);
+                m_request.source = normalized;
                 Invalidate();
                 return S_OK;
             }
         }
 
-        m_filePath = filePath;
-        m_loading = false;
+        m_filePath = normalized;
+        // Clear any previous failure state on explicit user selection (allow retry).
+        {
+            std::lock_guard<std::mutex> lock(m_pendingMutex);
+            m_failedFilePath.clear();
+            m_failedHr = S_OK;
+        }
+        m_forceCpuDecode.store(false);
+        m_loading.store(false);
 
         // Request 업데이트
-        m_request.source = filePath;
+        m_request.source = normalized;
         
         return S_OK;
     }
@@ -405,7 +489,12 @@ namespace FD2D
             return;
         }
         m_selected = selected;
+        m_selectionAnimStartMs = NowMs();
         Invalidate();
+        if (BackplateRef() != nullptr)
+        {
+            BackplateRef()->RequestAnimationFrame();
+        }
     }
 
     void Image::SetOnClick(ClickHandler handler)
@@ -440,9 +529,18 @@ namespace FD2D
 
     void Image::RequestImageLoad()
     {
-        if (m_filePath.empty() || m_loading)
+        if (m_filePath.empty() || m_loading.load())
         {
             return;
+        }
+
+        // If the last attempt failed for this file, don't spin/retry forever.
+        {
+            std::lock_guard<std::mutex> lock(m_pendingMutex);
+            if (!m_failedFilePath.empty() && m_failedFilePath == m_filePath)
+            {
+                return;
+            }
         }
 
         // Already displaying the requested source (no need to load again).
@@ -461,10 +559,10 @@ namespace FD2D
             }
         }
 
-        m_loading = true;
+        m_loading.store(true);
         m_request.source = m_filePath;
         // D2D-only renderer: force CPU-displayable DDS output (avoid UI-thread BCn decompress).
-        if (m_backplate == nullptr || m_backplate->D3DDevice() == nullptr)
+        if (m_forceCpuDecode.load() || m_backplate == nullptr || m_backplate->D3DDevice() == nullptr)
         {
             m_request.allowGpuCompressedDDS = false;
         }
@@ -473,16 +571,29 @@ namespace FD2D
             m_request.allowGpuCompressedDDS = true;
         }
 
-        const std::wstring requestedPath = m_filePath;
+        const unsigned long long token = m_requestToken.fetch_add(1ULL) + 1ULL;
+        m_inflightToken.store(token);
+        const std::wstring requestedPath = m_filePath; // already normalized
+
+        // (debug request tracing removed)
+
         m_currentHandle = ImageCore::ImageLoader::Instance().Request(
             m_request,
-            [this, requestedPath](HRESULT hr, Microsoft::WRL::ComPtr<IWICBitmapSource> wicBitmap, std::unique_ptr<DirectX::ScratchImage> scratchImage)
+            [this, token, requestedPath](HRESULT hr, Microsoft::WRL::ComPtr<IWICBitmapSource> wicBitmap, std::unique_ptr<DirectX::ScratchImage> scratchImage)
             {
-                // If the source changed since we requested, ignore the result (prevents stale swap + flicker).
-                if (requestedPath != m_filePath)
+                // NOTE: This callback runs on a worker thread.
+                // Do NOT read m_filePath here (UI thread writes it). Use token gating instead.
+                const unsigned long long current = m_inflightToken.load();
+                if (token != current)
                 {
+                    // If there is no current in-flight request, ensure we don't get stuck "loading".
+                    if (current == 0)
+                    {
+                        m_loading.store(false);
+                    }
                     return;
                 }
+
                 OnImageLoaded(requestedPath, hr, wicBitmap, std::move(scratchImage));
             });
     }
@@ -493,8 +604,9 @@ namespace FD2D
         Microsoft::WRL::ComPtr<IWICBitmapSource> wicBitmap,
         std::unique_ptr<DirectX::ScratchImage> scratchImage)
     {
-        m_loading = false;
         m_currentHandle = 0;
+
+        const std::wstring normalizedSource = NormalizePath(sourcePath);
 
         // 변환은 OnRender에서 render target을 사용하여 수행
         // 여기서는 저장만 하고 Invalidate로 OnRender 호출 유도
@@ -504,13 +616,33 @@ namespace FD2D
                 std::lock_guard<std::mutex> lock(m_pendingMutex);
                 m_pendingWicBitmap = wicBitmap;
                 m_pendingScratchImage = std::move(scratchImage);
-                m_pendingSourcePath = sourcePath;
+                m_pendingSourcePath = normalizedSource;
+                m_failedFilePath.clear();
+                m_failedHr = S_OK;
             }
             
             // worker thread에서 UI thread로 명확히 redraw 요청
             if (m_backplate)
             {
                 // Wake UI thread without PostMessage; the UI loop waits on this event.
+                m_backplate->RequestAsyncRedraw();
+            }
+        }
+        else
+        {
+            // Mark as failed so we don't spin forever.
+            // Keep displaying the previous image (if any).
+            {
+                std::lock_guard<std::mutex> lock(m_pendingMutex);
+                m_failedFilePath = normalizedSource;
+                m_failedHr = hr;
+            }
+            // Failure completes the in-flight request (stop spinner).
+            m_loading.store(false);
+            m_inflightToken.store(0);
+
+            if (m_backplate)
+            {
                 m_backplate->RequestAsyncRedraw();
             }
         }
@@ -603,8 +735,8 @@ namespace FD2D
         {
             if (!m_backdropBrush)
             {
-                // Match Backplate clear (DarkSlateGray-ish).
-                (void)target->CreateSolidColorBrush(D2D1::ColorF(0.184f, 0.310f, 0.310f, 1.0f), &m_backdropBrush);
+                // Match Backplate clear (dark neutral gray with tiny blue bias).
+                (void)target->CreateSolidColorBrush(D2D1::ColorF(0.09f, 0.09f, 0.10f, 1.0f), &m_backdropBrush);
             }
             if (m_backdropBrush)
             {
@@ -633,13 +765,14 @@ namespace FD2D
             {
                 // Try GPU path for main image: if scratch is GPU-compressed DDS, upload to SRV and render via D3D.
                 bool usedGpu = false;
+                bool applied = false;
                 if (pendingScratch && m_request.purpose == ImageCore::ImagePurpose::FullResolution && m_backplate)
                 {
                     const DirectX::Image* img = pendingScratch->GetImage(0, 0, 0);
                     if (img && DirectX::IsCompressed(img->format))
                     {
                         ID3D11Device* dev = m_backplate->D3DDevice();
-                        if (dev)
+                        if (dev && !m_forceCpuDecode.load())
                         {
                             Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
                             const auto& meta = pendingScratch->GetMetadata();
@@ -676,22 +809,81 @@ namespace FD2D
                                 m_prevBitmap.Reset();
 
                                 usedGpu = true;
+                                applied = true;
                             }
+                            else
+                            {
+                                UNREFERENCED_PARAMETER(hrSrv);
+                                // SRV creation failed (can happen intermittently). We cannot display compressed pixels via D2D.
+                                // Fall back deterministically: request a CPU-decompressed decode for this selection.
+                                m_forceCpuDecode.store(true);
+                                m_loading.store(false);
+                                RequestImageLoad();
+                                usedGpu = true; // prevent ConvertToD2DBitmap with compressed data
+                            }
+                        }
+                        else
+                        {
+                            // No GPU device (or GPU path disabled). Request a CPU-decompressed decode.
+                            m_forceCpuDecode.store(true);
+                            m_loading.store(false);
+                            RequestImageLoad();
+                            usedGpu = true; // prevent ConvertToD2DBitmap with compressed data
                         }
                     }
                 }
 
                 if (!usedGpu)
                 {
-                    (void)ConvertToD2DBitmap(target, pendingSourcePath, pendingWic, std::move(pendingScratch));
+                    const HRESULT hrBmp = ConvertToD2DBitmap(target, pendingSourcePath, pendingWic, std::move(pendingScratch));
+                    if (FAILED(hrBmp))
+                    {
+                        UNREFERENCED_PARAMETER(hrBmp);
+                        {
+                            std::lock_guard<std::mutex> lock(m_pendingMutex);
+                            m_failedFilePath = pendingSourcePath;
+                            m_failedHr = hrBmp;
+                        }
+                        // Conversion failure completes the in-flight request (stop spinner).
+                        m_loading.store(false);
+                    }
+                    else
+                    {
+                        applied = true;
+                    }
                 }
+
+                // Success (GPU or CPU bitmap): mark request complete now that the result is applied on the UI thread.
+                if (applied)
+                {
+                    m_loading.store(false);
+                    m_inflightToken.store(0);
+                }
+            }
+            else if (!pendingSourcePath.empty())
+            {
+                // (debug tracing removed)
             }
         }
 
         // Request loading if we are not already loading the latest requested source.
         // Note: we keep drawing the previous bitmap while the next image loads to avoid "black flash".
-        if (!m_loading && !m_filePath.empty())
+        if (!m_loading.load() && !m_filePath.empty())
         {
+            // If the current file is marked failed, do not retry automatically (avoids infinite loops).
+            {
+                std::lock_guard<std::mutex> lock(m_pendingMutex);
+                if (!m_failedFilePath.empty() && m_failedFilePath == m_filePath)
+                {
+                    if (m_loadingSpinner)
+                    {
+                        m_loadingSpinner->SetActive(false);
+                    }
+                    Wnd::OnRender(target);
+                    return;
+                }
+            }
+
             const bool cpuLoaded = (m_bitmap && m_loadedFilePath == m_filePath);
             const bool gpuLoaded = (m_request.purpose == ImageCore::ImagePurpose::FullResolution &&
                 m_gpuSrv && m_gpuWidth != 0 && m_gpuHeight != 0 && m_loadedFilePath == m_filePath);
@@ -799,8 +991,9 @@ namespace FD2D
             }
         }
 
-        // Loading spinner overlay (while a new image is being decoded).
-        const bool shouldShowSpinner = m_loadingSpinnerEnabled && (!m_filePath.empty() && m_loadedFilePath != m_filePath);
+        // Loading spinner overlay (only while an actual request is in-flight).
+        // This avoids "infinite spinner" states on decode failure; we keep showing the previous image instead.
+        const bool shouldShowSpinner = m_loadingSpinnerEnabled && m_loading.load();
         if (m_loadingSpinner)
         {
             m_loadingSpinner->SetActive(shouldShowSpinner);
@@ -811,8 +1004,20 @@ namespace FD2D
             if (!m_selectionBrush)
             {
                 (void)target->CreateSolidColorBrush(
-                    D2D1::ColorF(D2D1::ColorF::Orange, 1.0f),
+                    D2D1::ColorF(1.0f, 0.60f, 0.24f, 1.0f), // warm orange accent
                     &m_selectionBrush);
+            }
+            if (!m_selectionShadowBrush)
+            {
+                (void)target->CreateSolidColorBrush(
+                    D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.55f),
+                    &m_selectionShadowBrush);
+            }
+            if (!m_selectionFillBrush)
+            {
+                (void)target->CreateSolidColorBrush(
+                    D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.0f),
+                    &m_selectionFillBrush);
             }
 
             if (m_selectionBrush)
@@ -829,12 +1034,51 @@ namespace FD2D
                     r = computeAspectFitDestRect(r, m_prevBitmap->GetSize());
                 }
 
-                // Slightly inflate so the stroke doesn't clip the image edges visually.
-                r.left -= 1.0f;
-                r.top -= 1.0f;
-                r.right += 1.0f;
-                r.bottom += 1.0f;
-                target->DrawRectangle(r, m_selectionBrush.Get(), 2.0f);
+                // Selection "pop" animation (150ms): start slightly larger/thicker and settle.
+                float selT = 1.0f;
+                bool selAnimating = false;
+                if (m_selectionAnimStartMs != 0 && m_selectionAnimMs > 0)
+                {
+                    const unsigned long long elapsed = NowMs() - m_selectionAnimStartMs;
+                    selT = Clamp01(static_cast<float>(elapsed) / static_cast<float>(m_selectionAnimMs));
+                    selAnimating = selT < 1.0f;
+                }
+
+                const float ease = 1.0f - (1.0f - selT) * (1.0f - selT); // ease-out quad
+                const float popInflate = 4.0f * (1.0f - ease);
+                const float baseInflate = 1.0f;
+
+                // Inflate so strokes don't clip and to create the pop feel.
+                r.left -= (baseInflate + popInflate);
+                r.top -= (baseInflate + popInflate);
+                r.right += (baseInflate + popInflate);
+                r.bottom += (baseInflate + popInflate);
+
+                const float radius = 6.0f;
+                const D2D1_ROUNDED_RECT rr { r, radius, radius };
+
+                // Subtle highlight overlay on the thumbnail itself (inside the original dest rect).
+                if (m_selectionFillBrush)
+                {
+                    const float fillA = 0.10f * ease;
+                    m_selectionFillBrush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, fillA));
+                    const D2D1_ROUNDED_RECT fillRR { r, (std::max)(0.0f, radius - 1.0f), (std::max)(0.0f, radius - 1.0f) };
+                    target->FillRoundedRectangle(fillRR, m_selectionFillBrush.Get());
+                }
+
+                const float shadowW = 3.0f;
+                const float accentW = 2.0f + (1.0f - ease); // slightly thicker at start
+
+                if (m_selectionShadowBrush)
+                {
+                    target->DrawRoundedRectangle(rr, m_selectionShadowBrush.Get(), shadowW);
+                }
+                target->DrawRoundedRectangle(rr, m_selectionBrush.Get(), accentW);
+
+                if (selAnimating && BackplateRef() != nullptr)
+                {
+                    BackplateRef()->RequestAnimationFrame();
+                }
             }
         }
 
@@ -1037,4 +1281,6 @@ namespace FD2D
         }
     }
 }
+
+
 

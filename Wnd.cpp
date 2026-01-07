@@ -4,6 +4,35 @@
 
 namespace FD2D
 {
+    namespace
+    {
+        static bool IsMouseMessage(UINT message)
+        {
+            switch (message)
+            {
+            case WM_MOUSEMOVE:
+            case WM_LBUTTONDOWN:
+            case WM_LBUTTONUP:
+            case WM_LBUTTONDBLCLK:
+            case WM_RBUTTONDOWN:
+            case WM_RBUTTONUP:
+            case WM_RBUTTONDBLCLK:
+            case WM_MBUTTONDOWN:
+            case WM_MBUTTONUP:
+            case WM_MBUTTONDBLCLK:
+            case WM_XBUTTONDOWN:
+            case WM_XBUTTONUP:
+            case WM_XBUTTONDBLCLK:
+            case WM_MOUSEWHEEL:
+            case WM_MOUSEHWHEEL:
+            case WM_CAPTURECHANGED:
+                return true;
+            default:
+                return false;
+            }
+        }
+    }
+
     Wnd::Wnd()
     {
     }
@@ -207,8 +236,22 @@ namespace FD2D
         UNREFERENCED_PARAMETER(wParam);
         UNREFERENCED_PARAMETER(lParam);
 
-        bool handled = false;
+        // Mouse input should behave like hit-testing: topmost child first, stop at first handled.
+        if (IsMouseMessage(message))
+        {
+            for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
+            {
+                const auto& child = *it;
+                if (child && child->OnMessage(message, wParam, lParam))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
 
+        // Non-mouse messages: broadcast (layout/animation timers etc).
+        bool handled = false;
         for (auto& child : m_childrenOrdered)
         {
             if (child && child->OnMessage(message, wParam, lParam))
@@ -216,7 +259,6 @@ namespace FD2D
                 handled = true;
             }
         }
-
         return handled;
     }
 

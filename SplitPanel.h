@@ -38,6 +38,7 @@ namespace FD2D
         Size Measure(Size available) override;
         Size MinSize() const override;
         void Arrange(Rect finalRect) override;
+        void OnRender(ID2D1RenderTarget* target) override;
 
     private:
         void OnSplitRatioChanged(float ratio);
@@ -53,6 +54,9 @@ namespace FD2D
         std::shared_ptr<Wnd> m_firstChild {};
         std::shared_ptr<Wnd> m_secondChild {};
         std::shared_ptr<Splitter> m_splitter {};
+
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_dragDimBrush {};
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_dragOutlineBrush {};
     };
 }
 

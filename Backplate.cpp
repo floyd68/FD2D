@@ -869,7 +869,8 @@ namespace FD2D
         {
             m_hwndRenderTarget->BeginDraw();
             m_hwndRenderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
-            m_hwndRenderTarget->Clear(D2D1::ColorF(0.184f, 0.310f, 0.310f, 1.0f));
+            // Dark neutral gray with a *tiny* blue bias (low saturation)
+            m_hwndRenderTarget->Clear(D2D1::ColorF(0.09f, 0.09f, 0.10f, 1.0f));
 
             for (auto& pair : m_children)
             {
@@ -890,7 +891,8 @@ namespace FD2D
         // D3D pass (background + GPU images)
         if (m_d3dContext && m_rtv)
         {
-            const float clearColor[4] = { 0.184f, 0.310f, 0.310f, 1.0f }; // DarkSlateGray-ish
+            // Dark neutral gray with a *tiny* blue bias (low saturation)
+            const float clearColor[4] = { 0.09f, 0.09f, 0.10f, 1.0f };
             m_d3dContext->OMSetRenderTargets(1, m_rtv.GetAddressOf(), nullptr);
             m_d3dContext->ClearRenderTargetView(m_rtv.Get(), clearColor);
 
