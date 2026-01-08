@@ -20,6 +20,26 @@ namespace FD2D
     public:
         using ClickHandler = std::function<void()>;
 
+        struct SelectionStyle
+        {
+            D2D1_COLOR_F accent { 1.0f, 0.60f, 0.24f, 1.0f };
+            D2D1_COLOR_F shadow { 0.0f, 0.0f, 0.0f, 0.55f };
+            D2D1_COLOR_F fill { 1.0f, 1.0f, 1.0f, 1.0f };
+
+            float radius { 6.0f };
+            float baseInflate { 1.0f };
+            float popInflate { 4.0f };
+            float shadowThickness { 3.0f };
+            float accentThickness { 2.0f };
+            float fillMaxAlpha { 0.10f };
+
+            bool breatheEnabled { true };
+            int breathePeriodMs { 1800 };
+            float breatheInflateAmp { 0.60f };
+            float breatheThicknessAmp { 0.35f };
+            float breatheAlphaAmp { 0.08f };
+        };
+
         Image();
         explicit Image(const std::wstring& name);
         ~Image();
@@ -36,6 +56,8 @@ namespace FD2D
 
         void SetSelected(bool selected);
         bool Selected() const { return m_selected; }
+
+        void SetSelectionStyle(const SelectionStyle& style);
 
         void SetOnClick(ClickHandler handler);
 
@@ -91,6 +113,7 @@ namespace FD2D
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_selectionBrush {};
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_selectionShadowBrush {};
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_selectionFillBrush {};
+        SelectionStyle m_selectionStyle {};
         unsigned long long m_selectionAnimStartMs { 0 };
         unsigned long long m_selectionAnimMs { 150 }; // selection "pop" duration
         bool m_loadingSpinnerEnabled { true };

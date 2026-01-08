@@ -31,9 +31,23 @@ namespace FD2D
         void SetScrollStep(float step);
         float ScrollStep() const { return m_scrollStep; }
 
+        // Smooth pixel scrolling:
+        // - When enabled, wheel/EnsureVisible updates a target scroll position.
+        // - The actual scroll position interpolates towards the target each frame.
+        void SetSmoothScrollEnabled(bool enabled);
+        bool SmoothScrollEnabled() const { return m_smoothScrollEnabled; }
+
+        void SetSmoothTimeMs(unsigned int timeMs);
+        unsigned int SmoothTimeMs() const { return m_smoothTimeMs; }
+
         // Scroll so that `rect` becomes visible within this ScrollView's viewport.
         // `rect` should be in the same coordinate space as Wnd::LayoutRect() (client coordinates).
         void EnsureVisible(const D2D1_RECT_F& rect, float padding = 0.0f);
+
+        // Scroll so that `rect` is centered within the viewport where possible.
+        // Edge-zone rule: items near the start/end snap to the start/end (do NOT force centering).
+        // `rect` should be in the same coordinate space as Wnd::LayoutRect() (client coordinates).
+        void EnsureCentered(const D2D1_RECT_F& rect);
 
         // If true, MinSize() will include content's MinSize(). Default false for overflow behavior.
         void SetPropagateMinSize(bool propagate);
@@ -48,15 +62,24 @@ namespace FD2D
     private:
         void ClampScroll();
         bool IsPointInViewport(int x, int y) const;
+        void ClampTargetScroll();
+        void SetTargetScrollX(float x);
+        void SetTargetScrollY(float y);
+        void AdvanceSmoothScroll(unsigned long long nowMs);
 
         std::shared_ptr<Wnd> m_content {};
         float m_scrollX { 0.0f };
         float m_scrollY { 0.0f };
+        float m_targetScrollX { 0.0f };
+        float m_targetScrollY { 0.0f };
         float m_scrollStep { 48.0f };
         bool m_propagateMinSize { false };
         bool m_forwardCapture { false };
         bool m_enableHScroll { true };
         bool m_enableVScroll { true };
+        bool m_smoothScrollEnabled { false };
+        unsigned long long m_lastSmoothAnimMs { 0 };
+        unsigned int m_smoothTimeMs { 110 }; // smaller = snappier
 
         // cached after Arrange
         Size m_viewportSize { 0.0f, 0.0f };

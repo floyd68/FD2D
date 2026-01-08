@@ -497,6 +497,19 @@ namespace FD2D
         }
     }
 
+    void Image::SetSelectionStyle(const SelectionStyle& style)
+    {
+        m_selectionStyle = style;
+        m_selectionBrush.Reset();
+        m_selectionShadowBrush.Reset();
+        m_selectionFillBrush.Reset();
+        Invalidate();
+        if (BackplateRef() != nullptr)
+        {
+            BackplateRef()->RequestAnimationFrame();
+        }
+    }
+
     void Image::SetOnClick(ClickHandler handler)
     {
         m_onClick = std::move(handler);
@@ -1004,19 +1017,19 @@ namespace FD2D
             if (!m_selectionBrush)
             {
                 (void)target->CreateSolidColorBrush(
-                    D2D1::ColorF(1.0f, 0.60f, 0.24f, 1.0f), // warm orange accent
+                    m_selectionStyle.accent,
                     &m_selectionBrush);
             }
             if (!m_selectionShadowBrush)
             {
                 (void)target->CreateSolidColorBrush(
-                    D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.55f),
+                    m_selectionStyle.shadow,
                     &m_selectionShadowBrush);
             }
             if (!m_selectionFillBrush)
             {
                 (void)target->CreateSolidColorBrush(
-                    D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.0f),
+                    D2D1::ColorF(m_selectionStyle.fill.r, m_selectionStyle.fill.g, m_selectionStyle.fill.b, 0.0f),
                     &m_selectionFillBrush);
             }
 
@@ -1045,29 +1058,48 @@ namespace FD2D
                 }
 
                 const float ease = 1.0f - (1.0f - selT) * (1.0f - selT); // ease-out quad
-                const float popInflate = 4.0f * (1.0f - ease);
-                const float baseInflate = 1.0f;
+                const float popInflate = m_selectionStyle.popInflate * (1.0f - ease);
+                const float baseInflate = m_selectionStyle.baseInflate;
+
+                // Continuous breathe (subtle).
+                float breathe01 = 0.0f;
+                if (m_selectionStyle.breatheEnabled && m_selectionStyle.breathePeriodMs > 0)
+                {
+                    const float period = static_cast<float>(m_selectionStyle.breathePeriodMs);
+                    const float t = static_cast<float>(NowMs() % static_cast<unsigned long long>(m_selectionStyle.breathePeriodMs));
+                    const float phase = (t / period) * 6.28318530718f; // 2*pi
+                    breathe01 = 0.5f + 0.5f * std::sinf(phase);
+                }
+                const float breatheInflate = m_selectionStyle.breatheInflateAmp * breathe01;
 
                 // Inflate so strokes don't clip and to create the pop feel.
-                r.left -= (baseInflate + popInflate);
-                r.top -= (baseInflate + popInflate);
-                r.right += (baseInflate + popInflate);
-                r.bottom += (baseInflate + popInflate);
+                r.left -= (baseInflate + popInflate + breatheInflate);
+                r.top -= (baseInflate + popInflate + breatheInflate);
+                r.right += (baseInflate + popInflate + breatheInflate);
+                r.bottom += (baseInflate + popInflate + breatheInflate);
 
-                const float radius = 6.0f;
+                const float radius = m_selectionStyle.radius;
                 const D2D1_ROUNDED_RECT rr { r, radius, radius };
 
                 // Subtle highlight overlay on the thumbnail itself (inside the original dest rect).
                 if (m_selectionFillBrush)
                 {
-                    const float fillA = 0.10f * ease;
-                    m_selectionFillBrush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, fillA));
+                    const float fillA = m_selectionStyle.fillMaxAlpha * ease;
+                    m_selectionFillBrush->SetColor(D2D1::ColorF(m_selectionStyle.fill.r, m_selectionStyle.fill.g, m_selectionStyle.fill.b, fillA));
                     const D2D1_ROUNDED_RECT fillRR { r, (std::max)(0.0f, radius - 1.0f), (std::max)(0.0f, radius - 1.0f) };
                     target->FillRoundedRectangle(fillRR, m_selectionFillBrush.Get());
                 }
 
-                const float shadowW = 3.0f;
-                const float accentW = 2.0f + (1.0f - ease); // slightly thicker at start
+                const float shadowW = m_selectionStyle.shadowThickness;
+                const float accentW = (std::max)(0.0f, m_selectionStyle.accentThickness + (1.0f - ease) + (m_selectionStyle.breatheThicknessAmp * breathe01));
+
+                // Pulse alpha slightly on accent stroke.
+                if (m_selectionBrush)
+                {
+                    const float baseA = m_selectionStyle.accent.a;
+                    const float pulseA = baseA * (1.0f - m_selectionStyle.breatheAlphaAmp) + baseA * m_selectionStyle.breatheAlphaAmp * breathe01;
+                    m_selectionBrush->SetColor(D2D1::ColorF(m_selectionStyle.accent.r, m_selectionStyle.accent.g, m_selectionStyle.accent.b, pulseA));
+                }
 
                 if (m_selectionShadowBrush)
                 {
@@ -1075,7 +1107,7 @@ namespace FD2D
                 }
                 target->DrawRoundedRectangle(rr, m_selectionBrush.Get(), accentW);
 
-                if (selAnimating && BackplateRef() != nullptr)
+                if ((selAnimating || (m_selectionStyle.breatheEnabled && m_selectionStyle.breatheInflateAmp > 0.0f)) && BackplateRef() != nullptr)
                 {
                     BackplateRef()->RequestAnimationFrame();
                 }

@@ -52,6 +52,10 @@ namespace FD2D
             m_desired = { main > 0.0f ? main - m_spacing : 0.0f, cross };
         }
 
+        // Include this panel's padding and margin so scroll containers compute correct content extents.
+        m_desired.w += 2.0f * m_padding + 2.0f * m_margin;
+        m_desired.h += 2.0f * m_padding + 2.0f * m_margin;
+
         return m_desired;
     }
 
