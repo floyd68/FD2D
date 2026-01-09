@@ -2,6 +2,12 @@
 
 FD2D is a lightweight modern C++ UI framework for Windows, implemented on top of:
 
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+Copyright (c) 2024 EunSuk, Lee (이은석, floyd)
+
 - Win32 (`HWND`, message loop)
 - Direct2D (2D rendering)
 - DirectWrite (text layout/rendering)
