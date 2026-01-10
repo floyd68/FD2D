@@ -2,6 +2,7 @@
 
 #include "Panel.h"
 #include "Splitter.h"
+#include <functional>
 
 namespace FD2D
 {
@@ -35,6 +36,8 @@ namespace FD2D
         void SetConstraintPropagation(ConstraintPropagation policy);
         ConstraintPropagation PropagationPolicy() const { return m_propagation; }
 
+        void OnSplitChanged(std::function<void(float ratio)> handler);
+
         Size Measure(Size available) override;
         Size MinSize() const override;
         void Arrange(Rect finalRect) override;
@@ -54,6 +57,8 @@ namespace FD2D
         std::shared_ptr<Wnd> m_firstChild {};
         std::shared_ptr<Wnd> m_secondChild {};
         std::shared_ptr<Splitter> m_splitter {};
+
+        std::function<void(float)> m_splitChanged {};
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_dragDimBrush {};
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_dragOutlineBrush {};

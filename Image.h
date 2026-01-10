@@ -21,26 +21,6 @@ namespace FD2D
     public:
         using ClickHandler = std::function<void()>;
 
-        struct SelectionStyle
-        {
-            D2D1_COLOR_F accent { 1.0f, 0.60f, 0.24f, 1.0f };
-            D2D1_COLOR_F shadow { 0.0f, 0.0f, 0.0f, 0.55f };
-            D2D1_COLOR_F fill { 1.0f, 1.0f, 1.0f, 1.0f };
-
-            float radius { 6.0f };
-            float baseInflate { 1.0f };
-            float popInflate { 4.0f };
-            float shadowThickness { 3.0f };
-            float accentThickness { 2.0f };
-            float fillMaxAlpha { 0.10f };
-
-            bool breatheEnabled { true };
-            int breathePeriodMs { 1800 };
-            float breatheInflateAmp { 0.60f };
-            float breatheThicknessAmp { 0.35f };
-            float breatheAlphaAmp { 0.08f };
-        };
-
         Image();
         explicit Image(const std::wstring& name);
         ~Image();
@@ -49,17 +29,6 @@ namespace FD2D
         void SetRect(const D2D1_RECT_F& rect);
         HRESULT SetSourceFile(const std::wstring& filePath);
         
-        // 썸네일 로딩
-        void SetThumbnailSize(const Size& size);
-        
-        // 로딩 목적 설정
-        void SetImagePurpose(ImageCore::ImagePurpose purpose);
-
-        void SetSelected(bool selected);
-        bool Selected() const { return m_selected; }
-
-        void SetSelectionStyle(const SelectionStyle& style);
-
         void SetOnClick(ClickHandler handler);
 
         void SetLoadingSpinnerEnabled(bool enabled);
@@ -119,14 +88,7 @@ namespace FD2D
         std::unique_ptr<DirectX::ScratchImage> m_pendingScratchImage {};
         std::wstring m_pendingSourcePath {};
 
-        bool m_selected { false };
         ClickHandler m_onClick {};
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_selectionBrush {};
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_selectionShadowBrush {};
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_selectionFillBrush {};
-        SelectionStyle m_selectionStyle {};
-        unsigned long long m_selectionAnimStartMs { 0 };
-        unsigned long long m_selectionAnimMs { 150 }; // selection "pop" duration
         bool m_loadingSpinnerEnabled { true };
         std::shared_ptr<Spinner> m_loadingSpinner {};
 
@@ -148,6 +110,7 @@ namespace FD2D
         float m_panX { 0.0f };  // Pan offset in layout coordinates
         float m_panY { 0.0f };
         bool m_panning { false };
+        bool m_panArmed { false }; // LButton is down; may become panning after threshold
         float m_panStartX { 0.0f };  // Mouse position when panning started
         float m_panStartY { 0.0f };
         float m_panStartOffsetX { 0.0f };  // Pan offset when panning started

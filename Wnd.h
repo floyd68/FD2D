@@ -55,6 +55,10 @@ namespace FD2D
         virtual void OnRenderD3D(ID3D11DeviceContext* context);
         virtual void OnRender(ID2D1RenderTarget* target);
         virtual bool OnMessage(UINT message, WPARAM wParam, LPARAM lParam);
+        virtual bool OnFileDrop(const std::wstring& path, const POINT& clientPt);
+
+        void RequestFocus();
+        bool HasFocus() const;
 
     protected:
         Backplate* BackplateRef() const;

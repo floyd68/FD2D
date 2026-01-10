@@ -77,7 +77,6 @@ namespace FD2D
     void Splitter::SetRatio(float ratio)
     {
         float clamped = (std::max)(0.0f, (std::min)(1.0f, ratio));
-        clamped = CalculateRatio(clamped);
 
         if (clamped != m_currentRatio)
         {
@@ -173,9 +172,6 @@ namespace FD2D
         // 0.0 ~ 1.0 범위로 제한
         newRatio = (std::max)(0.0f, (std::min)(1.0f, newRatio));
 
-        // Snap 처리
-        newRatio = CalculateRatio(newRatio);
-
         if (newRatio != m_currentRatio)
         {
             m_currentRatio = newRatio;
@@ -209,19 +205,6 @@ namespace FD2D
 
     float Splitter::CalculateRatio(float ratio) const
     {
-        // Snap 처리: 0.0, 0.5, 1.0 근처에서 snap
-        if (std::abs(ratio - 0.0f) < m_snapThreshold)
-        {
-            return 0.0f;
-        }
-        if (std::abs(ratio - 0.5f) < m_snapThreshold)
-        {
-            return 0.5f;
-        }
-        if (std::abs(ratio - 1.0f) < m_snapThreshold)
-        {
-            return 1.0f;
-        }
         return ratio;
     }
 

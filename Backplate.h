@@ -65,6 +65,10 @@ namespace FD2D
         bool AddWnd(const std::shared_ptr<Wnd>& wnd);
         bool OnMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
+        void SetFocusedWnd(Wnd* wnd);
+        Wnd* FocusedWnd() const { return m_focusedWnd; }
+        void ClearFocusIf(Wnd* wnd);
+
         ID2D1RenderTarget* RenderTarget() const;
         ID3D11Device* D3DDevice() const { return m_rendererId == L"d2d_hwndrt" ? nullptr : m_d3dDevice.Get(); }
         ID3D11DeviceContext* D3DContext() const { return m_rendererId == L"d2d_hwndrt" ? nullptr : m_d3dContext.Get(); }
@@ -130,6 +134,8 @@ namespace FD2D
 
         std::atomic<unsigned long long> m_lastAnimationRequestMs { 0 };
         std::atomic<unsigned long long> m_lastAnimationTickMs { 0 };
+
+        Wnd* m_focusedWnd { nullptr };
     };
 }
 

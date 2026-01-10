@@ -2,14 +2,12 @@
 #include "Backplate.h"
 #include "Spinner.h"
 #include "Core.h"  // For GetSupportedD2DVersion
-#include "../ImageCore/ImageCache.h"
 #include "../ImageCore/ImageRequest.h"
 #include <algorithm>
 #include <windowsx.h>
 #include <cmath>
 #include <d3dcompiler.h>
 #include <d2d1_1.h>  // For Direct2D 1.1 interpolation modes
-#include <filesystem>
 #include <cwctype>
 
 namespace FD2D
@@ -314,36 +312,42 @@ namespace FD2D
             return v;
         }
 
-        static std::wstring NormalizePath(std::wstring_view p)
+        static std::wstring NormalizePath(const std::wstring& p)
         {
             if (p.empty())
             {
                 return {};
             }
 
-            try
+            std::wstring out;
+            DWORD needed = GetFullPathNameW(p.c_str(), 0, nullptr, nullptr);
+            if (needed > 0)
             {
-                // Normalize lexically (no disk I/O) and use platform-preferred separators.
-                std::filesystem::path fp = std::filesystem::path(p).lexically_normal();
-                fp.make_preferred();
+                out.resize(static_cast<size_t>(needed));
+                DWORD written = GetFullPathNameW(p.c_str(), needed, &out[0], nullptr);
+                if (written > 0 && written < needed)
+                {
+                    out.resize(static_cast<size_t>(written));
+                }
+                else if (written == 0)
+                {
+                    out = p;
+                }
+            }
+            else
+            {
+                out = p;
+            }
 
-                std::wstring out = fp.wstring();
-                for (auto& ch : out)
-                {
-                    ch = static_cast<wchar_t>(towlower(ch));
-                }
-                return out;
-            }
-            catch (...)
+            for (auto& ch : out)
             {
-                // Best-effort fallback: case-fold only.
-                std::wstring out(p);
-                for (auto& ch : out)
+                if (ch == L'/')
                 {
-                    ch = static_cast<wchar_t>(towlower(ch));
+                    ch = L'\\';
                 }
-                return out;
+                ch = static_cast<wchar_t>(towlower(ch));
             }
+            return out;
         }
 
         // (debug-only temp-file logging removed)
@@ -382,31 +386,6 @@ namespace FD2D
 
     Size Image::Measure(Size available)
     {
-        // Thumbnail/Preview 용도에서는 targetSize를 fixed desired size로 사용 (thumb strip 레이아웃을 위해)
-        if ((m_request.purpose == ImageCore::ImagePurpose::Thumbnail || m_request.purpose == ImageCore::ImagePurpose::Preview) &&
-            (m_request.targetSize.w > 0.0f && m_request.targetSize.h > 0.0f))
-        {
-            // StackPanel(Horizontal)은 childRect의 height를 childArea.h(=윈도우 높이)에 맞추기 때문에,
-            // height가 줄어들면 Image::OnRender의 aspect-fit 로직이 셀 내부 여백을 크게 만들 수 있다.
-            // 썸네일 모드에서는 available에 맞춰 셀 자체를 줄여(정사각형) "간격이 벌어져 보이는" 현상을 완화한다.
-            float size = m_request.targetSize.h;
-            if (m_request.targetSize.w > 0.0f)
-            {
-                size = (std::min)(size, m_request.targetSize.w);
-            }
-            if (available.w > 0.0f)
-            {
-                size = (std::min)(size, available.w);
-            }
-            if (available.h > 0.0f)
-            {
-                size = (std::min)(size, available.h);
-            }
-
-            m_desired = { size, size };
-            return m_desired;
-        }
-
         // FullResolution은 윈도우 크기에 맞게 항상 available size 사용 (Aspect Ratio는 OnRender에서 처리)
         if (available.w > 0.0f && available.h > 0.0f)
         {
@@ -428,6 +407,14 @@ namespace FD2D
         // but stop any in-flight interaction/animation state.
         if (!normalized.empty() && normalized != m_filePath && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
         {
+            // IMPORTANT: If the previous image was on the GPU path (DDS SRV) and the next image is CPU-decoded
+            // (e.g., PNG with alpha), the D3D pass would keep drawing the old SRV behind the new D2D bitmap.
+            // Clear GPU resources on selection change; the SRV cache fast-path will repopulate immediately when applicable.
+            m_gpuSrv.Reset();
+            m_prevGpuSrv.Reset();
+            m_gpuWidth = 0;
+            m_gpuHeight = 0;
+
             if (m_panning)
             {
                 m_panning = false;
@@ -507,8 +494,24 @@ namespace FD2D
             UINT cw = 0, ch = 0;
             if (TryGetSrvFromCache(normalized, cachedSrv, cw, ch))
             {
-                // Setup cross-fade on GPU path
-                if (m_gpuSrv)
+                // Setup cross-fade on GPU path.
+                // NOTE: The cache doesn't currently store DXGI_FORMAT metadata, so use a conservative heuristic:
+                // for common alpha formats (png/tga/gif), avoid crossfading to prevent "previous image show-through".
+                bool incomingHasAlpha = false;
+                const size_t lastSlash = normalized.find_last_of(L"\\/");
+                const size_t lastDot = normalized.find_last_of(L'.');
+                if (lastDot != std::wstring::npos && (lastSlash == std::wstring::npos || lastDot > lastSlash))
+                {
+                    const std::wstring ext = normalized.substr(lastDot);
+                    if (_wcsicmp(ext.c_str(), L".png") == 0 ||
+                        _wcsicmp(ext.c_str(), L".tga") == 0 ||
+                        _wcsicmp(ext.c_str(), L".gif") == 0)
+                    {
+                        incomingHasAlpha = true;
+                    }
+                }
+
+                if (!incomingHasAlpha && m_gpuSrv)
                 {
                     m_prevGpuSrv = m_gpuSrv;
                     m_fadeStartMs = NowMs();
@@ -552,34 +555,6 @@ namespace FD2D
         return S_OK;
     }
 
-    void Image::SetSelected(bool selected)
-    {
-        if (m_selected == selected)
-        {
-            return;
-        }
-        m_selected = selected;
-        m_selectionAnimStartMs = NowMs();
-        Invalidate();
-        if (BackplateRef() != nullptr)
-        {
-            BackplateRef()->RequestAnimationFrame();
-        }
-    }
-
-    void Image::SetSelectionStyle(const SelectionStyle& style)
-    {
-        m_selectionStyle = style;
-        m_selectionBrush.Reset();
-        m_selectionShadowBrush.Reset();
-        m_selectionFillBrush.Reset();
-        Invalidate();
-        if (BackplateRef() != nullptr)
-        {
-            BackplateRef()->RequestAnimationFrame();
-        }
-    }
-
     void Image::SetOnClick(ClickHandler handler)
     {
         m_onClick = std::move(handler);
@@ -593,21 +568,6 @@ namespace FD2D
         }
         m_loadingSpinnerEnabled = enabled;
         Invalidate();
-    }
-
-    void Image::SetThumbnailSize(const Size& size)
-    {
-        ImageCore::Size targetSize { size.w, size.h };
-        m_request.targetSize = targetSize;
-        if (size.w > 0.0f || size.h > 0.0f)
-        {
-            m_request.purpose = ImageCore::ImagePurpose::Thumbnail;
-        }
-    }
-
-    void Image::SetImagePurpose(ImageCore::ImagePurpose purpose)
-    {
-        m_request.purpose = purpose;
     }
 
     void Image::RequestImageLoad()
@@ -745,7 +705,29 @@ namespace FD2D
         Microsoft::WRL::ComPtr<ID2D1Bitmap> d2dBitmap;
         HRESULT hr = E_FAIL;
 
-        const bool wantOpaqueThumbnail = (m_request.purpose == ImageCore::ImagePurpose::Thumbnail);
+        // If the incoming image likely has transparency (alpha), avoid cross-fading with the previous image.
+        // Cross-fade + alpha makes the previous image "show through" transparent pixels, which is visually wrong.
+        bool incomingHasAlpha = false;
+        if (scratchImage)
+        {
+            incomingHasAlpha = DirectX::HasAlpha(scratchImage->GetMetadata().format);
+        }
+        else if (wicBitmap)
+        {
+            WICPixelFormatGUID fmt {};
+            if (SUCCEEDED(wicBitmap->GetPixelFormat(&fmt)))
+            {
+                incomingHasAlpha =
+                    IsEqualGUID(fmt, GUID_WICPixelFormat32bppPBGRA) ||
+                    IsEqualGUID(fmt, GUID_WICPixelFormat32bppBGRA) ||
+                    IsEqualGUID(fmt, GUID_WICPixelFormat32bppPRGBA) ||
+                    IsEqualGUID(fmt, GUID_WICPixelFormat32bppRGBA) ||
+                    IsEqualGUID(fmt, GUID_WICPixelFormat64bppPRGBA) ||
+                    IsEqualGUID(fmt, GUID_WICPixelFormat64bppRGBA) ||
+                    IsEqualGUID(fmt, GUID_WICPixelFormat128bppPRGBAFloat) ||
+                    IsEqualGUID(fmt, GUID_WICPixelFormat128bppRGBAFloat);
+            }
+        }
 
         // DirectXTex 경로: ScratchImage를 직접 사용
         if (scratchImage)
@@ -755,8 +737,7 @@ namespace FD2D
             {
                 D2D1_BITMAP_PROPERTIES props = {};
                 props.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                // Thumbnails should always be visually opaque (avoid DDS alpha being interpreted as transparency).
-                props.pixelFormat.alphaMode = wantOpaqueThumbnail ? D2D1_ALPHA_MODE_IGNORE : D2D1_ALPHA_MODE_PREMULTIPLIED;
+                props.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
                 props.dpiX = 96.0f;
                 props.dpiY = 96.0f;
 
@@ -775,31 +756,13 @@ namespace FD2D
         // WIC 경로: WIC bitmap을 사용
         else if (wicBitmap)
         {
-            if (wantOpaqueThumbnail)
-            {
-                // Force alpha ignore for thumbnails so they don't render semi-transparent.
-                D2D1_BITMAP_PROPERTIES props = {};
-                props.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                props.pixelFormat.alphaMode = D2D1_ALPHA_MODE_IGNORE;
-                props.dpiX = 96.0f;
-                props.dpiY = 96.0f;
-                hr = target->CreateBitmapFromWicBitmap(wicBitmap.Get(), &props, &d2dBitmap);
-                if (FAILED(hr))
-                {
-                    // Fallback to default properties if the render target can't accept our explicit ones.
-                    hr = target->CreateBitmapFromWicBitmap(wicBitmap.Get(), nullptr, &d2dBitmap);
-                }
-            }
-            else
-            {
-                hr = target->CreateBitmapFromWicBitmap(wicBitmap.Get(), nullptr, &d2dBitmap);
-            }
+            hr = target->CreateBitmapFromWicBitmap(wicBitmap.Get(), nullptr, &d2dBitmap);
         }
 
         if (SUCCEEDED(hr) && d2dBitmap)
         {
             // Start cross-fade if the displayed bitmap is changing.
-            if (m_bitmap && m_loadedFilePath != sourcePath)
+            if (!incomingHasAlpha && m_bitmap && m_loadedFilePath != sourcePath)
             {
                 m_prevBitmap = m_bitmap;
                 m_prevLoadedFilePath = m_loadedFilePath;
@@ -894,8 +857,11 @@ namespace FD2D
                                 &srv);
                             if (SUCCEEDED(hrSrv) && srv)
                             {
-                                // Cross-fade for GPU path
-                                if (m_gpuSrv)
+                                // Cross-fade for GPU path.
+                                // If the incoming format has alpha, avoid crossfading to prevent "show-through"
+                                // of the previous image behind transparent pixels.
+                                const bool incomingHasAlpha = DirectX::HasAlpha(meta.format);
+                                if (!incomingHasAlpha && m_gpuSrv)
                                 {
                                     m_prevGpuSrv = m_gpuSrv;
                                     m_fadeStartMs = NowMs();
@@ -1150,8 +1116,10 @@ namespace FD2D
         {
             if (isFading && m_prevBitmap)
             {
-                // Correct crossfade: draw prev opaque, then blend new over it.
-                drawBitmapAspectFit(m_prevBitmap.Get(), 1.0f);
+                // Crossfade:
+                // Fade OUT the previous image while fading IN the new image.
+                // This avoids "seeing the previous image through" transparent pixels of the new image.
+                drawBitmapAspectFit(m_prevBitmap.Get(), 1.0f - fadeT);
                 drawBitmapAspectFit(m_bitmap.Get(), fadeT);
             }
             else
@@ -1173,108 +1141,6 @@ namespace FD2D
         if (m_loadingSpinner)
         {
             m_loadingSpinner->SetActive(shouldShowSpinner);
-        }
-
-        if (m_selected)
-        {
-            if (!m_selectionBrush)
-            {
-                (void)target->CreateSolidColorBrush(
-                    m_selectionStyle.accent,
-                    &m_selectionBrush);
-            }
-            if (!m_selectionShadowBrush)
-            {
-                (void)target->CreateSolidColorBrush(
-                    m_selectionStyle.shadow,
-                    &m_selectionShadowBrush);
-            }
-            if (!m_selectionFillBrush)
-            {
-                (void)target->CreateSolidColorBrush(
-                    D2D1::ColorF(m_selectionStyle.fill.r, m_selectionStyle.fill.g, m_selectionStyle.fill.b, 0.0f),
-                    &m_selectionFillBrush);
-            }
-
-            if (m_selectionBrush)
-            {
-                D2D1_RECT_F r = LayoutRect();
-                // In thumbnail strips the control can be arranged taller than the bitmap draw-rect.
-                // Draw the selection outline around the actual aspect-fit destination rectangle when possible.
-                if (m_bitmap)
-                {
-                    r = computeAspectFitDestRect(r, m_bitmap->GetSize());
-                }
-                else if (m_prevBitmap)
-                {
-                    r = computeAspectFitDestRect(r, m_prevBitmap->GetSize());
-                }
-
-                // Selection "pop" animation (150ms): start slightly larger/thicker and settle.
-                float selT = 1.0f;
-                bool selAnimating = false;
-                if (m_selectionAnimStartMs != 0 && m_selectionAnimMs > 0)
-                {
-                    const unsigned long long elapsed = NowMs() - m_selectionAnimStartMs;
-                    selT = Clamp01(static_cast<float>(elapsed) / static_cast<float>(m_selectionAnimMs));
-                    selAnimating = selT < 1.0f;
-                }
-
-                const float ease = 1.0f - (1.0f - selT) * (1.0f - selT); // ease-out quad
-                const float popInflate = m_selectionStyle.popInflate * (1.0f - ease);
-                const float baseInflate = m_selectionStyle.baseInflate;
-
-                // Continuous breathe (subtle).
-                float breathe01 = 0.0f;
-                if (m_selectionStyle.breatheEnabled && m_selectionStyle.breathePeriodMs > 0)
-                {
-                    const float period = static_cast<float>(m_selectionStyle.breathePeriodMs);
-                    const float t = static_cast<float>(NowMs() % static_cast<unsigned long long>(m_selectionStyle.breathePeriodMs));
-                    const float phase = (t / period) * 6.28318530718f; // 2*pi
-                    breathe01 = 0.5f + 0.5f * std::sinf(phase);
-                }
-                const float breatheInflate = m_selectionStyle.breatheInflateAmp * breathe01;
-
-                // Inflate so strokes don't clip and to create the pop feel.
-                r.left -= (baseInflate + popInflate + breatheInflate);
-                r.top -= (baseInflate + popInflate + breatheInflate);
-                r.right += (baseInflate + popInflate + breatheInflate);
-                r.bottom += (baseInflate + popInflate + breatheInflate);
-
-                const float radius = m_selectionStyle.radius;
-                const D2D1_ROUNDED_RECT rr { r, radius, radius };
-
-                // Subtle highlight overlay on the thumbnail itself (inside the original dest rect).
-                if (m_selectionFillBrush)
-                {
-                    const float fillA = m_selectionStyle.fillMaxAlpha * ease;
-                    m_selectionFillBrush->SetColor(D2D1::ColorF(m_selectionStyle.fill.r, m_selectionStyle.fill.g, m_selectionStyle.fill.b, fillA));
-                    const D2D1_ROUNDED_RECT fillRR { r, (std::max)(0.0f, radius - 1.0f), (std::max)(0.0f, radius - 1.0f) };
-                    target->FillRoundedRectangle(fillRR, m_selectionFillBrush.Get());
-                }
-
-                const float shadowW = m_selectionStyle.shadowThickness;
-                const float accentW = (std::max)(0.0f, m_selectionStyle.accentThickness + (1.0f - ease) + (m_selectionStyle.breatheThicknessAmp * breathe01));
-
-                // Pulse alpha slightly on accent stroke.
-                if (m_selectionBrush)
-                {
-                    const float baseA = m_selectionStyle.accent.a;
-                    const float pulseA = baseA * (1.0f - m_selectionStyle.breatheAlphaAmp) + baseA * m_selectionStyle.breatheAlphaAmp * breathe01;
-                    m_selectionBrush->SetColor(D2D1::ColorF(m_selectionStyle.accent.r, m_selectionStyle.accent.g, m_selectionStyle.accent.b, pulseA));
-                }
-
-                if (m_selectionShadowBrush)
-                {
-                    target->DrawRoundedRectangle(rr, m_selectionShadowBrush.Get(), shadowW);
-                }
-                target->DrawRoundedRectangle(rr, m_selectionBrush.Get(), accentW);
-
-                if ((selAnimating || (m_selectionStyle.breatheEnabled && m_selectionStyle.breatheInflateAmp > 0.0f)) && BackplateRef() != nullptr)
-                {
-                    BackplateRef()->RequestAnimationFrame();
-                }
-            }
         }
 
         Wnd::OnRender(target);
@@ -1425,12 +1291,12 @@ namespace FD2D
                 static_cast<float>(pt.y) >= r.top &&
                 static_cast<float>(pt.y) <= r.bottom)
             {
-                // If zoomed in, start panning instead of clicking
-                if (m_request.purpose == ImageCore::ImagePurpose::FullResolution && 
-                    std::abs(m_zoomScale - 1.0f) > 0.001f)
+                // Main image: arm panning immediately (actual panning starts after a small movement threshold).
+                // This makes panning work on startup and after image changes even when zoom == 1.0.
+                if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
                 {
-                    // Start panning - store Layout coordinates (same as client coordinates)
-                    m_panning = true;
+                    m_panArmed = true;
+                    m_panning = false;
                     m_pointerZoomActive = false;
                     m_panStartX = static_cast<float>(pt.x);
                     m_panStartY = static_cast<float>(pt.y);
@@ -1456,7 +1322,7 @@ namespace FD2D
         }
         case WM_MOUSEMOVE:
         {
-            if (m_panning && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
+            if ((m_panArmed || m_panning) && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
             {
                 // Backplate has already converted coordinates to client/Layout coordinate system
                 // When mouse is captured, Backplate uses GetCursorPos() and converts to client coordinates
@@ -1467,26 +1333,49 @@ namespace FD2D
                 // Both m_panStartX/Y and pt are in Layout coordinate system (same as client coordinates)
                 const float deltaX = static_cast<float>(pt.x) - m_panStartX;
                 const float deltaY = static_cast<float>(pt.y) - m_panStartY;
-                
-                m_panX = m_panStartOffsetX + deltaX;
-                m_panY = m_panStartOffsetY + deltaY;
-                m_pointerZoomActive = false;
-                
-                Invalidate();
+
+                // Start panning after a small threshold so simple clicks still work.
+                if (!m_panning)
+                {
+                    constexpr float kStartThresholdPx = 3.0f;
+                    if (std::abs(deltaX) >= kStartThresholdPx || std::abs(deltaY) >= kStartThresholdPx)
+                    {
+                        m_panning = true;
+                    }
+                }
+
+                if (m_panning)
+                {
+                    m_panX = m_panStartOffsetX + deltaX;
+                    m_panY = m_panStartOffsetY + deltaY;
+                    m_pointerZoomActive = false;
+                    Invalidate();
+                    return true;
+                }
+
+                // Armed but not yet panning: consume to avoid child hover interactions.
                 return true;
             }
             break;
         }
         case WM_LBUTTONUP:
         {
-            if (m_panning)
+            if ((m_panArmed || m_panning) && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
             {
+                const bool wasPanning = m_panning;
                 m_panning = false;
+                m_panArmed = false;
                 
                 // Release mouse capture
                 if (BackplateRef() != nullptr && BackplateRef()->Window() != nullptr)
                 {
                     ReleaseCapture();
+                }
+
+                // If we never crossed the drag threshold, treat it as a click.
+                if (!wasPanning && m_onClick)
+                {
+                    m_onClick();
                 }
                 
                 return true;
@@ -1496,9 +1385,10 @@ namespace FD2D
         case WM_CAPTURECHANGED:
         {
             // If capture is lost while panning, stop panning
-            if (m_panning && GetCapture() != BackplateRef()->Window())
+            if ((m_panArmed || m_panning) && GetCapture() != BackplateRef()->Window())
             {
                 m_panning = false;
+                m_panArmed = false;
             }
             break;
         }
@@ -1566,12 +1456,6 @@ namespace FD2D
         if (!context || !m_backplate)
         {
             return;
-        }
-
-        // Advance smooth zoom animation (for GPU path)
-        if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
-        {
-            AdvanceZoomAnimation(NowMs());
         }
 
         // Advance smooth zoom animation (for GPU path)
@@ -1699,6 +1583,13 @@ namespace FD2D
             drawSrvRect(g_backdropSrv.Get(), layout, 1.0f);
         }
 
+        // Only draw the image SRV if it corresponds to the currently requested source.
+        // Otherwise we'd draw a stale previous SRV behind CPU-decoded (alpha) images.
+        if (m_loadedFilePath != m_filePath)
+        {
+            return;
+        }
+
         if (!m_gpuSrv || m_gpuWidth == 0 || m_gpuHeight == 0)
         {
             return;
@@ -1737,8 +1628,10 @@ namespace FD2D
 
         if (isFading && m_prevGpuSrv)
         {
-            // Correct crossfade: draw prev opaque, then blend new over it.
-            drawSrvRect(m_prevGpuSrv.Get(), dest, 1.0f);
+            // Crossfade:
+            // Fade OUT the previous image while fading IN the new image.
+            // This avoids "seeing the previous image through" transparent pixels of the new image.
+            drawSrvRect(m_prevGpuSrv.Get(), dest, 1.0f - fadeT);
             drawSrvRect(m_gpuSrv.Get(), dest, fadeT);
         }
         else

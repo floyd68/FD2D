@@ -56,7 +56,7 @@ namespace FD2D
         SplitterOrientation m_orientation { SplitterOrientation::Horizontal };
         float m_thickness { 4.0f };
         float m_hitAreaThickness { 12.0f };
-        float m_snapThreshold { 0.02f };  // 2% 이내면 snap
+        float m_snapThreshold { 0.0f };  // Snap disabled
 
         bool m_hovered { false };
         bool m_trackingMouseLeave { false };

@@ -37,6 +37,13 @@ namespace FD2D
         // Since all LayoutRects are in the same client coordinate system, no conversion is needed
         // Parent Wnd and Child Wnd both receive coordinates in client/Layout coordinate system
 
+        static bool RectContainsPoint(const D2D1_RECT_F& r, const POINT& pt)
+        {
+            return pt.x >= r.left &&
+                pt.x <= r.right &&
+                pt.y >= r.top &&
+                pt.y <= r.bottom;
+        }
     }
 
     Wnd::Wnd()
@@ -250,6 +257,11 @@ namespace FD2D
 
     void Wnd::OnDetached()
     {
+        if (m_backplate != nullptr)
+        {
+            m_backplate->ClearFocusIf(this);
+        }
+
         for (auto& child : m_childrenOrdered)
         {
             if (child)
@@ -319,6 +331,43 @@ namespace FD2D
             }
         }
         return handled;
+    }
+
+    bool Wnd::OnFileDrop(const std::wstring& path, const POINT& clientPt)
+    {
+        // Default behavior: hit-test children (topmost first) and forward.
+        for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
+        {
+            const auto& child = *it;
+            if (!child)
+            {
+                continue;
+            }
+
+            if (!RectContainsPoint(child->LayoutRect(), clientPt))
+            {
+                continue;
+            }
+
+            if (child->OnFileDrop(path, clientPt))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void Wnd::RequestFocus()
+    {
+        if (m_backplate != nullptr)
+        {
+            m_backplate->SetFocusedWnd(this);
+        }
+    }
+
+    bool Wnd::HasFocus() const
+    {
+        return m_backplate != nullptr && m_backplate->FocusedWnd() == this;
     }
 
     Backplate* Wnd::BackplateRef() const

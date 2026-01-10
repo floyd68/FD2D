@@ -158,6 +158,8 @@
     <ClInclude Include="FD2D_Export.h" />
     <ClInclude Include="GridPanel.h" />
     <ClInclude Include="Image.h" />
+    <ClInclude Include="SelectionStyle.h" />
+    <ClInclude Include="ThumbImage.h" />
     <ClInclude Include="Layout.h" />
     <ClInclude Include="OverlayPanel.h" />
     <ClInclude Include="Panel.h" />
@@ -177,6 +179,7 @@
     <ClCompile Include="DockPanel.cpp" />
     <ClCompile Include="GridPanel.cpp" />
     <ClCompile Include="Image.cpp" />
+    <ClCompile Include="ThumbImage.cpp" />
     <ClCompile Include="OverlayPanel.cpp" />
     <ClCompile Include="Panel.cpp" />
     <ClCompile Include="SplitPanel.cpp" />

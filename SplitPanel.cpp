@@ -103,6 +103,11 @@ namespace FD2D
         Invalidate();
     }
 
+    void SplitPanel::OnSplitChanged(std::function<void(float ratio)> handler)
+    {
+        m_splitChanged = std::move(handler);
+    }
+
     float SplitPanel::ClampRatioForPaneConstraints(const Rect& childArea, float splitterExtent, float ratio) const
     {
         float availableExtent = 0.0f;
@@ -204,6 +209,11 @@ namespace FD2D
         }
         
         Invalidate();
+
+        if (m_splitChanged)
+        {
+            m_splitChanged(m_splitRatio);
+        }
     }
 
     void SplitPanel::OnRender(ID2D1RenderTarget* target)

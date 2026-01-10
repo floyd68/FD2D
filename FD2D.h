@@ -8,6 +8,8 @@
 #include "Text.h"
 #include "Button.h"
 #include "Image.h"
+#include "MainImage.h"
+#include "ThumbImage.h"
 #include "Panel.h"
 #include "StackPanel.h"
 #include "DockPanel.h"

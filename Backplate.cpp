@@ -4,6 +4,7 @@
 #include <dxgi1_3.h>
 #include <string>
 #include <algorithm>
+#include <shellapi.h>
 #include <windowsx.h>  // For GET_X_LPARAM, GET_Y_LPARAM, MAKELPARAM
 
 namespace FD2D
@@ -224,6 +225,7 @@ namespace FD2D
             EnsureRenderTarget();
             // 타이틀바 정보 업데이트
             UpdateTitleBarInfo();
+            DragAcceptFiles(m_window, TRUE);
             result = 0;
             return true;
         }
@@ -241,6 +243,51 @@ namespace FD2D
             BeginPaint(m_window, &ps);
             Render();
             EndPaint(m_window, &ps);
+            result = 0;
+            return true;
+        }
+
+        case WM_DROPFILES:
+        {
+            const HDROP hDrop = reinterpret_cast<HDROP>(wParam);
+            if (hDrop == nullptr)
+            {
+                result = 0;
+                return true;
+            }
+
+            wchar_t pathBuf[MAX_PATH] {};
+            const UINT fileCount = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+            if (fileCount == 0)
+            {
+                DragFinish(hDrop);
+                result = 0;
+                return true;
+            }
+
+            POINT pt {};
+            (void)DragQueryPoint(hDrop, &pt); // client coordinates
+
+            const UINT cch = DragQueryFileW(hDrop, 0, pathBuf, static_cast<UINT>(std::size(pathBuf)));
+            DragFinish(hDrop);
+
+            if (cch == 0)
+            {
+                result = 0;
+                return true;
+            }
+
+            const std::wstring path(pathBuf);
+
+            // Route to UI tree: hit-test top-level children and allow Wnd overrides to handle.
+            for (auto& pair : m_children)
+            {
+                if (pair.second && pair.second->OnFileDrop(path, pt))
+                {
+                    break;
+                }
+            }
+
             result = 0;
             return true;
         }
@@ -287,6 +334,37 @@ namespace FD2D
 
         default:
             break;
+        }
+
+        auto IsKeyMessage = [](UINT msg) -> bool
+        {
+            switch (msg)
+            {
+            case WM_KEYDOWN:
+            case WM_KEYUP:
+            case WM_SYSKEYDOWN:
+            case WM_SYSKEYUP:
+            case WM_CHAR:
+            case WM_SYSCHAR:
+            case WM_DEADCHAR:
+            case WM_SYSDEADCHAR:
+            case WM_UNICHAR:
+                return true;
+            default:
+                return false;
+            }
+        };
+
+        // Route keyboard input only to the focused Wnd (if any).
+        if (IsKeyMessage(message) && m_focusedWnd != nullptr)
+        {
+            const bool handledKey = m_focusedWnd->OnMessage(message, wParam, lParam);
+            if (handledKey)
+            {
+                result = 0;
+                return true;
+            }
+            return false;
         }
 
         bool handled = false;
@@ -367,6 +445,19 @@ namespace FD2D
         }
         else
             return false;
+    }
+
+    void Backplate::SetFocusedWnd(Wnd* wnd)
+    {
+        m_focusedWnd = wnd;
+    }
+
+    void Backplate::ClearFocusIf(Wnd* wnd)
+    {
+        if (m_focusedWnd == wnd)
+        {
+            m_focusedWnd = nullptr;
+        }
     }
 
     bool Backplate::RegisterClass(const WindowOptions& options)
