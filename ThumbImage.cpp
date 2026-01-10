@@ -2,66 +2,16 @@
 #include "Backplate.h"
 #include "Spinner.h"
 #include "Core.h"
+#include "Util.h"
 
 #include <algorithm>
 #include <cmath>
-#include <cwctype>
-#include <filesystem>
+#include <vector>
+#include <limits>
 #include <windowsx.h>
 
 namespace FD2D
 {
-    namespace
-    {
-        static unsigned long long NowMs()
-        {
-            return static_cast<unsigned long long>(GetTickCount64());
-        }
-
-        static float Clamp01(float v)
-        {
-            if (v < 0.0f)
-            {
-                return 0.0f;
-            }
-            if (v > 1.0f)
-            {
-                return 1.0f;
-            }
-            return v;
-        }
-
-        static std::wstring NormalizePath(std::wstring_view p)
-        {
-            if (p.empty())
-            {
-                return {};
-            }
-
-            try
-            {
-                std::filesystem::path fp = std::filesystem::path(p).lexically_normal();
-                fp.make_preferred();
-
-                std::wstring out = fp.wstring();
-                for (auto& ch : out)
-                {
-                    ch = static_cast<wchar_t>(towlower(ch));
-                }
-                return out;
-            }
-            catch (...)
-            {
-                std::wstring out(p);
-                for (auto& ch : out)
-                {
-                    ch = static_cast<wchar_t>(towlower(ch));
-                }
-                return out;
-            }
-        }
-    }
-
     ThumbImage::ThumbImage()
         : Wnd()
         , m_request()
@@ -125,7 +75,7 @@ namespace FD2D
 
     HRESULT ThumbImage::SetSourceFile(const std::wstring& filePath)
     {
-        const std::wstring normalized = NormalizePath(filePath);
+        const std::wstring normalized = FD2D::Util::NormalizePath(filePath);
         if (!normalized.empty() && normalized == m_filePath)
         {
             return S_FALSE;
@@ -159,7 +109,7 @@ namespace FD2D
             return;
         }
         m_selected = selected;
-        m_selectionAnimStartMs = NowMs();
+        m_selectionAnimStartMs = FD2D::Util::NowMs();
         Invalidate();
         if (BackplateRef() != nullptr)
         {
@@ -220,9 +170,9 @@ namespace FD2D
         m_inflightToken.store(token);
         const std::wstring requestedPath = m_filePath;
 
-        m_currentHandle = ImageCore::ImageLoader::Instance().Request(
+        m_currentHandle = ImageCore::ImageLoader::Instance().RequestDecoded(
             m_request,
-            [this, token, requestedPath](HRESULT hr, Microsoft::WRL::ComPtr<IWICBitmapSource> wicBitmap, std::unique_ptr<DirectX::ScratchImage> scratchImage)
+            [this, token, requestedPath](HRESULT hr, ImageCore::DecodedImage image)
             {
                 const unsigned long long current = m_inflightToken.load();
                 if (token != current)
@@ -234,29 +184,36 @@ namespace FD2D
                     return;
                 }
 
-                OnImageLoaded(requestedPath, hr, wicBitmap, std::move(scratchImage));
+                OnImageLoaded(requestedPath, hr, std::move(image));
             });
     }
 
     void ThumbImage::OnImageLoaded(
         const std::wstring& sourcePath,
         HRESULT hr,
-        Microsoft::WRL::ComPtr<IWICBitmapSource> wicBitmap,
-        std::unique_ptr<DirectX::ScratchImage> scratchImage)
+        ImageCore::DecodedImage image)
     {
         m_currentHandle = 0;
 
-        const std::wstring normalizedSource = NormalizePath(sourcePath);
+        const std::wstring normalizedSource = FD2D::Util::NormalizePath(sourcePath);
 
-        if (SUCCEEDED(hr) && (wicBitmap || scratchImage))
+        if (SUCCEEDED(hr) && image.blocks && !image.blocks->empty())
         {
             {
                 std::lock_guard<std::mutex> lock(m_pendingMutex);
-                m_pendingWicBitmap = wicBitmap;
-                m_pendingScratchImage = std::move(scratchImage);
+                m_pendingW = 0;
+                m_pendingH = 0;
+                m_pendingRowPitch = 0;
+                m_pendingFormat = DXGI_FORMAT_UNKNOWN;
+                m_pendingBlocks.reset();
                 m_pendingSourcePath = normalizedSource;
                 m_failedFilePath.clear();
                 m_failedHr = S_OK;
+                m_pendingW = image.width;
+                m_pendingH = image.height;
+                m_pendingRowPitch = image.rowPitchBytes;
+                m_pendingFormat = image.dxgiFormat;
+                m_pendingBlocks = std::move(image.blocks);
             }
 
             if (BackplateRef() != nullptr)
@@ -281,74 +238,6 @@ namespace FD2D
         }
     }
 
-    HRESULT ThumbImage::ConvertToD2DBitmap(
-        ID2D1RenderTarget* target,
-        const std::wstring& sourcePath,
-        Microsoft::WRL::ComPtr<IWICBitmapSource> wicBitmap,
-        std::unique_ptr<DirectX::ScratchImage> scratchImage)
-    {
-        if (target == nullptr)
-        {
-            return E_INVALIDARG;
-        }
-
-        Microsoft::WRL::ComPtr<ID2D1Bitmap> d2dBitmap;
-        HRESULT hr = E_FAIL;
-
-        // Always ignore alpha for thumbnails (opaque tiles).
-        if (scratchImage)
-        {
-            const DirectX::Image* image = scratchImage->GetImage(0, 0, 0);
-            if (image && image->pixels)
-            {
-                D2D1_BITMAP_PROPERTIES props {};
-                props.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                props.pixelFormat.alphaMode = D2D1_ALPHA_MODE_IGNORE;
-                props.dpiX = 96.0f;
-                props.dpiY = 96.0f;
-
-                D2D1_SIZE_U size = D2D1::SizeU(
-                    static_cast<UINT32>(image->width),
-                    static_cast<UINT32>(image->height));
-
-                hr = target->CreateBitmap(
-                    size,
-                    image->pixels,
-                    static_cast<UINT32>(image->rowPitch),
-                    &props,
-                    &d2dBitmap);
-            }
-        }
-        else if (wicBitmap)
-        {
-            D2D1_BITMAP_PROPERTIES props {};
-            props.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
-            props.pixelFormat.alphaMode = D2D1_ALPHA_MODE_IGNORE;
-            props.dpiX = 96.0f;
-            props.dpiY = 96.0f;
-            hr = target->CreateBitmapFromWicBitmap(wicBitmap.Get(), &props, &d2dBitmap);
-            if (FAILED(hr))
-            {
-                hr = target->CreateBitmapFromWicBitmap(wicBitmap.Get(), nullptr, &d2dBitmap);
-            }
-        }
-
-        if (SUCCEEDED(hr) && d2dBitmap)
-        {
-            if (m_bitmap && m_loadedFilePath != sourcePath)
-            {
-                m_prevBitmap = m_bitmap;
-                m_prevLoadedFilePath = m_loadedFilePath;
-                m_fadeStartMs = NowMs();
-            }
-
-            m_bitmap = d2dBitmap;
-            m_loadedFilePath = sourcePath;
-        }
-
-        return hr;
-    }
-
     void ThumbImage::OnRender(ID2D1RenderTarget* target)
     {
         if (!target)
@@ -357,24 +246,75 @@ namespace FD2D
         }
 
         // Consume pending decoded image -> D2D bitmap (render thread).
-        Microsoft::WRL::ComPtr<IWICBitmapSource> pendingWic;
-        std::unique_ptr<DirectX::ScratchImage> pendingScratch;
         std::wstring pendingSource;
+        std::shared_ptr<std::vector<uint8_t>> pendingBlocks {};
+        uint32_t pendingW = 0;
+        uint32_t pendingH = 0;
+        uint32_t pendingRowPitch = 0;
+        DXGI_FORMAT pendingFormat = DXGI_FORMAT_UNKNOWN;
         {
             std::lock_guard<std::mutex> lock(m_pendingMutex);
-            if (m_pendingWicBitmap || m_pendingScratchImage)
+            if (m_pendingBlocks)
             {
-                pendingWic = m_pendingWicBitmap;
-                pendingScratch = std::move(m_pendingScratchImage);
+                pendingW = m_pendingW;
+                pendingH = m_pendingH;
+                pendingRowPitch = m_pendingRowPitch;
+                pendingFormat = m_pendingFormat;
+                m_pendingW = 0;
+                m_pendingH = 0;
+                m_pendingRowPitch = 0;
+                m_pendingFormat = DXGI_FORMAT_UNKNOWN;
+                pendingBlocks = std::move(m_pendingBlocks);
                 pendingSource = m_pendingSourcePath;
-                m_pendingWicBitmap.Reset();
                 m_pendingSourcePath.clear();
             }
         }
 
-        if (!pendingSource.empty() && (pendingWic || pendingScratch))
+        if (!pendingSource.empty() && pendingBlocks && pendingW > 0 && pendingH > 0 && pendingRowPitch > 0)
         {
-            (void)ConvertToD2DBitmap(target, pendingSource, pendingWic, std::move(pendingScratch));
+            HRESULT hrBmp = E_FAIL;
+
+            // Thumbnails always render via D2D bitmap; expect CPU BGRA8 output.
+            if (pendingFormat == DXGI_FORMAT_B8G8R8A8_UNORM || pendingFormat == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB)
+            {
+                D2D1_BITMAP_PROPERTIES props{};
+                props.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                props.pixelFormat.alphaMode = D2D1_ALPHA_MODE_IGNORE;
+                props.dpiX = 96.0f;
+                props.dpiY = 96.0f;
+
+                Microsoft::WRL::ComPtr<ID2D1Bitmap> d2dBitmap;
+                const D2D1_SIZE_U size = D2D1::SizeU(pendingW, pendingH);
+                hrBmp = target->CreateBitmap(
+                    size,
+                    pendingBlocks->data(),
+                    pendingRowPitch,
+                    &props,
+                    &d2dBitmap);
+
+                if (SUCCEEDED(hrBmp) && d2dBitmap)
+                {
+                    if (m_bitmap && m_loadedFilePath != pendingSource)
+                    {
+                        m_prevBitmap = m_bitmap;
+                        m_prevLoadedFilePath = m_loadedFilePath;
+                        m_fadeStartMs = FD2D::Util::NowMs();
+                    }
+                    m_bitmap = d2dBitmap;
+                    m_loadedFilePath = pendingSource;
+                }
+            }
+            else
+            {
+                hrBmp = E_FAIL;
+            }
+
+            if (FAILED(hrBmp))
+            {
+                std::lock_guard<std::mutex> lock(m_pendingMutex);
+                m_failedFilePath = pendingSource;
+                m_failedHr = hrBmp;
+            }
             m_loading.store(false);
             m_inflightToken.store(0);
         }
@@ -445,8 +385,8 @@ namespace FD2D
         float fadeT = 1.0f;
         if (m_prevBitmap && m_fadeStartMs != 0 && m_fadeDurationMs > 0)
         {
-            const unsigned long long elapsed = NowMs() - m_fadeStartMs;
-            fadeT = Clamp01(static_cast<float>(elapsed) / static_cast<float>(m_fadeDurationMs));
+            const unsigned long long elapsed = FD2D::Util::NowMs() - m_fadeStartMs;
+            fadeT = FD2D::Util::Clamp01(static_cast<float>(elapsed) / static_cast<float>(m_fadeDurationMs));
             isFading = fadeT < 1.0f;
         }
 
@@ -509,8 +449,8 @@ namespace FD2D
                 bool selAnimating = false;
                 if (m_selectionAnimStartMs != 0 && m_selectionAnimMs > 0)
                 {
-                    const unsigned long long elapsed = NowMs() - m_selectionAnimStartMs;
-                    selT = Clamp01(static_cast<float>(elapsed) / static_cast<float>(m_selectionAnimMs));
+                    const unsigned long long elapsed = FD2D::Util::NowMs() - m_selectionAnimStartMs;
+                    selT = FD2D::Util::Clamp01(static_cast<float>(elapsed) / static_cast<float>(m_selectionAnimMs));
                     selAnimating = selT < 1.0f;
                 }
 
@@ -522,7 +462,7 @@ namespace FD2D
                 if (m_selectionStyle.breatheEnabled && m_selectionStyle.breathePeriodMs > 0)
                 {
                     const float period = static_cast<float>(m_selectionStyle.breathePeriodMs);
-                    const float t = static_cast<float>(NowMs() % static_cast<unsigned long long>(m_selectionStyle.breathePeriodMs));
+                    const float t = static_cast<float>(FD2D::Util::NowMs() % static_cast<unsigned long long>(m_selectionStyle.breathePeriodMs));
                     const float phase = (t / period) * 6.28318530718f;
                     breathe01 = 0.5f + 0.5f * std::sinf(phase);
                 }

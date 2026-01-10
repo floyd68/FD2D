@@ -429,6 +429,18 @@ namespace FD2D
             convertedLParam = MAKELPARAM(ptClient.x, ptClient.y);
         }
 
+        // Focus-based routing for non-mouse messages:
+        // Avoid broadcasting custom/timer messages to every top-level Wnd when multiple ImageBrowsers exist.
+        if (!IsMouseMessage(message) && m_focusedWnd != nullptr)
+        {
+            if (m_focusedWnd->OnMessage(message, convertedWParam, convertedLParam))
+            {
+                result = 0;
+                return true;
+            }
+            return false;
+        }
+
         // Forward to children with converted coordinates (client/Layout coordinate system)
         for (auto& pair : m_children)
         {

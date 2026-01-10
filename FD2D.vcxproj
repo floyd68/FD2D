@@ -169,6 +169,7 @@
     <ClInclude Include="StackPanel.h" />
     <ClInclude Include="Spinner.h" />
     <ClInclude Include="Text.h" />
+    <ClInclude Include="Util.h" />
     <ClInclude Include="Wnd.h" />
   </ItemGroup>
   <ItemGroup>
@@ -188,6 +189,7 @@
     <ClCompile Include="StackPanel.cpp" />
     <ClCompile Include="Spinner.cpp" />
     <ClCompile Include="Text.cpp" />
+    <ClCompile Include="Util.cpp" />
     <ClCompile Include="Wnd.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

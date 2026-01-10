@@ -3,14 +3,14 @@
 #include "Wnd.h"
 #include "../ImageCore/ImageRequest.h"
 #include "../ImageCore/ImageLoader.h"
-#include "../external/DirectXTex/DirectXTex/DirectXTex.h"
-#include <wincodec.h>
 #include <wrl/client.h>
 #include <d3d11_1.h>
 #include <d2d1_1.h>  // For Direct2D 1.1+ interpolation modes
 #include <functional>
 #include <mutex>
 #include <atomic>
+#include <memory>
+#include <vector>
 
 namespace FD2D
 {
@@ -54,13 +54,7 @@ namespace FD2D
         void OnImageLoaded(
             const std::wstring& sourcePath,
             HRESULT hr,
-            Microsoft::WRL::ComPtr<IWICBitmapSource> wicBitmap,
-            std::unique_ptr<DirectX::ScratchImage> scratchImage);
-        HRESULT ConvertToD2DBitmap(
-            ID2D1RenderTarget* target,
-            const std::wstring& sourcePath,
-            Microsoft::WRL::ComPtr<IWICBitmapSource> wicBitmap,
-            std::unique_ptr<DirectX::ScratchImage> scratchImage);
+            ImageCore::DecodedImage image);
 
         std::wstring m_filePath {};
         // The source path currently represented by m_bitmap (can lag behind m_filePath while loading the next image).
@@ -75,26 +69,24 @@ namespace FD2D
         HRESULT m_failedHr { S_OK };
 
         Microsoft::WRL::ComPtr<ID2D1Bitmap> m_bitmap {};
-        Microsoft::WRL::ComPtr<ID2D1Bitmap> m_prevBitmap {};
-        std::wstring m_prevLoadedFilePath {};
-        unsigned long long m_fadeStartMs { 0 };
-        unsigned long long m_fadeDurationMs { 200 }; // cross-fade duration
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_backdropBrush {};
         
         // 변환 대기 중인 이미지 데이터 (render thread에서 변환)
         mutable std::mutex m_pendingMutex;
-        Microsoft::WRL::ComPtr<IWICBitmapSource> m_pendingWicBitmap {};
-        std::unique_ptr<DirectX::ScratchImage> m_pendingScratchImage {};
+        std::shared_ptr<std::vector<uint8_t>> m_pendingBlocks {};
+        uint32_t m_pendingW { 0 };
+        uint32_t m_pendingH { 0 };
+        uint32_t m_pendingRowPitch { 0 };
+        DXGI_FORMAT m_pendingFormat { DXGI_FORMAT_UNKNOWN };
         std::wstring m_pendingSourcePath {};
 
         ClickHandler m_onClick {};
         bool m_loadingSpinnerEnabled { true };
         std::shared_ptr<Spinner> m_loadingSpinner {};
 
-        // Optional GPU-native DDS path (main image): upload ScratchImage to a D3D11 SRV and render via D3D.
+        // Optional GPU-native DDS path (main image): upload BCn blocks to a D3D11 SRV and render via D3D.
         Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_gpuSrv {};
-        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_prevGpuSrv {};
         UINT m_gpuWidth { 0 };
         UINT m_gpuHeight { 0 };
 

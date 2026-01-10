@@ -3,10 +3,8 @@
 #include "Wnd.h"
 #include "../ImageCore/ImageRequest.h"
 #include "../ImageCore/ImageLoader.h"
-#include "../external/DirectXTex/DirectXTex/DirectXTex.h"
 #include "SelectionStyle.h"
 
-#include <wincodec.h>
 #include <wrl/client.h>
 
 #include <atomic>
@@ -14,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace FD2D
 {
@@ -51,13 +50,7 @@ namespace FD2D
         void OnImageLoaded(
             const std::wstring& sourcePath,
             HRESULT hr,
-            Microsoft::WRL::ComPtr<IWICBitmapSource> wicBitmap,
-            std::unique_ptr<DirectX::ScratchImage> scratchImage);
-        HRESULT ConvertToD2DBitmap(
-            ID2D1RenderTarget* target,
-            const std::wstring& sourcePath,
-            Microsoft::WRL::ComPtr<IWICBitmapSource> wicBitmap,
-            std::unique_ptr<DirectX::ScratchImage> scratchImage);
+            ImageCore::DecodedImage image);
 
         std::wstring m_filePath {};
         std::wstring m_loadedFilePath {};
@@ -76,8 +69,12 @@ namespace FD2D
         unsigned long long m_fadeDurationMs { 180 };
 
         mutable std::mutex m_pendingMutex;
-        Microsoft::WRL::ComPtr<IWICBitmapSource> m_pendingWicBitmap {};
-        std::unique_ptr<DirectX::ScratchImage> m_pendingScratchImage {};
+        // Pending decoded image produced on the worker thread.
+        std::shared_ptr<std::vector<uint8_t>> m_pendingBlocks {};
+        uint32_t m_pendingW { 0 };
+        uint32_t m_pendingH { 0 };
+        uint32_t m_pendingRowPitch { 0 };
+        DXGI_FORMAT m_pendingFormat { DXGI_FORMAT_UNKNOWN };
         std::wstring m_pendingSourcePath {};
 
         bool m_selected { false };

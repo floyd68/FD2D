@@ -2,18 +2,55 @@
 #include "Backplate.h"
 #include "Spinner.h"
 #include "Core.h"  // For GetSupportedD2DVersion
+#include "Util.h"
 #include "../ImageCore/ImageRequest.h"
 #include <algorithm>
 #include <windowsx.h>
 #include <cmath>
 #include <d3dcompiler.h>
 #include <d2d1_1.h>  // For Direct2D 1.1 interpolation modes
-#include <cwctype>
+#include <vector>
 
 namespace FD2D
 {
     namespace
     {
+        static bool IsCompressedDxgiFormat(DXGI_FORMAT fmt)
+        {
+            switch (fmt)
+            {
+            case DXGI_FORMAT_BC1_TYPELESS:
+            case DXGI_FORMAT_BC1_UNORM:
+            case DXGI_FORMAT_BC1_UNORM_SRGB:
+            case DXGI_FORMAT_BC2_TYPELESS:
+            case DXGI_FORMAT_BC2_UNORM:
+            case DXGI_FORMAT_BC2_UNORM_SRGB:
+            case DXGI_FORMAT_BC3_TYPELESS:
+            case DXGI_FORMAT_BC3_UNORM:
+            case DXGI_FORMAT_BC3_UNORM_SRGB:
+            case DXGI_FORMAT_BC4_TYPELESS:
+            case DXGI_FORMAT_BC4_UNORM:
+            case DXGI_FORMAT_BC4_SNORM:
+            case DXGI_FORMAT_BC5_TYPELESS:
+            case DXGI_FORMAT_BC5_UNORM:
+            case DXGI_FORMAT_BC5_SNORM:
+            case DXGI_FORMAT_BC6H_TYPELESS:
+            case DXGI_FORMAT_BC6H_UF16:
+            case DXGI_FORMAT_BC6H_SF16:
+            case DXGI_FORMAT_BC7_TYPELESS:
+            case DXGI_FORMAT_BC7_UNORM:
+            case DXGI_FORMAT_BC7_UNORM_SRGB:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        static bool IsCpuBgra8DxgiFormat(DXGI_FORMAT fmt)
+        {
+            return fmt == DXGI_FORMAT_B8G8R8A8_UNORM || fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+        }
+
         struct QuadVertex
         {
             float px;
@@ -29,6 +66,7 @@ namespace FD2D
         static Microsoft::WRL::ComPtr<ID3D11Buffer> g_cb {};
         static Microsoft::WRL::ComPtr<ID3D11SamplerState> g_sampler {};
         static Microsoft::WRL::ComPtr<ID3D11BlendState> g_blend {};
+        static Microsoft::WRL::ComPtr<ID3D11RasterizerState> g_rsScissor {};
         static Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> g_backdropSrv {};
 
         struct SrvCacheEntry
@@ -243,6 +281,21 @@ namespace FD2D
                 return hr;
             }
 
+            // Rasterizer state with scissor enabled (needed to clip zoomed/panned images to their LayoutRect).
+            if (!g_rsScissor)
+            {
+                D3D11_RASTERIZER_DESC rd {};
+                rd.FillMode = D3D11_FILL_SOLID;
+                rd.CullMode = D3D11_CULL_NONE;
+                rd.DepthClipEnable = TRUE;
+                rd.ScissorEnable = TRUE;
+                hr = device->CreateRasterizerState(&rd, &g_rsScissor);
+                if (FAILED(hr))
+                {
+                    return hr;
+                }
+            }
+
             // Dynamic constant buffer for opacity.
             D3D11_BUFFER_DESC cbd {};
             cbd.Usage = D3D11_USAGE_DYNAMIC;
@@ -293,64 +346,6 @@ namespace FD2D
 
             return S_OK;
         }
-
-        static unsigned long long NowMs()
-        {
-            return static_cast<unsigned long long>(GetTickCount64());
-        }
-
-        static float Clamp01(float v)
-        {
-            if (v < 0.0f)
-            {
-                return 0.0f;
-            }
-            if (v > 1.0f)
-            {
-                return 1.0f;
-            }
-            return v;
-        }
-
-        static std::wstring NormalizePath(const std::wstring& p)
-        {
-            if (p.empty())
-            {
-                return {};
-            }
-
-            std::wstring out;
-            DWORD needed = GetFullPathNameW(p.c_str(), 0, nullptr, nullptr);
-            if (needed > 0)
-            {
-                out.resize(static_cast<size_t>(needed));
-                DWORD written = GetFullPathNameW(p.c_str(), needed, &out[0], nullptr);
-                if (written > 0 && written < needed)
-                {
-                    out.resize(static_cast<size_t>(written));
-                }
-                else if (written == 0)
-                {
-                    out = p;
-                }
-            }
-            else
-            {
-                out = p;
-            }
-
-            for (auto& ch : out)
-            {
-                if (ch == L'/')
-                {
-                    ch = L'\\';
-                }
-                ch = static_cast<wchar_t>(towlower(ch));
-            }
-            return out;
-        }
-
-        // (debug-only temp-file logging removed)
     }
 
     Image::Image()
@@ -401,20 +396,12 @@ namespace FD2D
 
     HRESULT Image::SetSourceFile(const std::wstring& filePath)
     {
-        const std::wstring normalized = NormalizePath(filePath);
+        const std::wstring normalized = FD2D::Util::NormalizePath(filePath);
 
         // When switching main images, preserve zoom/pan (comparison workflow),
         // but stop any in-flight interaction/animation state.
         if (!normalized.empty() && normalized != m_filePath && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
         {
-            // IMPORTANT: If the previous image was on the GPU path (DDS SRV) and the next image is CPU-decoded
-            // (e.g., PNG with alpha), the D3D pass would keep drawing the old SRV behind the new D2D bitmap.
-            // Clear GPU resources on selection change; the SRV cache fast-path will repopulate immediately when applicable.
-            m_gpuSrv.Reset();
-            m_prevGpuSrv.Reset();
-            m_gpuWidth = 0;
-            m_gpuHeight = 0;
-
             if (m_panning)
             {
                 m_panning = false;
@@ -429,7 +416,7 @@ namespace FD2D
 
             m_pointerZoomActive = false;
             m_zoomVelocity = 0.0f;
-            m_lastZoomAnimMs = NowMs();
+            m_lastZoomAnimMs = FD2D::Util::NowMs();
         }
 
         // If this path is already the current requested source, don't cancel/restart.
@@ -479,8 +466,11 @@ namespace FD2D
         // Drop any pending (UI-thread) apply from the previous selection.
         {
             std::lock_guard<std::mutex> lock(m_pendingMutex);
-            m_pendingWicBitmap.Reset();
-            m_pendingScratchImage.reset();
+            m_pendingBlocks.reset();
+            m_pendingW = 0;
+            m_pendingH = 0;
+            m_pendingRowPitch = 0;
+            m_pendingFormat = DXGI_FORMAT_UNKNOWN;
             m_pendingSourcePath.clear();
         }
 
@@ -494,34 +484,6 @@ namespace FD2D
             UINT cw = 0, ch = 0;
             if (TryGetSrvFromCache(normalized, cachedSrv, cw, ch))
             {
-                // Setup cross-fade on GPU path.
-                // NOTE: The cache doesn't currently store DXGI_FORMAT metadata, so use a conservative heuristic:
-                // for common alpha formats (png/tga/gif), avoid crossfading to prevent "previous image show-through".
-                bool incomingHasAlpha = false;
-                const size_t lastSlash = normalized.find_last_of(L"\\/");
-                const size_t lastDot = normalized.find_last_of(L'.');
-                if (lastDot != std::wstring::npos && (lastSlash == std::wstring::npos || lastDot > lastSlash))
-                {
-                    const std::wstring ext = normalized.substr(lastDot);
-                    if (_wcsicmp(ext.c_str(), L".png") == 0 ||
-                        _wcsicmp(ext.c_str(), L".tga") == 0 ||
-                        _wcsicmp(ext.c_str(), L".gif") == 0)
-                    {
-                        incomingHasAlpha = true;
-                    }
-                }
-
-                if (!incomingHasAlpha && m_gpuSrv)
-                {
-                    m_prevGpuSrv = m_gpuSrv;
-                    m_fadeStartMs = NowMs();
-                }
-                else
-                {
-                    m_prevGpuSrv.Reset();
-                    m_fadeStartMs = 0;
-                }
-
                 m_gpuSrv = cachedSrv;
                 m_gpuWidth = cw;
                 m_gpuHeight = ch;
@@ -530,7 +492,6 @@ namespace FD2D
 
                 // Cancel CPU path bitmaps for main image
                 m_bitmap.Reset();
-                m_prevBitmap.Reset();
 
                 m_loading.store(false);
                 m_request.source = normalized;
@@ -620,9 +581,9 @@ namespace FD2D
 
         // (debug request tracing removed)
 
-        m_currentHandle = ImageCore::ImageLoader::Instance().Request(
+        m_currentHandle = ImageCore::ImageLoader::Instance().RequestDecoded(
             m_request,
-            [this, token, requestedPath](HRESULT hr, Microsoft::WRL::ComPtr<IWICBitmapSource> wicBitmap, std::unique_ptr<DirectX::ScratchImage> scratchImage)
+            [this, token, requestedPath](HRESULT hr, ImageCore::DecodedImage image)
             {
                 // NOTE: This callback runs on a worker thread.
                 // Do NOT read m_filePath here (UI thread writes it). Use token gating instead.
@@ -637,28 +598,30 @@ namespace FD2D
                     return;
                 }
 
-                OnImageLoaded(requestedPath, hr, wicBitmap, std::move(scratchImage));
+                OnImageLoaded(requestedPath, hr, std::move(image));
             });
     }
 
     void Image::OnImageLoaded(
         const std::wstring& sourcePath,
         HRESULT hr,
-        Microsoft::WRL::ComPtr<IWICBitmapSource> wicBitmap,
-        std::unique_ptr<DirectX::ScratchImage> scratchImage)
+        ImageCore::DecodedImage image)
     {
         m_currentHandle = 0;
 
-        const std::wstring normalizedSource = NormalizePath(sourcePath);
+        const std::wstring normalizedSource = FD2D::Util::NormalizePath(sourcePath);
 
         // 변환은 OnRender에서 render target을 사용하여 수행
         // 여기서는 저장만 하고 Invalidate로 OnRender 호출 유도
-        if (SUCCEEDED(hr) && (wicBitmap || scratchImage))
+        if (SUCCEEDED(hr) && image.blocks && !image.blocks->empty())
         {
             {
                 std::lock_guard<std::mutex> lock(m_pendingMutex);
-                m_pendingWicBitmap = wicBitmap;
-                m_pendingScratchImage = std::move(scratchImage);
+                m_pendingBlocks = std::move(image.blocks);
+                m_pendingW = image.width;
+                m_pendingH = image.height;
+                m_pendingRowPitch = image.rowPitchBytes;
+                m_pendingFormat = image.dxgiFormat;
                 m_pendingSourcePath = normalizedSource;
                 m_failedFilePath.clear();
                 m_failedHr = S_OK;
@@ -691,98 +654,6 @@ namespace FD2D
         }
     }
 
-    HRESULT Image::ConvertToD2DBitmap(
-        ID2D1RenderTarget* target,
-        const std::wstring& sourcePath,
-        Microsoft::WRL::ComPtr<IWICBitmapSource> wicBitmap,
-        std::unique_ptr<DirectX::ScratchImage> scratchImage)
-    {
-        if (target == nullptr)
-        {
-            return E_INVALIDARG;
-        }
-
-        Microsoft::WRL::ComPtr<ID2D1Bitmap> d2dBitmap;
-        HRESULT hr = E_FAIL;
-
-        // If the incoming image likely has transparency (alpha), avoid cross-fading with the previous image.
-        // Cross-fade + alpha makes the previous image "show through" transparent pixels, which is visually wrong.
-        bool incomingHasAlpha = false;
-        if (scratchImage)
-        {
-            incomingHasAlpha = DirectX::HasAlpha(scratchImage->GetMetadata().format);
-        }
-        else if (wicBitmap)
-        {
-            WICPixelFormatGUID fmt {};
-            if (SUCCEEDED(wicBitmap->GetPixelFormat(&fmt)))
-            {
-                incomingHasAlpha =
-                    IsEqualGUID(fmt, GUID_WICPixelFormat32bppPBGRA) ||
-                    IsEqualGUID(fmt, GUID_WICPixelFormat32bppBGRA) ||
-                    IsEqualGUID(fmt, GUID_WICPixelFormat32bppPRGBA) ||
-                    IsEqualGUID(fmt, GUID_WICPixelFormat32bppRGBA) ||
-                    IsEqualGUID(fmt, GUID_WICPixelFormat64bppPRGBA) ||
-                    IsEqualGUID(fmt, GUID_WICPixelFormat64bppRGBA) ||
-                    IsEqualGUID(fmt, GUID_WICPixelFormat128bppPRGBAFloat) ||
-                    IsEqualGUID(fmt, GUID_WICPixelFormat128bppRGBAFloat);
-            }
-        }
-
-        // DirectXTex 경로: ScratchImage를 직접 사용
-        if (scratchImage)
-        {
-            const DirectX::Image* image = scratchImage->GetImage(0, 0, 0);
-            if (image && image->pixels)
-            {
-                D2D1_BITMAP_PROPERTIES props = {};
-                props.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                props.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
-                props.dpiX = 96.0f;
-                props.dpiY = 96.0f;
-
-                D2D1_SIZE_U size = D2D1::SizeU(
-                    static_cast<UINT32>(image->width),
-                    static_cast<UINT32>(image->height));
-
-                hr = target->CreateBitmap(
-                    size,
-                    image->pixels,
-                    static_cast<UINT32>(image->rowPitch),
-                    &props,
-                    &d2dBitmap);
-            }
-        }
-        // WIC 경로: WIC bitmap을 사용
-        else if (wicBitmap)
-        {
-            hr = target->CreateBitmapFromWicBitmap(wicBitmap.Get(), nullptr, &d2dBitmap);
-        }
-
-        if (SUCCEEDED(hr) && d2dBitmap)
-        {
-            // Start cross-fade if the displayed bitmap is changing.
-            if (!incomingHasAlpha && m_bitmap && m_loadedFilePath != sourcePath)
-            {
-                m_prevBitmap = m_bitmap;
-                m_prevLoadedFilePath = m_loadedFilePath;
-                m_fadeStartMs = NowMs();
-            }
-            else
-            {
-                // No meaningful fade (first image or same source).
-                m_prevBitmap.Reset();
-                m_prevLoadedFilePath.clear();
-                m_fadeStartMs = 0;
-            }
-
-            m_bitmap = d2dBitmap;
-            m_loadedFilePath = sourcePath;
-        }
-
-        return hr;
-    }
-
     void Image::OnRender(ID2D1RenderTarget* target)
     {
         if (target == nullptr)
@@ -790,10 +661,15 @@ namespace FD2D
             return;
         }
 
+        // IMPORTANT: zoom/pan can expand the destination rect beyond LayoutRect.
+        // Clip to our own bounds so we never draw over neighboring controls.
+        const D2D1_RECT_F clipRect = LayoutRect();
+        target->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
         // Advance smooth zoom animation
         if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
         {
-            AdvanceZoomAnimation(NowMs());
+            AdvanceZoomAnimation(FD2D::Util::NowMs());
         }
 
         const bool gpuActive = (m_request.purpose == ImageCore::ImagePurpose::FullResolution &&
@@ -817,20 +693,30 @@ namespace FD2D
             }
         }
 
-        // 변환 대기 중인 이미지가 있으면 D2D1Bitmap으로 변환
-        Microsoft::WRL::ComPtr<IWICBitmapSource> pendingWic;
-        std::unique_ptr<DirectX::ScratchImage> pendingScratch;
+        // Apply pending decoded payload (set by worker thread).
+        std::shared_ptr<std::vector<uint8_t>> pendingBlocks {};
+        uint32_t pendingW = 0;
+        uint32_t pendingH = 0;
+        uint32_t pendingRowPitch = 0;
+        DXGI_FORMAT pendingFormat = DXGI_FORMAT_UNKNOWN;
         std::wstring pendingSourcePath;
         {
             std::lock_guard<std::mutex> lock(m_pendingMutex);
-            pendingWic = m_pendingWicBitmap;
-            pendingScratch = std::move(m_pendingScratchImage);
-            m_pendingWicBitmap.Reset();
+            pendingBlocks = std::move(m_pendingBlocks);
+            pendingW = m_pendingW;
+            pendingH = m_pendingH;
+            pendingRowPitch = m_pendingRowPitch;
+            pendingFormat = m_pendingFormat;
+            m_pendingBlocks.reset();
+            m_pendingW = 0;
+            m_pendingH = 0;
+            m_pendingRowPitch = 0;
+            m_pendingFormat = DXGI_FORMAT_UNKNOWN;
             pendingSourcePath = m_pendingSourcePath;
             m_pendingSourcePath.clear();
         }
 
-        if (pendingWic || pendingScratch)
+        if (pendingBlocks)
         {
             // Only swap if this pending image still matches the current requested source.
             // Otherwise, drop it to avoid "wrong image stuck" due to out-of-order completion.
@@ -839,82 +725,97 @@ namespace FD2D
                 // Try GPU path for main image: if scratch is GPU-compressed DDS, upload to SRV and render via D3D.
                 bool usedGpu = false;
                 bool applied = false;
-                if (pendingScratch && m_request.purpose == ImageCore::ImagePurpose::FullResolution && m_backplate)
+                if (IsCompressedDxgiFormat(pendingFormat) && m_request.purpose == ImageCore::ImagePurpose::FullResolution && m_backplate)
                 {
-                    const DirectX::Image* img = pendingScratch->GetImage(0, 0, 0);
-                    if (img && DirectX::IsCompressed(img->format))
+                    ID3D11Device* dev = m_backplate->D3DDevice();
+                    if (dev && !m_forceCpuDecode.load())
                     {
-                        ID3D11Device* dev = m_backplate->D3DDevice();
-                        if (dev && !m_forceCpuDecode.load())
+                        (void)EnsureD3DQuadResources(dev);
+
+                        D3D11_TEXTURE2D_DESC td {};
+                        td.Width = pendingW;
+                        td.Height = pendingH;
+                        td.MipLevels = 1;
+                        td.ArraySize = 1;
+                        td.Format = pendingFormat;
+                        td.SampleDesc.Count = 1;
+                        td.Usage = D3D11_USAGE_IMMUTABLE;
+                        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+                        D3D11_SUBRESOURCE_DATA init {};
+                        init.pSysMem = pendingBlocks->data();
+                        init.SysMemPitch = pendingRowPitch;
+                        init.SysMemSlicePitch = static_cast<UINT>(pendingBlocks->size());
+
+                        Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
+                        HRESULT hrTex = dev->CreateTexture2D(&td, &init, &tex);
+                        if (SUCCEEDED(hrTex) && tex)
                         {
                             Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
-                            const auto& meta = pendingScratch->GetMetadata();
-                            HRESULT hrSrv = DirectX::CreateShaderResourceView(
-                                dev,
-                                pendingScratch->GetImages(),
-                                pendingScratch->GetImageCount(),
-                                meta,
-                                &srv);
+                            HRESULT hrSrv = dev->CreateShaderResourceView(tex.Get(), nullptr, &srv);
                             if (SUCCEEDED(hrSrv) && srv)
                             {
-                                // Cross-fade for GPU path.
-                                // If the incoming format has alpha, avoid crossfading to prevent "show-through"
-                                // of the previous image behind transparent pixels.
-                                const bool incomingHasAlpha = DirectX::HasAlpha(meta.format);
-                                if (!incomingHasAlpha && m_gpuSrv)
-                                {
-                                    m_prevGpuSrv = m_gpuSrv;
-                                    m_fadeStartMs = NowMs();
-                                }
-                                else
-                                {
-                                    m_prevGpuSrv.Reset();
-                                    m_fadeStartMs = 0;
-                                }
-
                                 m_gpuSrv = srv;
-                                m_gpuWidth = static_cast<UINT>(meta.width);
-                                m_gpuHeight = static_cast<UINT>(meta.height);
+                                m_gpuWidth = pendingW;
+                                m_gpuHeight = pendingH;
                                 m_loadedFilePath = pendingSourcePath;
 
-                                // A) Cache SRV for fast reselect
                                 PutSrvToCache(pendingSourcePath, m_gpuSrv, m_gpuWidth, m_gpuHeight);
 
-                                // Drop CPU bitmaps for main image when using GPU path
                                 m_bitmap.Reset();
-                                m_prevBitmap.Reset();
 
                                 usedGpu = true;
                                 applied = true;
                             }
-                            else
-                            {
-                                UNREFERENCED_PARAMETER(hrSrv);
-                                // SRV creation failed (can happen intermittently). We cannot display compressed pixels via D2D.
-                                // Fall back deterministically: request a CPU-decompressed decode for this selection.
-                                m_forceCpuDecode.store(true);
-                                m_loading.store(false);
-                                RequestImageLoad();
-                                usedGpu = true; // prevent ConvertToD2DBitmap with compressed data
-                            }
                         }
-                        else
+
+                        if (!applied)
                         {
-                            // No GPU device (or GPU path disabled). Request a CPU-decompressed decode.
+                            // We cannot display BCn blocks via D2D. Force CPU decode for this selection.
                             m_forceCpuDecode.store(true);
                             m_loading.store(false);
                             RequestImageLoad();
-                            usedGpu = true; // prevent ConvertToD2DBitmap with compressed data
+                            usedGpu = true;
                         }
+                    }
+                    else
+                    {
+                        // No GPU device (or GPU path disabled). Request a CPU-decompressed decode.
+                        m_forceCpuDecode.store(true);
+                        m_loading.store(false);
+                        RequestImageLoad();
+                        usedGpu = true;
                     }
                 }
 
                 if (!usedGpu)
                 {
-                    const HRESULT hrBmp = ConvertToD2DBitmap(target, pendingSourcePath, pendingWic, std::move(pendingScratch));
-                    if (FAILED(hrBmp))
+                    HRESULT hrBmp = E_FAIL;
+                    if (IsCpuBgra8DxgiFormat(pendingFormat) && pendingW > 0 && pendingH > 0 && pendingRowPitch > 0)
                     {
-                        UNREFERENCED_PARAMETER(hrBmp);
+                        D2D1_BITMAP_PROPERTIES props {};
+                        props.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                        props.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
+                        props.dpiX = 96.0f;
+                        props.dpiY = 96.0f;
+
+                        Microsoft::WRL::ComPtr<ID2D1Bitmap> d2dBitmap;
+                        const D2D1_SIZE_U size = D2D1::SizeU(pendingW, pendingH);
+                        hrBmp = target->CreateBitmap(size, pendingBlocks->data(), pendingRowPitch, &props, &d2dBitmap);
+                        if (SUCCEEDED(hrBmp) && d2dBitmap)
+                        {
+                            m_bitmap = d2dBitmap;
+                            m_loadedFilePath = pendingSourcePath;
+                            // Ensure the D3D pass won't keep drawing a stale GPU SRV under CPU-decoded images.
+                            m_gpuSrv.Reset();
+                            m_gpuWidth = 0;
+                            m_gpuHeight = 0;
+                            applied = true;
+                        }
+                    }
+
+                    if (FAILED(hrBmp) && !applied)
+                    {
                         {
                             std::lock_guard<std::mutex> lock(m_pendingMutex);
                             m_failedFilePath = pendingSourcePath;
@@ -922,10 +823,6 @@ namespace FD2D
                         }
                         // Conversion failure completes the in-flight request (stop spinner).
                         m_loading.store(false);
-                    }
-                    else
-                    {
-                        applied = true;
                     }
                 }
 
@@ -1092,47 +989,10 @@ namespace FD2D
                 sourceRect);
         };
 
-        // Cross-fade (if we have a previous bitmap and fade has started).
-        bool isFading = false;
-        float fadeT = 1.0f;
-        if (m_prevBitmap && m_fadeStartMs != 0 && m_fadeDurationMs > 0)
-        {
-            const unsigned long long elapsed = NowMs() - m_fadeStartMs;
-            fadeT = Clamp01(static_cast<float>(elapsed) / static_cast<float>(m_fadeDurationMs));
-            isFading = fadeT < 1.0f;
-        }
-
-        // GPU path cross-fade is rendered in OnRenderD3D, but we still need to drive the animation by
-        // requesting redraws while the fade is active.
-        bool isGpuFading = false;
-        if (m_prevGpuSrv && m_fadeStartMs != 0 && m_fadeDurationMs > 0)
-        {
-            const unsigned long long elapsed = NowMs() - m_fadeStartMs;
-            const float gpuT = Clamp01(static_cast<float>(elapsed) / static_cast<float>(m_fadeDurationMs));
-            isGpuFading = gpuT < 1.0f;
-        }
-
         if (m_bitmap)
         {
-            if (isFading && m_prevBitmap)
-            {
-                // Crossfade:
-                // Fade OUT the previous image while fading IN the new image.
-                // This avoids "seeing the previous image through" transparent pixels of the new image.
-                drawBitmapAspectFit(m_prevBitmap.Get(), 1.0f - fadeT);
-                drawBitmapAspectFit(m_bitmap.Get(), fadeT);
-            }
-            else
-            {
-                // Fade completed: drop previous bitmap.
-                if (m_prevBitmap)
-                {
-                    m_prevBitmap.Reset();
-                    m_prevLoadedFilePath.clear();
-                    m_fadeStartMs = 0;
-                }
-                drawBitmapAspectFit(m_bitmap.Get(), 1.0f);
-            }
+            // No cross-fade: draw the currently available bitmap (can be the previous image while the next loads).
+            drawBitmapAspectFit(m_bitmap.Get(), 1.0f);
         }
 
         // Loading spinner overlay (only while an actual request is in-flight).
@@ -1145,15 +1005,7 @@ namespace FD2D
 
         Wnd::OnRender(target);
 
-        // Drive fade animations by invalidating while active, but cap to ~60fps to avoid burning CPU.
-        // Animation pacing is handled by the application loop (60fps tick) via Backplate::RequestAnimationFrame().
-        if (isFading || isGpuFading)
-        {
-            if (BackplateRef() != nullptr)
-            {
-                BackplateRef()->RequestAnimationFrame();
-            }
-        }
+        target->PopAxisAlignedClip();
     }
 
     void Image::SetZoomScale(float scale)
@@ -1161,7 +1013,7 @@ namespace FD2D
         constexpr float kMinZoom = 0.1f;
         constexpr float kMaxZoom = 10.0f;
         m_targetZoomScale = std::max(kMinZoom, std::min(kMaxZoom, scale));
-        m_lastZoomAnimMs = NowMs();
+        m_lastZoomAnimMs = FD2D::Util::NowMs();
         // Immediately request animation frame for fast response
         if (BackplateRef() != nullptr)
         {
@@ -1178,7 +1030,7 @@ namespace FD2D
         m_panY = 0.0f;
         m_panning = false;
         m_pointerZoomActive = false;
-        m_lastZoomAnimMs = NowMs();
+        m_lastZoomAnimMs = FD2D::Util::NowMs();
         // Immediately request animation frame for fast response
         if (BackplateRef() != nullptr)
         {
@@ -1461,7 +1313,7 @@ namespace FD2D
         // Advance smooth zoom animation (for GPU path)
         if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
         {
-            AdvanceZoomAnimation(NowMs());
+            AdvanceZoomAnimation(FD2D::Util::NowMs());
         }
 
         ID3D11Device* device = m_backplate->D3DDevice();
@@ -1485,6 +1337,41 @@ namespace FD2D
         {
             return;
         }
+
+        // Clip to our own bounds for GPU path (scissor rect).
+        D3D11_RECT scissor {};
+        scissor.left = static_cast<LONG>(std::floor(layout.left));
+        scissor.top = static_cast<LONG>(std::floor(layout.top));
+        scissor.right = static_cast<LONG>(std::ceil(layout.right));
+        scissor.bottom = static_cast<LONG>(std::ceil(layout.bottom));
+
+        scissor.left = (std::max)(0L, (std::min)(scissor.left, static_cast<LONG>(cs.width)));
+        scissor.top = (std::max)(0L, (std::min)(scissor.top, static_cast<LONG>(cs.height)));
+        scissor.right = (std::max)(0L, (std::min)(scissor.right, static_cast<LONG>(cs.width)));
+        scissor.bottom = (std::max)(0L, (std::min)(scissor.bottom, static_cast<LONG>(cs.height)));
+
+        if (scissor.left >= scissor.right || scissor.top >= scissor.bottom)
+        {
+            return;
+        }
+
+        Microsoft::WRL::ComPtr<ID3D11RasterizerState> prevRs {};
+        context->RSGetState(&prevRs);
+
+        UINT prevScissorCount = 0;
+        context->RSGetScissorRects(&prevScissorCount, nullptr);
+        std::vector<D3D11_RECT> prevScissors;
+        if (prevScissorCount > 0)
+        {
+            prevScissors.resize(prevScissorCount);
+            context->RSGetScissorRects(&prevScissorCount, prevScissors.data());
+        }
+
+        if (g_rsScissor)
+        {
+            context->RSSetState(g_rsScissor.Get());
+        }
+        context->RSSetScissorRects(1, &scissor);
 
         const auto toNdcX = [cs](float x) { return (x / static_cast<float>(cs.width)) * 2.0f - 1.0f; };
         const auto toNdcY = [cs](float y) { return 1.0f - (y / static_cast<float>(cs.height)) * 2.0f; };
@@ -1583,14 +1470,15 @@ namespace FD2D
             drawSrvRect(g_backdropSrv.Get(), layout, 1.0f);
         }
 
-        // Only draw the image SRV if it corresponds to the currently requested source.
-        // Otherwise we'd draw a stale previous SRV behind CPU-decoded (alpha) images.
-        if (m_loadedFilePath != m_filePath)
+        if (!m_gpuSrv || m_gpuWidth == 0 || m_gpuHeight == 0)
         {
             return;
         }
 
-        if (!m_gpuSrv || m_gpuWidth == 0 || m_gpuHeight == 0)
+        // If a CPU-decoded image for the current selection is pending, avoid drawing the old GPU SRV this frame.
+        // Backplate renders D3D first, then D2D; so this prevents a 1-frame "show-through" when the new CPU
+        // image has transparency.
+        if (m_pendingBlocks && IsCpuBgra8DxgiFormat(m_pendingFormat) && m_pendingSourcePath == m_filePath)
         {
             return;
         }
@@ -1617,32 +1505,22 @@ namespace FD2D
             dest.right = dest.left + scaledW;
         }
 
-        bool isFading = false;
-        float fadeT = 1.0f;
-        if (m_prevGpuSrv && m_fadeStartMs != 0 && m_fadeDurationMs > 0)
-        {
-            const unsigned long long elapsed = NowMs() - m_fadeStartMs;
-            fadeT = Clamp01(static_cast<float>(elapsed) / static_cast<float>(m_fadeDurationMs));
-            isFading = fadeT < 1.0f;
-        }
+        // No cross-fade: draw the currently available SRV (can be the previous image while the next loads).
+        drawSrvRect(m_gpuSrv.Get(), dest, 1.0f);
 
-        if (isFading && m_prevGpuSrv)
+        // Restore previous raster/scissor state so we don't affect other controls.
+        if (prevScissorCount > 0 && !prevScissors.empty())
         {
-            // Crossfade:
-            // Fade OUT the previous image while fading IN the new image.
-            // This avoids "seeing the previous image through" transparent pixels of the new image.
-            drawSrvRect(m_prevGpuSrv.Get(), dest, 1.0f - fadeT);
-            drawSrvRect(m_gpuSrv.Get(), dest, fadeT);
+            context->RSSetScissorRects(prevScissorCount, prevScissors.data());
         }
         else
         {
-            if (m_prevGpuSrv)
-            {
-                m_prevGpuSrv.Reset();
-                m_fadeStartMs = 0;
-            }
-            drawSrvRect(m_gpuSrv.Get(), dest, 1.0f);
+            // Reset to no scissor rects (count=0 is invalid for RSSetScissorRects).
+            // Use full-viewport scissor as a safe default.
+            D3D11_RECT full { 0, 0, static_cast<LONG>(cs.width), static_cast<LONG>(cs.height) };
+            context->RSSetScissorRects(1, &full);
         }
+        context->RSSetState(prevRs.Get());
     }
 }
 
