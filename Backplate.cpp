@@ -4,6 +4,7 @@
 #include <dxgi1_3.h>
 #include <string>
 #include <algorithm>
+#include <windowsx.h>  // For GET_X_LPARAM, GET_Y_LPARAM, MAKELPARAM
 
 namespace FD2D
 {
@@ -288,9 +289,70 @@ namespace FD2D
 
         bool handled = false;
 
+        // For mouse messages: Backplate is responsible for converting screen coordinates to client coordinates
+        // Then forward to children with client coordinates (which match Layout coordinates since LayoutRect uses client coordinate system)
+        WPARAM convertedWParam = wParam;
+        LPARAM convertedLParam = lParam;
+        
+        // Helper to check if message is a mouse message
+        auto IsMouseMessage = [](UINT msg) -> bool
+        {
+            switch (msg)
+            {
+            case WM_MOUSEMOVE:
+            case WM_LBUTTONDOWN:
+            case WM_LBUTTONUP:
+            case WM_LBUTTONDBLCLK:
+            case WM_RBUTTONDOWN:
+            case WM_RBUTTONUP:
+            case WM_RBUTTONDBLCLK:
+            case WM_MBUTTONDOWN:
+            case WM_MBUTTONUP:
+            case WM_MBUTTONDBLCLK:
+            case WM_XBUTTONDOWN:
+            case WM_XBUTTONUP:
+            case WM_XBUTTONDBLCLK:
+            case WM_MOUSEWHEEL:
+            case WM_MOUSEHWHEEL:
+            case WM_CAPTURECHANGED:
+                return true;
+            default:
+                return false;
+            }
+        };
+
+        if (IsMouseMessage(message) && m_window != nullptr)
+        {
+            // Extract coordinates from lParam
+            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            POINT ptClient = pt;
+            
+            // Convert screen coordinates to client coordinates if needed
+            // WM_MOUSEWHEEL always uses screen coordinates
+            if (message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL)
+            {
+                // WM_MOUSEWHEEL always provides screen coordinates
+                ScreenToClient(m_window, &ptClient);
+            }
+            else if (GetCapture() == m_window)
+            {
+                // Mouse is captured: use GetCursorPos to get reliable screen coordinates, then convert
+                POINT cursorPos;
+                GetCursorPos(&cursorPos);
+                ScreenToClient(m_window, &cursorPos);
+                ptClient = cursorPos;
+            }
+            // Otherwise: WM_LBUTTONDOWN, WM_MOUSEMOVE (when not captured) already provide client coordinates
+            // No conversion needed
+            
+            // Reconstruct lParam with client coordinates (which match Layout coordinate system)
+            convertedLParam = MAKELPARAM(ptClient.x, ptClient.y);
+        }
+
+        // Forward to children with converted coordinates (client/Layout coordinate system)
         for (auto& pair : m_children)
         {
-            if (pair.second && pair.second->OnMessage(message, wParam, lParam))
+            if (pair.second && pair.second->OnMessage(message, convertedWParam, convertedLParam))
             {
                 handled = true;
             }

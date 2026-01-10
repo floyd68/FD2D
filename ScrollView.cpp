@@ -511,44 +511,49 @@ namespace FD2D
         case WM_MOUSEWHEEL:
         {
             // Only scroll when the cursor is over this viewport.
+            bool inViewport = true;
             if (BackplateRef())
             {
                 POINT ptScreen { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
                 POINT ptClient = ptScreen;
                 ScreenToClient(BackplateRef()->Window(), &ptClient);
-                if (!IsPointInViewport(ptClient.x, ptClient.y))
-                {
-                    break;
-                }
+                inViewport = IsPointInViewport(ptClient.x, ptClient.y);
             }
 
-            const short delta = static_cast<short>(HIWORD(wParam));
-            const float ticks = static_cast<float>(delta) / static_cast<float>(WHEEL_DELTA);
-            const bool shift = (GET_KEYSTATE_WPARAM(wParam) & MK_SHIFT) != 0;
-            const float step = -ticks * m_scrollStep;
-            if (m_enableHScroll && (!m_enableVScroll || shift))
+            // If cursor is over viewport, handle scrolling
+            if (inViewport)
             {
-                if (m_smoothScrollEnabled)
+                const short delta = static_cast<short>(HIWORD(wParam));
+                const float ticks = static_cast<float>(delta) / static_cast<float>(WHEEL_DELTA);
+                const bool shift = (GET_KEYSTATE_WPARAM(wParam) & MK_SHIFT) != 0;
+                const float step = -ticks * m_scrollStep;
+                if (m_enableHScroll && (!m_enableVScroll || shift))
                 {
-                    SetTargetScrollX(m_targetScrollX + step);
+                    if (m_smoothScrollEnabled)
+                    {
+                        SetTargetScrollX(m_targetScrollX + step);
+                    }
+                    else
+                    {
+                        SetScrollX(m_scrollX + step);
+                    }
+                    return true;
                 }
-                else
+                else if (m_enableVScroll)
                 {
-                    SetScrollX(m_scrollX + step);
+                    if (m_smoothScrollEnabled)
+                    {
+                        SetTargetScrollY(m_targetScrollY + step);
+                    }
+                    else
+                    {
+                        SetScrollY(m_scrollY + step);
+                    }
+                    return true;
                 }
             }
-            else if (m_enableVScroll)
-            {
-                if (m_smoothScrollEnabled)
-                {
-                    SetTargetScrollY(m_targetScrollY + step);
-                }
-                else
-                {
-                    SetScrollY(m_scrollY + step);
-                }
-            }
-            return true;
+            // If not handled (not in viewport or no scroll enabled), fall through to forward to content
+            break;
         }
         case WM_MOUSEHWHEEL:
         {
@@ -605,7 +610,8 @@ namespace FD2D
             }
 
             // For client-coordinate mouse messages, translate Y by scroll offset.
-            // (Wheel uses screen coords in lParam, but we already handled WM_MOUSEWHEEL above.)
+            // WM_MOUSEWHEEL/WM_MOUSEHWHEEL use screen coords but Backplate already converted to client.
+            // We don't translate wheel messages by scroll offset since they're position-based.
             if (message != WM_MOUSEWHEEL && message != WM_MOUSEHWHEEL && message != WM_CAPTURECHANGED)
             {
                 lParam = TranslateMouseLParam(lParam, m_scrollX, m_scrollY);

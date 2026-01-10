@@ -1,6 +1,7 @@
 #include "Wnd.h"
 #include "Backplate.h"
 #include <algorithm>
+#include <windowsx.h>  // For GET_X_LPARAM, GET_Y_LPARAM, MAKELPARAM
 
 namespace FD2D
 {
@@ -31,6 +32,11 @@ namespace FD2D
                 return false;
             }
         }
+
+        // Note: LayoutRect() returns coordinates in client coordinate system (Backplate client area)
+        // Since all LayoutRects are in the same client coordinate system, no conversion is needed
+        // Parent Wnd and Child Wnd both receive coordinates in client/Layout coordinate system
+
     }
 
     Wnd::Wnd()
@@ -288,6 +294,8 @@ namespace FD2D
         UNREFERENCED_PARAMETER(lParam);
 
         // Mouse input should behave like hit-testing: topmost child first, stop at first handled.
+        // Note: Coordinates are already in client/Layout coordinate system (converted by Backplate)
+        // All LayoutRects are in the same client coordinate system, so no conversion needed
         if (IsMouseMessage(message))
         {
             for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)

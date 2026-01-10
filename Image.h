@@ -139,6 +139,15 @@ namespace FD2D
         float m_targetZoomScale { 1.0f };
         unsigned long long m_lastZoomAnimMs { 0 };
         float m_zoomSpeed { 100.0f }; // zoom interpolation speed (fraction of remaining distance per second, e.g., 10.0 = 10x per second)
+        
+        // Panning state (for main image only)
+        float m_panX { 0.0f };  // Pan offset in layout coordinates
+        float m_panY { 0.0f };
+        bool m_panning { false };
+        float m_panStartX { 0.0f };  // Mouse position when panning started
+        float m_panStartY { 0.0f };
+        float m_panStartOffsetX { 0.0f };  // Pan offset when panning started
+        float m_panStartOffsetY { 0.0f };
     };
 }
 

@@ -377,10 +377,13 @@ namespace FD2D
     {
         const std::wstring normalized = NormalizePath(filePath);
 
-        // Reset zoom when switching to a different image (for main image only)
+        // Reset zoom and pan when switching to a different image (for main image only)
         if (!normalized.empty() && normalized != m_filePath && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
         {
             m_zoomScale = 1.0f;
+            m_panX = 0.0f;
+            m_panY = 0.0f;
+            m_panning = false;
         }
 
         // If this path is already the current requested source, don't cancel/restart.
@@ -953,7 +956,7 @@ namespace FD2D
                 destRect.right = destRect.left + scaledWidth;
             }
 
-            // Apply zoom scale (for main image only)
+            // Apply zoom scale and pan offset (for main image only)
             if (m_request.purpose == ImageCore::ImagePurpose::FullResolution && m_zoomScale != 1.0f)
             {
                 const float centerX = (destRect.left + destRect.right) * 0.5f;
@@ -962,10 +965,19 @@ namespace FD2D
                 const float height = destRect.bottom - destRect.top;
                 const float scaledWidth = width * m_zoomScale;
                 const float scaledHeight = height * m_zoomScale;
-                destRect.left = centerX - scaledWidth * 0.5f;
-                destRect.right = centerX + scaledWidth * 0.5f;
-                destRect.top = centerY - scaledHeight * 0.5f;
-                destRect.bottom = centerY + scaledHeight * 0.5f;
+                destRect.left = centerX - scaledWidth * 0.5f + m_panX;
+                destRect.right = destRect.left + scaledWidth;
+                destRect.top = centerY - scaledHeight * 0.5f + m_panY;
+                destRect.bottom = destRect.top + scaledHeight;
+            }
+            else if (m_request.purpose == ImageCore::ImagePurpose::FullResolution && 
+                     (std::abs(m_panX) > 0.001f || std::abs(m_panY) > 0.001f))
+            {
+                // Apply pan even when not zoomed (though this shouldn't normally happen)
+                destRect.left += m_panX;
+                destRect.right += m_panX;
+                destRect.top += m_panY;
+                destRect.bottom += m_panY;
             }
 
             return destRect;
@@ -1203,6 +1215,9 @@ namespace FD2D
     void Image::ResetZoom()
     {
         m_targetZoomScale = 1.0f;
+        m_panX = 0.0f;
+        m_panY = 0.0f;
+        m_panning = false;
         m_lastZoomAnimMs = NowMs();
         // Immediately request animation frame for fast response
         if (BackplateRef() != nullptr)
@@ -1279,21 +1294,89 @@ namespace FD2D
         {
         case WM_LBUTTONDOWN:
         {
-            if (!m_onClick)
-            {
-                break;
-            }
-
-            const int x = GET_X_LPARAM(lParam);
-            const int y = GET_Y_LPARAM(lParam);
+            // Backplate has already converted coordinates to client/Layout coordinate system
+            // lParam now contains coordinates in Layout coordinate system (same as client coordinates)
+            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             const D2D1_RECT_F r = LayoutRect();
-            if (static_cast<float>(x) >= r.left &&
-                static_cast<float>(x) <= r.right &&
-                static_cast<float>(y) >= r.top &&
-                static_cast<float>(y) <= r.bottom)
+            
+            // Check if mouse is within image bounds (both in Layout coordinate system)
+            if (static_cast<float>(pt.x) >= r.left &&
+                static_cast<float>(pt.x) <= r.right &&
+                static_cast<float>(pt.y) >= r.top &&
+                static_cast<float>(pt.y) <= r.bottom)
             {
-                m_onClick();
+                // If zoomed in, start panning instead of clicking
+                if (m_request.purpose == ImageCore::ImagePurpose::FullResolution && 
+                    std::abs(m_zoomScale - 1.0f) > 0.001f)
+                {
+                    // Start panning - store Layout coordinates (same as client coordinates)
+                    m_panning = true;
+                    m_panStartX = static_cast<float>(pt.x);
+                    m_panStartY = static_cast<float>(pt.y);
+                    m_panStartOffsetX = m_panX;
+                    m_panStartOffsetY = m_panY;
+                    
+                    // Capture mouse to track movement outside window
+                    if (BackplateRef() != nullptr && BackplateRef()->Window() != nullptr)
+                    {
+                        SetCapture(BackplateRef()->Window());
+                    }
+                    
+                    return true;
+                }
+                else if (m_onClick)
+                {
+                    // Normal click (not zoomed)
+                    m_onClick();
+                    return true;
+                }
+            }
+            break;
+        }
+        case WM_MOUSEMOVE:
+        {
+            if (m_panning && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
+            {
+                // Backplate has already converted coordinates to client/Layout coordinate system
+                // When mouse is captured, Backplate uses GetCursorPos() and converts to client coordinates
+                // lParam now contains coordinates in Layout coordinate system (same as client coordinates)
+                POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                
+                // Update pan offset based on mouse movement
+                // Both m_panStartX/Y and pt are in Layout coordinate system (same as client coordinates)
+                const float deltaX = static_cast<float>(pt.x) - m_panStartX;
+                const float deltaY = static_cast<float>(pt.y) - m_panStartY;
+                
+                m_panX = m_panStartOffsetX + deltaX;
+                m_panY = m_panStartOffsetY + deltaY;
+                
+                Invalidate();
                 return true;
+            }
+            break;
+        }
+        case WM_LBUTTONUP:
+        {
+            if (m_panning)
+            {
+                m_panning = false;
+                
+                // Release mouse capture
+                if (BackplateRef() != nullptr && BackplateRef()->Window() != nullptr)
+                {
+                    ReleaseCapture();
+                }
+                
+                return true;
+            }
+            break;
+        }
+        case WM_CAPTURECHANGED:
+        {
+            // If capture is lost while panning, stop panning
+            if (m_panning && GetCapture() != BackplateRef()->Window())
+            {
+                m_panning = false;
             }
             break;
         }
@@ -1305,37 +1388,34 @@ namespace FD2D
                 break;
             }
 
-            // WM_MOUSEWHEEL uses screen coordinates, convert to client coordinates
-            POINT ptScreen { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            POINT ptClient = ptScreen;
-            if (BackplateRef() != nullptr)
-            {
-                ScreenToClient(BackplateRef()->Window(), &ptClient);
-            }
-
+            // Backplate has already converted coordinates to client/Layout coordinate system
+            // lParam now contains coordinates in Layout coordinate system (same as client coordinates)
+            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             const D2D1_RECT_F r = LayoutRect();
 #ifdef _DEBUG
             wchar_t dbg[256];
-            swprintf_s(dbg, L"[FD2D][Image][WM_MOUSEWHEEL] ptClient=(%d,%d) LayoutRect=[%.1f,%.1f,%.1f,%.1f] zoomScale=%.2f\n",
-                ptClient.x, ptClient.y, r.left, r.top, r.right, r.bottom, m_zoomScale);
+            swprintf_s(dbg, L"[FD2D][Image][WM_MOUSEWHEEL] pt=(%d,%d) LayoutRect=[%.1f,%.1f,%.1f,%.1f] zoomScale=%.2f\n",
+                pt.x, pt.y, r.left, r.top, r.right, r.bottom, m_zoomScale);
             OutputDebugStringW(dbg);
 #endif
-            if (static_cast<float>(ptClient.x) >= r.left &&
-                static_cast<float>(ptClient.x) <= r.right &&
-                static_cast<float>(ptClient.y) >= r.top &&
-                static_cast<float>(ptClient.y) <= r.bottom)
+            // Check if mouse is within image bounds (both in Layout coordinate system)
+            if (static_cast<float>(pt.x) >= r.left &&
+                static_cast<float>(pt.x) <= r.right &&
+                static_cast<float>(pt.y) >= r.top &&
+                static_cast<float>(pt.y) <= r.bottom)
             {
                 const short delta = GET_WHEEL_DELTA_WPARAM(wParam);
                 const bool shiftPressed = (GET_KEYSTATE_WPARAM(wParam) & MK_SHIFT) != 0;
                 const float zoomStep = shiftPressed ? 0.1f : 0.5f; // Shift: 10%, No Shift: 50%
                 const float zoomFactor = (delta > 0) ? (1.0f + zoomStep) : (1.0f - zoomStep);
-                const float newZoom = m_zoomScale * zoomFactor;
+                const float newZoom = m_targetZoomScale * zoomFactor; // Use targetZoomScale for accumulation
 #ifdef _DEBUG
                 swprintf_s(dbg, L"[FD2D][Image][WM_MOUSEWHEEL] delta=%d zoomFactor=%.2f newZoom=%.2f\n",
                     delta, zoomFactor, newZoom);
                 OutputDebugStringW(dbg);
 #endif
                 SetZoomScale(newZoom);
+                
                 return true;
             }
             break;
@@ -1398,7 +1478,7 @@ namespace FD2D
                 return;
             }
 
-            // Apply zoom scale for GPU path
+            // Apply zoom scale and pan offset for GPU path
             D2D1_RECT_F zoomedRect = rectPx;
             if (m_zoomScale != 1.0f)
             {
@@ -1408,10 +1488,18 @@ namespace FD2D
                 const float height = rectPx.bottom - rectPx.top;
                 const float scaledWidth = width * m_zoomScale;
                 const float scaledHeight = height * m_zoomScale;
-                zoomedRect.left = centerX - scaledWidth * 0.5f;
-                zoomedRect.right = centerX + scaledWidth * 0.5f;
-                zoomedRect.top = centerY - scaledHeight * 0.5f;
-                zoomedRect.bottom = centerY + scaledHeight * 0.5f;
+                zoomedRect.left = centerX - scaledWidth * 0.5f + m_panX;
+                zoomedRect.right = zoomedRect.left + scaledWidth;
+                zoomedRect.top = centerY - scaledHeight * 0.5f + m_panY;
+                zoomedRect.bottom = zoomedRect.top + scaledHeight;
+            }
+            else if (std::abs(m_panX) > 0.001f || std::abs(m_panY) > 0.001f)
+            {
+                // Apply pan even when not zoomed (though this shouldn't normally happen)
+                zoomedRect.left += m_panX;
+                zoomedRect.right += m_panX;
+                zoomedRect.top += m_panY;
+                zoomedRect.bottom += m_panY;
             }
 
             const float l = toNdcX(zoomedRect.left);
