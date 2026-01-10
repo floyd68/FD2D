@@ -424,15 +424,25 @@ namespace FD2D
     {
         const std::wstring normalized = NormalizePath(filePath);
 
-        // Reset zoom and pan when switching to a different image (for main image only)
+        // When switching main images, preserve zoom/pan (comparison workflow),
+        // but stop any in-flight interaction/animation state.
         if (!normalized.empty() && normalized != m_filePath && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
         {
-            m_zoomScale = 1.0f;
-            m_targetZoomScale = 1.0f;
+            if (m_panning)
+            {
+                m_panning = false;
+                if (BackplateRef() != nullptr && BackplateRef()->Window() != nullptr)
+                {
+                    if (GetCapture() == BackplateRef()->Window())
+                    {
+                        ReleaseCapture();
+                    }
+                }
+            }
+
+            m_pointerZoomActive = false;
             m_zoomVelocity = 0.0f;
-            m_panX = 0.0f;
-            m_panY = 0.0f;
-            m_panning = false;
+            m_lastZoomAnimMs = NowMs();
         }
 
         // If this path is already the current requested source, don't cancel/restart.
@@ -735,6 +745,8 @@ namespace FD2D
         Microsoft::WRL::ComPtr<ID2D1Bitmap> d2dBitmap;
         HRESULT hr = E_FAIL;
 
+        const bool wantOpaqueThumbnail = (m_request.purpose == ImageCore::ImagePurpose::Thumbnail);
+
         // DirectXTex 경로: ScratchImage를 직접 사용
         if (scratchImage)
         {
@@ -743,7 +755,8 @@ namespace FD2D
             {
                 D2D1_BITMAP_PROPERTIES props = {};
                 props.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                props.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
+                // Thumbnails should always be visually opaque (avoid DDS alpha being interpreted as transparency).
+                props.pixelFormat.alphaMode = wantOpaqueThumbnail ? D2D1_ALPHA_MODE_IGNORE : D2D1_ALPHA_MODE_PREMULTIPLIED;
                 props.dpiX = 96.0f;
                 props.dpiY = 96.0f;
 
@@ -762,7 +775,25 @@ namespace FD2D
         // WIC 경로: WIC bitmap을 사용
         else if (wicBitmap)
         {
-            hr = target->CreateBitmapFromWicBitmap(wicBitmap.Get(), nullptr, &d2dBitmap);
+            if (wantOpaqueThumbnail)
+            {
+                // Force alpha ignore for thumbnails so they don't render semi-transparent.
+                D2D1_BITMAP_PROPERTIES props = {};
+                props.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                props.pixelFormat.alphaMode = D2D1_ALPHA_MODE_IGNORE;
+                props.dpiX = 96.0f;
+                props.dpiY = 96.0f;
+                hr = target->CreateBitmapFromWicBitmap(wicBitmap.Get(), &props, &d2dBitmap);
+                if (FAILED(hr))
+                {
+                    // Fallback to default properties if the render target can't accept our explicit ones.
+                    hr = target->CreateBitmapFromWicBitmap(wicBitmap.Get(), nullptr, &d2dBitmap);
+                }
+            }
+            else
+            {
+                hr = target->CreateBitmapFromWicBitmap(wicBitmap.Get(), nullptr, &d2dBitmap);
+            }
         }
 
         if (SUCCEEDED(hr) && d2dBitmap)

@@ -511,14 +511,11 @@ namespace FD2D
         case WM_MOUSEWHEEL:
         {
             // Only scroll when the cursor is over this viewport.
-            bool inViewport = true;
-            if (BackplateRef())
-            {
-                POINT ptScreen { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-                POINT ptClient = ptScreen;
-                ScreenToClient(BackplateRef()->Window(), &ptClient);
-                inViewport = IsPointInViewport(ptClient.x, ptClient.y);
-            }
+            // Backplate normalizes mouse coordinates to client coordinates before forwarding.
+            // So lParam is already in this ScrollView's coordinate space.
+            const int x = GET_X_LPARAM(lParam);
+            const int y = GET_Y_LPARAM(lParam);
+            const bool inViewport = IsPointInViewport(x, y);
 
             // If cursor is over viewport, handle scrolling
             if (inViewport)
@@ -557,15 +554,13 @@ namespace FD2D
         }
         case WM_MOUSEHWHEEL:
         {
-            if (BackplateRef())
+            // Backplate normalizes mouse coordinates to client coordinates before forwarding.
+            // So lParam is already in this ScrollView's coordinate space.
+            const int x = GET_X_LPARAM(lParam);
+            const int y = GET_Y_LPARAM(lParam);
+            if (!IsPointInViewport(x, y))
             {
-                POINT ptScreen { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-                POINT ptClient = ptScreen;
-                ScreenToClient(BackplateRef()->Window(), &ptClient);
-                if (!IsPointInViewport(ptClient.x, ptClient.y))
-                {
-                    break;
-                }
+                break;
             }
 
             const short delta = static_cast<short>(HIWORD(wParam));
