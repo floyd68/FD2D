@@ -226,6 +226,23 @@ namespace FD2D
 
         switch (message)
         {
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN:
+        {
+            // ESC: exit application (handled at the window level so it works regardless of focus).
+            if (wParam == VK_ESCAPE)
+            {
+                const bool isRepeat = ((lParam & (1LL << 30)) != 0);
+                if (!isRepeat && m_window != nullptr)
+                {
+                    PostMessageW(m_window, WM_CLOSE, 0, 0);
+                }
+                result = 0;
+                return true;
+            }
+            break;
+        }
+
         case WM_CLOSE:
         {
             // Save settings while the HWND is still valid.
