@@ -20,6 +20,15 @@ namespace FD2D
     {
     public:
         using ClickHandler = std::function<void()>;
+        struct ViewTransform
+        {
+            float zoomScale { 1.0f };
+            float targetZoomScale { 1.0f };
+            float zoomVelocity { 0.0f };
+            float panX { 0.0f };
+            float panY { 0.0f };
+        };
+        using ViewChangedHandler = std::function<void(const ViewTransform&)>;
 
         Image();
         explicit Image(const std::wstring& name);
@@ -44,6 +53,11 @@ namespace FD2D
         void SetZoomStiffness(float stiffness); // Set zoom spring stiffness for critically damped animation (higher = faster response)
         float ZoomStiffness() const { return m_zoomStiffness; }
         void AdvanceZoomAnimation(unsigned long long nowMs);
+
+        // View transform (zoom/pan) for sync scenarios (compare mode).
+        ViewTransform GetViewTransform() const;
+        void SetViewTransform(const ViewTransform& vt, bool notify = true);
+        void SetOnViewChanged(ViewChangedHandler handler);
 
         void OnRenderD3D(ID3D11DeviceContext* context) override;
         void OnRender(ID2D1RenderTarget* target) override;
@@ -115,6 +129,9 @@ namespace FD2D
         float m_pointerZoomStartPanY { 0.0f };
         float m_pointerZoomMouseX { 0.0f }; // in layout/client coordinates
         float m_pointerZoomMouseY { 0.0f };
+
+        ViewChangedHandler m_onViewChanged {};
+        bool m_suppressViewNotify { false };
     };
 }
 

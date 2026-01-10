@@ -325,6 +325,24 @@ namespace FD2D
             return true;
         }
 
+        case Backplate::WM_FD2D_BROADCAST:
+        {
+            auto* bm = reinterpret_cast<Backplate::BroadcastMessage*>(lParam);
+            if (bm != nullptr)
+            {
+                for (auto& pair : m_children)
+                {
+                    if (pair.second)
+                    {
+                        (void)pair.second->OnMessage(bm->message, bm->wParam, bm->lParam);
+                    }
+                }
+                delete bm;
+            }
+            result = 0;
+            return true;
+        }
+
         case WM_DESTROY:
         {
             PostQuitMessage(0);

@@ -44,6 +44,15 @@ namespace FD2D
         static constexpr UINT WM_FD2D_REQUEST_REDRAW = WM_APP + 0x4D2; // 'FD2'
         // UI thread에서 paint를 "곧바로" 한 번만 유도하기 위한 flush 메시지 (coalesce 용도)
         static constexpr UINT WM_FD2D_FLUSH_REDRAW = WM_APP + 0x4D3; // 'FD3'
+        // Broadcast an application message to all top-level Wnds (bypasses focus-based routing).
+        static constexpr UINT WM_FD2D_BROADCAST = WM_APP + 0x4D4; // 'FD4'
+
+        struct BroadcastMessage
+        {
+            UINT message { 0 };
+            WPARAM wParam { 0 };
+            LPARAM lParam { 0 };
+        };
 
         Backplate();
         explicit Backplate(const std::wstring& name);

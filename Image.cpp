@@ -374,6 +374,52 @@ namespace FD2D
         }
     }
 
+    Image::ViewTransform Image::GetViewTransform() const
+    {
+        ViewTransform vt {};
+        vt.zoomScale = m_zoomScale;
+        vt.targetZoomScale = m_targetZoomScale;
+        vt.zoomVelocity = m_zoomVelocity;
+        vt.panX = m_panX;
+        vt.panY = m_panY;
+        return vt;
+    }
+
+    void Image::SetViewTransform(const ViewTransform& vt, bool notify)
+    {
+        m_zoomScale = vt.zoomScale;
+        m_targetZoomScale = vt.targetZoomScale;
+        m_zoomVelocity = vt.zoomVelocity;
+        m_panX = vt.panX;
+        m_panY = vt.panY;
+
+        // Stop any in-progress interaction state.
+        m_panning = false;
+        m_panArmed = false;
+        m_pointerZoomActive = false;
+        m_lastZoomAnimMs = FD2D::Util::NowMs();
+
+        const bool prevSuppress = m_suppressViewNotify;
+        if (!notify)
+        {
+            m_suppressViewNotify = true;
+        }
+
+        Invalidate();
+
+        if (notify && !m_suppressViewNotify && m_onViewChanged)
+        {
+            m_onViewChanged(GetViewTransform());
+        }
+
+        m_suppressViewNotify = prevSuppress;
+    }
+
+    void Image::SetOnViewChanged(ViewChangedHandler handler)
+    {
+        m_onViewChanged = std::move(handler);
+    }
+
     void Image::SetRect(const D2D1_RECT_F& rect)
     {
         SetLayoutRect(rect);
@@ -1124,6 +1170,11 @@ namespace FD2D
         }
 
         Invalidate();
+
+        if (!m_suppressViewNotify && m_onViewChanged && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
+        {
+            m_onViewChanged(GetViewTransform());
+        }
     }
 
     bool Image::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)
@@ -1202,6 +1253,10 @@ namespace FD2D
                     m_panY = m_panStartOffsetY + deltaY;
                     m_pointerZoomActive = false;
                     Invalidate();
+                    if (!m_suppressViewNotify && m_onViewChanged)
+                    {
+                        m_onViewChanged(GetViewTransform());
+                    }
                     return true;
                 }
 
@@ -1291,6 +1346,11 @@ namespace FD2D
                 m_pointerZoomMouseY = static_cast<float>(pt.y);
 
                 SetZoomScale(newZoom);
+
+                if (!m_suppressViewNotify && m_onViewChanged)
+                {
+                    m_onViewChanged(GetViewTransform());
+                }
                 
                 return true;
             }
