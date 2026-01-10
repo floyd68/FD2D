@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <shellapi.h>
 #include <windowsx.h>  // For GET_X_LPARAM, GET_Y_LPARAM, MAKELPARAM
+#include <ole2.h>
+#include <oleidl.h>
 
 namespace FD2D
 {
@@ -50,6 +52,8 @@ namespace FD2D
 
     Backplate::~Backplate()
     {
+        UnregisterDropTarget();
+
         if (m_window != nullptr && m_placeAutosaveTimerId != 0)
         {
             KillTimer(m_window, m_placeAutosaveTimerId);
@@ -116,6 +120,272 @@ namespace FD2D
         }
 
         m_onWindowPlacementChanged(m_window);
+    }
+
+    namespace
+    {
+        static bool DataObjectHasHDrop(IDataObject* dataObject)
+        {
+            if (dataObject == nullptr)
+            {
+                return false;
+            }
+
+            FORMATETC fmt {};
+            fmt.cfFormat = CF_HDROP;
+            fmt.ptd = nullptr;
+            fmt.dwAspect = DVASPECT_CONTENT;
+            fmt.lindex = -1;
+            fmt.tymed = TYMED_HGLOBAL;
+            return dataObject->QueryGetData(&fmt) == S_OK;
+        }
+
+        static std::wstring GetFirstPathFromDataObject(IDataObject* dataObject)
+        {
+            if (dataObject == nullptr)
+            {
+                return {};
+            }
+
+            FORMATETC fmt {};
+            fmt.cfFormat = CF_HDROP;
+            fmt.ptd = nullptr;
+            fmt.dwAspect = DVASPECT_CONTENT;
+            fmt.lindex = -1;
+            fmt.tymed = TYMED_HGLOBAL;
+
+            STGMEDIUM stg {};
+            if (FAILED(dataObject->GetData(&fmt, &stg)))
+            {
+                return {};
+            }
+
+            std::wstring out;
+
+            const HDROP hDrop = reinterpret_cast<HDROP>(stg.hGlobal);
+            if (hDrop != nullptr)
+            {
+                wchar_t buf[MAX_PATH] {};
+                const UINT cch = DragQueryFileW(hDrop, 0, buf, static_cast<UINT>(std::size(buf)));
+                if (cch > 0)
+                {
+                    out = buf;
+                }
+            }
+
+            ReleaseStgMedium(&stg);
+            return out;
+        }
+    }
+
+    class Backplate::DropTarget final : public IDropTarget
+    {
+        public:
+            explicit DropTarget(Backplate* owner)
+                : m_owner(owner)
+            {
+            }
+
+            HRESULT __stdcall QueryInterface(REFIID riid, void** ppvObject) override
+            {
+                if (ppvObject == nullptr)
+                {
+                    return E_POINTER;
+                }
+
+                if (riid == IID_IUnknown || riid == IID_IDropTarget)
+                {
+                    *ppvObject = static_cast<IDropTarget*>(this);
+                    AddRef();
+                    return S_OK;
+                }
+
+                *ppvObject = nullptr;
+                return E_NOINTERFACE;
+            }
+
+            ULONG __stdcall AddRef() override
+            {
+                return static_cast<ULONG>(InterlockedIncrement(&m_refCount));
+            }
+
+            ULONG __stdcall Release() override
+            {
+                const ULONG r = static_cast<ULONG>(InterlockedDecrement(&m_refCount));
+                if (r == 0)
+                {
+                    delete this;
+                }
+                return r;
+            }
+
+            HRESULT __stdcall DragEnter(IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect) override
+            {
+                UNREFERENCED_PARAMETER(grfKeyState);
+
+                if (pdwEffect == nullptr)
+                {
+                    return E_POINTER;
+                }
+
+                if (!DataObjectHasHDrop(pDataObj) || m_owner == nullptr)
+                {
+                    *pdwEffect = DROPEFFECT_NONE;
+                    return S_OK;
+                }
+
+                m_owner->m_dragPath = GetFirstPathFromDataObject(pDataObj);
+                return DragOver(grfKeyState, pt, pdwEffect);
+            }
+
+            HRESULT __stdcall DragOver(DWORD grfKeyState, POINTL pt, DWORD* pdwEffect) override
+            {
+                UNREFERENCED_PARAMETER(grfKeyState);
+
+                if (pdwEffect == nullptr)
+                {
+                    return E_POINTER;
+                }
+
+                if (m_owner == nullptr || m_owner->m_window == nullptr || m_owner->m_dragPath.empty())
+                {
+                    *pdwEffect = DROPEFFECT_NONE;
+                    return S_OK;
+                }
+
+                POINT ptScreen { pt.x, pt.y };
+                POINT ptClient = ptScreen;
+                ScreenToClient(m_owner->m_window, &ptClient);
+
+                m_owner->HandleFileDragOver(m_owner->m_dragPath, ptClient);
+                *pdwEffect = DROPEFFECT_COPY;
+                return S_OK;
+            }
+
+            HRESULT __stdcall DragLeave() override
+            {
+                if (m_owner != nullptr)
+                {
+                    m_owner->m_dragPath.clear();
+                    m_owner->HandleFileDragLeave();
+                }
+                return S_OK;
+            }
+
+            HRESULT __stdcall Drop(IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect) override
+            {
+                UNREFERENCED_PARAMETER(grfKeyState);
+
+                if (pdwEffect == nullptr)
+                {
+                    return E_POINTER;
+                }
+
+                if (!DataObjectHasHDrop(pDataObj) || m_owner == nullptr || m_owner->m_window == nullptr)
+                {
+                    *pdwEffect = DROPEFFECT_NONE;
+                    return S_OK;
+                }
+
+                const std::wstring path = GetFirstPathFromDataObject(pDataObj);
+
+                POINT ptScreen { pt.x, pt.y };
+                POINT ptClient = ptScreen;
+                ScreenToClient(m_owner->m_window, &ptClient);
+
+                // Clear overlays first, then route the drop as a normal file drop.
+                m_owner->HandleFileDragLeave();
+                m_owner->m_dragPath.clear();
+
+                for (auto& pair : m_owner->m_children)
+                {
+                    if (pair.second && pair.second->OnFileDrop(path, ptClient))
+                    {
+                        break;
+                    }
+                }
+
+                *pdwEffect = DROPEFFECT_COPY;
+                return S_OK;
+            }
+
+        private:
+            Backplate* m_owner { nullptr };
+            volatile LONG m_refCount { 1 };
+    };
+
+    bool Backplate::EnsureDropTargetRegistered()
+    {
+        if (m_dropTargetRegistered)
+        {
+            return true;
+        }
+
+        if (m_window == nullptr)
+        {
+            return false;
+        }
+
+        // Register OLE drop target for live drag-over updates (overlays + per-pane routing).
+        m_dropTarget.Attach(new DropTarget(this));
+
+        const HRESULT hr = RegisterDragDrop(m_window, m_dropTarget.Get());
+        if (FAILED(hr))
+        {
+            m_dropTarget.Reset();
+            m_dropTargetRegistered = false;
+            return false;
+        }
+
+        m_dropTargetRegistered = true;
+        return true;
+    }
+
+    void Backplate::UnregisterDropTarget()
+    {
+        if (m_dropTargetRegistered && m_window != nullptr)
+        {
+            (void)RevokeDragDrop(m_window);
+        }
+        m_dropTargetRegistered = false;
+        m_dropTarget.Reset();
+        m_dragPath.clear();
+    }
+
+    void Backplate::HandleFileDragOver(const std::wstring& path, const POINT& ptClient)
+    {
+        // Clear any prior visuals.
+        HandleFileDragLeave();
+
+        FileDragVisual visual = FileDragVisual::None;
+        for (auto& pair : m_children)
+        {
+            if (pair.second && pair.second->OnFileDrag(path, ptClient, visual))
+            {
+                break;
+            }
+        }
+
+        if (m_window != nullptr)
+        {
+            InvalidateRect(m_window, nullptr, FALSE);
+        }
+    }
+
+    void Backplate::HandleFileDragLeave()
+    {
+        for (auto& pair : m_children)
+        {
+            if (pair.second)
+            {
+                pair.second->OnFileDragLeave();
+            }
+        }
+
+        if (m_window != nullptr)
+        {
+            InvalidateRect(m_window, nullptr, FALSE);
+        }
     }
 
     void Backplate::RequestAsyncRedraw()
@@ -328,6 +598,7 @@ namespace FD2D
             // 타이틀바 정보 업데이트
             UpdateTitleBarInfo();
             DragAcceptFiles(m_window, TRUE);
+            (void)EnsureDropTargetRegistered();
             result = 0;
             return true;
         }
@@ -475,6 +746,8 @@ namespace FD2D
         {
             // WM_CLOSE isn't guaranteed (e.g., DestroyWindow()); ensure we still persist once.
             InvokeBeforeDestroyOnce();
+            HandleFileDragLeave();
+            UnregisterDropTarget();
             if (m_window != nullptr && m_placeAutosaveTimerId != 0)
             {
                 KillTimer(m_window, m_placeAutosaveTimerId);

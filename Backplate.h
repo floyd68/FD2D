@@ -127,6 +127,14 @@ namespace FD2D
         void SchedulePlacementAutosave();
         void FlushPlacementAutosave();
 
+        // OLE drag&drop (for live drag-hover visuals)
+        bool EnsureDropTargetRegistered();
+        void UnregisterDropTarget();
+        void HandleFileDragOver(const std::wstring& path, const POINT& ptClient);
+        void HandleFileDragLeave();
+
+        class DropTarget;
+
         HWND m_window { nullptr };
         D2D1_SIZE_U m_size { 0, 0 };
         // D3D/DXGI render backend
@@ -164,6 +172,10 @@ namespace FD2D
         std::function<void(HWND)> m_onWindowPlacementChanged {};
         UINT_PTR m_placeAutosaveTimerId { 0 };
         bool m_inSizeMove { false };
+
+        bool m_dropTargetRegistered { false };
+        Microsoft::WRL::ComPtr<IDropTarget> m_dropTarget {};
+        std::wstring m_dragPath {};
     };
 }
 

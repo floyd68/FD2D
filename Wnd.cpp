@@ -357,6 +357,45 @@ namespace FD2D
         return false;
     }
 
+    bool Wnd::OnFileDrag(const std::wstring& path, const POINT& clientPt, FileDragVisual& outVisual)
+    {
+        UNREFERENCED_PARAMETER(path);
+        // Default behavior: hit-test children (topmost first) and forward.
+        for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
+        {
+            const auto& child = *it;
+            if (!child)
+            {
+                continue;
+            }
+
+            if (!RectContainsPoint(child->LayoutRect(), clientPt))
+            {
+                continue;
+            }
+
+            if (child->OnFileDrag(path, clientPt, outVisual))
+            {
+                return true;
+            }
+        }
+
+        outVisual = FileDragVisual::None;
+        return false;
+    }
+
+    void Wnd::OnFileDragLeave()
+    {
+        // Default behavior: broadcast to children so any overlay state can be cleared.
+        for (auto& child : m_childrenOrdered)
+        {
+            if (child)
+            {
+                child->OnFileDragLeave();
+            }
+        }
+    }
+
     void Wnd::RequestFocus()
     {
         if (m_backplate != nullptr)

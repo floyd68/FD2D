@@ -17,6 +17,13 @@ namespace FD2D
 {
     class Backplate;
 
+    enum class FileDragVisual
+    {
+        None,
+        Replace, // drop will replace current view
+        Insert   // drop will insert a new ImageBrowser to the right
+    };
+
     class Wnd : public std::enable_shared_from_this<Wnd>
     {
     public:
@@ -56,6 +63,12 @@ namespace FD2D
         virtual void OnRender(ID2D1RenderTarget* target);
         virtual bool OnMessage(UINT message, WPARAM wParam, LPARAM lParam);
         virtual bool OnFileDrop(const std::wstring& path, const POINT& clientPt);
+
+        // File drag hover (OLE drag&drop). Default implementation hit-tests children (topmost first).
+        // Return true if handled and visual state was updated.
+        virtual bool OnFileDrag(const std::wstring& path, const POINT& clientPt, FileDragVisual& outVisual);
+        // Called when the drag leaves the window or the hover target changes.
+        virtual void OnFileDragLeave();
 
         void RequestFocus();
         bool HasFocus() const;
