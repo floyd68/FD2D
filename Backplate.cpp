@@ -50,11 +50,72 @@ namespace FD2D
 
     Backplate::~Backplate()
     {
+        if (m_window != nullptr && m_placeAutosaveTimerId != 0)
+        {
+            KillTimer(m_window, m_placeAutosaveTimerId);
+            m_placeAutosaveTimerId = 0;
+        }
+
         if (m_asyncRedrawEvent)
         {
             CloseHandle(m_asyncRedrawEvent);
             m_asyncRedrawEvent = nullptr;
         }
+    }
+
+    void Backplate::SetOnBeforeDestroy(std::function<void(HWND)> handler)
+    {
+        m_onBeforeDestroy = std::move(handler);
+    }
+
+    void Backplate::SetOnWindowPlacementChanged(std::function<void(HWND)> handler)
+    {
+        m_onWindowPlacementChanged = std::move(handler);
+    }
+
+    void Backplate::InvokeBeforeDestroyOnce()
+    {
+        if (m_beforeDestroyInvoked)
+        {
+            return;
+        }
+        m_beforeDestroyInvoked = true;
+
+        if (m_onBeforeDestroy && m_window != nullptr)
+        {
+            m_onBeforeDestroy(m_window);
+        }
+    }
+
+    void Backplate::SchedulePlacementAutosave()
+    {
+        if (m_window == nullptr || !m_onWindowPlacementChanged)
+        {
+            return;
+        }
+
+        if (m_placeAutosaveTimerId == 0)
+        {
+            m_placeAutosaveTimerId = 0xFD22;
+        }
+
+        // Debounce (reset timer each time).
+        (void)SetTimer(m_window, m_placeAutosaveTimerId, 200, nullptr);
+    }
+
+    void Backplate::FlushPlacementAutosave()
+    {
+        if (m_window == nullptr || !m_onWindowPlacementChanged)
+        {
+            return;
+        }
+
+        if (m_placeAutosaveTimerId != 0)
+        {
+            KillTimer(m_window, m_placeAutosaveTimerId);
+        }
+
+        m_onWindowPlacementChanged(m_window);
     }
 
     void Backplate::RequestAsyncRedraw()
@@ -165,6 +226,30 @@ namespace FD2D
 
         switch (message)
         {
+        case WM_CLOSE:
+        {
+            // Save settings while the HWND is still valid.
+            InvokeBeforeDestroyOnce();
+            // Let default behavior destroy the window.
+            return false;
+        }
+
+        case WM_ENTERSIZEMOVE:
+        {
+            m_inSizeMove = true;
+            result = 0;
+            return true;
+        }
+
+        case WM_EXITSIZEMOVE:
+        {
+            m_inSizeMove = false;
+            // User finished an interactive move/resize; persist immediately.
+            FlushPlacementAutosave();
+            result = 0;
+            return true;
+        }
+
         case WM_ERASEBKGND:
         {
             // We render via swapchain; prevent GDI background erase to avoid flicker.
@@ -233,6 +318,14 @@ namespace FD2D
         case WM_SIZE:
         {
             Resize(LOWORD(lParam), HIWORD(lParam));
+            SchedulePlacementAutosave();
+            result = 0;
+            return true;
+        }
+
+        case WM_MOVE:
+        {
+            SchedulePlacementAutosave();
             result = 0;
             return true;
         }
@@ -343,8 +436,32 @@ namespace FD2D
             return true;
         }
 
+        case WM_TIMER:
+        {
+            if (m_placeAutosaveTimerId != 0 && wParam == m_placeAutosaveTimerId)
+            {
+                if (m_window != nullptr)
+                {
+                    KillTimer(m_window, m_placeAutosaveTimerId);
+                }
+                if (m_onWindowPlacementChanged && m_window != nullptr)
+                {
+                    m_onWindowPlacementChanged(m_window);
+                }
+                result = 0;
+                return true;
+            }
+            break;
+        }
+
         case WM_DESTROY:
         {
+            // WM_CLOSE isn't guaranteed (e.g., DestroyWindow()); ensure we still persist once.
+            InvokeBeforeDestroyOnce();
+            if (m_window != nullptr && m_placeAutosaveTimerId != 0)
+            {
+                KillTimer(m_window, m_placeAutosaveTimerId);
+            }
             PostQuitMessage(0);
             result = 0;
             return true;

@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <string>
 #include <atomic>
+#include <functional>
 
 #include "Wnd.h"
 
@@ -101,6 +102,14 @@ namespace FD2D
         // Update window title bar with renderer information
         void UpdateTitleBarInfo();
 
+        // Called once right before the Backplate window begins destruction (WM_CLOSE/WM_DESTROY).
+        // Use this to persist window placement/settings while the HWND is still valid.
+        void SetOnBeforeDestroy(std::function<void(HWND)> handler);
+
+        // Called after the window's placement likely changed (move/resize/maximize/restore),
+        // debounced to avoid excessive INI writes.
+        void SetOnWindowPlacementChanged(std::function<void(HWND)> handler);
+
     private:
         static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
         bool HandleMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESULT& result);
@@ -114,6 +123,9 @@ namespace FD2D
         void DiscardD2DTargets();
         void DiscardDeviceResources();
         void Layout();
+        void InvokeBeforeDestroyOnce();
+        void SchedulePlacementAutosave();
+        void FlushPlacementAutosave();
 
         HWND m_window { nullptr };
         D2D1_SIZE_U m_size { 0, 0 };
@@ -145,6 +157,13 @@ namespace FD2D
         std::atomic<unsigned long long> m_lastAnimationTickMs { 0 };
 
         Wnd* m_focusedWnd { nullptr };
+
+        std::function<void(HWND)> m_onBeforeDestroy {};
+        bool m_beforeDestroyInvoked { false };
+
+        std::function<void(HWND)> m_onWindowPlacementChanged {};
+        UINT_PTR m_placeAutosaveTimerId { 0 };
+        bool m_inSizeMove { false };
     };
 }
 
