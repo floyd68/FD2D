@@ -72,6 +72,8 @@ namespace FD2D
         void ResetZoom();
         void SetZoomSpeed(float speed); // Set zoom interpolation speed (0.0-1.0, higher = faster)
         float ZoomSpeed() const { return m_zoomSpeed; }
+        void SetZoomStiffness(float stiffness); // Set zoom spring stiffness for critically damped animation (higher = faster response)
+        float ZoomStiffness() const { return m_zoomStiffness; }
         void AdvanceZoomAnimation(unsigned long long nowMs);
 
         void OnRenderD3D(ID3D11DeviceContext* context) override;
@@ -137,8 +139,10 @@ namespace FD2D
         // Zoom state (for main image only)
         float m_zoomScale { 1.0f };
         float m_targetZoomScale { 1.0f };
+        float m_zoomVelocity { 0.0f }; // Velocity for critically damped spring animation
         unsigned long long m_lastZoomAnimMs { 0 };
         float m_zoomSpeed { 100.0f }; // zoom interpolation speed (fraction of remaining distance per second, e.g., 10.0 = 10x per second)
+        float m_zoomStiffness { 80.0f }; // Spring stiffness for critically damped animation (higher = faster response)
         
         // Panning state (for main image only)
         float m_panX { 0.0f };  // Pan offset in layout coordinates

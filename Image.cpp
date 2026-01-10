@@ -381,6 +381,8 @@ namespace FD2D
         if (!normalized.empty() && normalized != m_filePath && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
         {
             m_zoomScale = 1.0f;
+            m_targetZoomScale = 1.0f;
+            m_zoomVelocity = 0.0f;
             m_panX = 0.0f;
             m_panY = 0.0f;
             m_panning = false;
@@ -1215,6 +1217,7 @@ namespace FD2D
     void Image::ResetZoom()
     {
         m_targetZoomScale = 1.0f;
+        m_zoomVelocity = 0.0f; // Reset velocity when resetting zoom
         m_panX = 0.0f;
         m_panY = 0.0f;
         m_panning = false;
@@ -1236,21 +1239,22 @@ namespace FD2D
         m_zoomSpeed = std::max(0.1f, std::min(100.0f, speed));
     }
 
+    void Image::SetZoomStiffness(float stiffness)
+    {
+        // Clamp stiffness to valid range (spring constant for critically damped animation)
+        // e.g., 40.0 = moderate speed
+        // e.g., 80.0 = fast speed (default)
+        // e.g., 120.0 = very fast speed
+        m_zoomStiffness = std::max(10.0f, std::min(500.0f, stiffness));
+    }
+
     void Image::AdvanceZoomAnimation(unsigned long long nowMs)
     {
-        if (m_zoomScale == m_targetZoomScale)
-        {
-            return;
-        }
-
         if (m_lastZoomAnimMs == 0)
         {
             m_lastZoomAnimMs = nowMs;
         }
 
-        // Time-based linear interpolation: move towards target at fixed speed per second
-        // m_zoomSpeed is the fraction of remaining distance to cover per second
-        // e.g., 10.0 = 10x per second means we cover 10x the remaining distance each second
         const unsigned long long elapsed = nowMs - m_lastZoomAnimMs;
         m_lastZoomAnimMs = nowMs;
 
@@ -1259,22 +1263,27 @@ namespace FD2D
             return;
         }
 
-        const float diff = m_targetZoomScale - m_zoomScale;
-        const float elapsedSeconds = static_cast<float>(elapsed) / 1000.0f;
-        
-        // Calculate how much of the remaining distance to cover in this frame
-        // m_zoomSpeed is "fraction per second", so we multiply by elapsed time
-        // e.g., if m_zoomSpeed = 10.0 and elapsedSeconds = 0.016 (60fps),
-        // then we cover 10.0 * 0.016 = 0.16 (16%) of the remaining distance
-        const float fractionToCover = m_zoomSpeed * elapsedSeconds;
-        const float step = diff * fractionToCover;
-        
-        m_zoomScale += step;
+        const float dt = static_cast<float>(elapsed) / 1000.0f; // Convert to seconds
 
-        // Snap to target if very close
-        if (std::abs(m_targetZoomScale - m_zoomScale) < 0.001f)
+        // Critically Damped Spring Animation
+        // This ensures smooth, natural motion without overshoot
+        const float stiffness = m_zoomStiffness; // 반응성 (higher = faster response, configurable via INI)
+        const float damping = 2.0f * std::sqrt(stiffness); // Critically damped (no overshoot)
+
+        const float diff = m_targetZoomScale - m_zoomScale;
+
+        // Spring physics: F = k * x - c * v
+        // Acceleration = stiffness * displacement - damping * velocity
+        m_zoomVelocity += (diff * stiffness - m_zoomVelocity * damping) * dt;
+
+        // Update position using velocity
+        m_zoomScale += m_zoomVelocity * dt;
+
+        // Snap to target if very close and velocity is negligible
+        if (std::abs(diff) < 0.001f && std::abs(m_zoomVelocity) < 0.001f)
         {
             m_zoomScale = m_targetZoomScale;
+            m_zoomVelocity = 0.0f;
         }
         else
         {
@@ -1406,12 +1415,16 @@ namespace FD2D
             {
                 const short delta = GET_WHEEL_DELTA_WPARAM(wParam);
                 const bool shiftPressed = (GET_KEYSTATE_WPARAM(wParam) & MK_SHIFT) != 0;
-                const float zoomStep = shiftPressed ? 0.1f : 0.5f; // Shift: 10%, No Shift: 50%
-                const float zoomFactor = (delta > 0) ? (1.0f + zoomStep) : (1.0f - zoomStep);
-                const float newZoom = m_targetZoomScale * zoomFactor; // Use targetZoomScale for accumulation
+                
+                // 비율 곱셈 + 누적 방식: 현재 targetZoomScale에 비율을 곱해서 누적
+                // Shift: 10% 증가/감소, No Shift: 50% 증가/감소
+                const float zoomStep = shiftPressed ? 0.1f : 0.5f;
+                const float zoomFactor = (delta > 0) ? (1.0f + zoomStep) : (1.0f / (1.0f + zoomStep));
+                const float newZoom = m_targetZoomScale * zoomFactor; // 비율 곱셈 + 누적
+                
 #ifdef _DEBUG
-                swprintf_s(dbg, L"[FD2D][Image][WM_MOUSEWHEEL] delta=%d zoomFactor=%.2f newZoom=%.2f\n",
-                    delta, zoomFactor, newZoom);
+                swprintf_s(dbg, L"[FD2D][Image][WM_MOUSEWHEEL] delta=%d zoomFactor=%.3f target=%.2f -> new=%.2f\n",
+                    delta, zoomFactor, m_targetZoomScale, newZoom);
                 OutputDebugStringW(dbg);
 #endif
                 SetZoomScale(newZoom);
