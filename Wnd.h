@@ -41,6 +41,8 @@ namespace FD2D
         void SetPadding(float padding) { m_padding = padding; }
 
         bool AddChild(const std::shared_ptr<Wnd>& child);
+        bool RemoveChild(const std::wstring& childName);
+        void ClearChildren();
         const std::unordered_map<std::wstring, std::shared_ptr<Wnd>>& Children() const;
         // Deterministic child iteration order (insertion order).
         // Many panels assume child iteration order defines visual order.

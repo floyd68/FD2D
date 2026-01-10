@@ -5,6 +5,7 @@
 #include <windowsx.h>
 #include <cmath>
 #include <d3dcompiler.h>
+#include <d2d1_1.h>  // For Direct2D 1.1 interpolation modes
 #include <filesystem>
 #include <cwctype>
 
@@ -170,10 +171,11 @@ namespace FD2D
             }
 
             D3D11_SAMPLER_DESC sd {};
-            sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+            sd.Filter = D3D11_FILTER_ANISOTROPIC;
             sd.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
             sd.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
             sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sd.MaxAnisotropy = 16; // High quality anisotropic filtering
             sd.MaxLOD = D3D11_FLOAT32_MAX;
             hr = device->CreateSamplerState(&sd, &g_sampler);
             if (FAILED(hr))
@@ -374,6 +376,12 @@ namespace FD2D
     HRESULT Image::SetSourceFile(const std::wstring& filePath)
     {
         const std::wstring normalized = NormalizePath(filePath);
+
+        // Reset zoom when switching to a different image (for main image only)
+        if (!normalized.empty() && normalized != m_filePath && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
+        {
+            m_zoomScale = 1.0f;
+        }
 
         // If this path is already the current requested source, don't cancel/restart.
         // This is important for keyboard navigation with repeat + debounced apply, where the same selection
@@ -736,6 +744,12 @@ namespace FD2D
             return;
         }
 
+        // Advance smooth zoom animation
+        if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
+        {
+            AdvanceZoomAnimation(NowMs());
+        }
+
         const bool gpuActive = (m_request.purpose == ImageCore::ImagePurpose::FullResolution &&
             m_backplate && m_backplate->D3DDevice() != nullptr && m_gpuSrv);
 
@@ -907,7 +921,7 @@ namespace FD2D
             }
         }
 
-        const auto computeAspectFitDestRect = [](const D2D1_RECT_F& layoutRect, const D2D1_SIZE_F& bitmapSize) -> D2D1_RECT_F
+        const auto computeAspectFitDestRect = [this](const D2D1_RECT_F& layoutRect, const D2D1_SIZE_F& bitmapSize) -> D2D1_RECT_F
         {
             const float layoutWidth = layoutRect.right - layoutRect.left;
             const float layoutHeight = layoutRect.bottom - layoutRect.top;
@@ -939,6 +953,21 @@ namespace FD2D
                 destRect.right = destRect.left + scaledWidth;
             }
 
+            // Apply zoom scale (for main image only)
+            if (m_request.purpose == ImageCore::ImagePurpose::FullResolution && m_zoomScale != 1.0f)
+            {
+                const float centerX = (destRect.left + destRect.right) * 0.5f;
+                const float centerY = (destRect.top + destRect.bottom) * 0.5f;
+                const float width = destRect.right - destRect.left;
+                const float height = destRect.bottom - destRect.top;
+                const float scaledWidth = width * m_zoomScale;
+                const float scaledHeight = height * m_zoomScale;
+                destRect.left = centerX - scaledWidth * 0.5f;
+                destRect.right = centerX + scaledWidth * 0.5f;
+                destRect.top = centerY - scaledHeight * 0.5f;
+                destRect.bottom = centerY + scaledHeight * 0.5f;
+            }
+
             return destRect;
         };
 
@@ -955,11 +984,41 @@ namespace FD2D
             const D2D1_RECT_F sourceRect = D2D1::RectF(0.0f, 0.0f, bitmapSize.width, bitmapSize.height);
             const D2D1_RECT_F destRect = computeAspectFitDestRect(layoutRect, bitmapSize);
 
+            // Select interpolation mode based on zoom level for optimal quality
+            // Note: CUBIC and MULTI_SAMPLE_LINEAR may not be available in all Windows SDK versions
+            // Using LINEAR as fallback, but D3D path uses ANISOTROPIC for high quality
+            D2D1_BITMAP_INTERPOLATION_MODE interpMode = D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
+            
+            // Try to use high-quality modes if available (Direct2D 1.1+)
+            // These constants may not be defined in older Windows SDK versions
+            #ifdef D2D1_BITMAP_INTERPOLATION_MODE_CUBIC
+            if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
+            {
+                if (m_zoomScale > 1.0f)
+                {
+                    // Zoomed in: use cubic interpolation for smooth upscaling (16-sample high quality)
+                    interpMode = D2D1_BITMAP_INTERPOLATION_MODE_CUBIC;
+                }
+                else if (m_zoomScale < 1.0f)
+                {
+                    // Zoomed out: use multi-sample linear for smooth downscaling (anti-aliased)
+                    #ifdef D2D1_BITMAP_INTERPOLATION_MODE_MULTI_SAMPLE_LINEAR
+                    interpMode = D2D1_BITMAP_INTERPOLATION_MODE_MULTI_SAMPLE_LINEAR;
+                    #endif
+                }
+                else
+                {
+                    // Normal size: use cubic for high quality rendering
+                    interpMode = D2D1_BITMAP_INTERPOLATION_MODE_CUBIC;
+                }
+            }
+            #endif
+
             target->DrawBitmap(
                 bmp,
                 destRect,
                 opacity,
-                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                interpMode,
                 sourceRect);
         };
 
@@ -1127,6 +1186,93 @@ namespace FD2D
         }
     }
 
+    void Image::SetZoomScale(float scale)
+    {
+        constexpr float kMinZoom = 0.1f;
+        constexpr float kMaxZoom = 10.0f;
+        m_targetZoomScale = std::max(kMinZoom, std::min(kMaxZoom, scale));
+        m_lastZoomAnimMs = NowMs();
+        // Immediately request animation frame for fast response
+        if (BackplateRef() != nullptr)
+        {
+            BackplateRef()->RequestAnimationFrame();
+        }
+        Invalidate();
+    }
+
+    void Image::ResetZoom()
+    {
+        m_targetZoomScale = 1.0f;
+        m_lastZoomAnimMs = NowMs();
+        // Immediately request animation frame for fast response
+        if (BackplateRef() != nullptr)
+        {
+            BackplateRef()->RequestAnimationFrame();
+        }
+        Invalidate();
+    }
+
+    void Image::SetZoomSpeed(float speed)
+    {
+        // Clamp speed to valid range (fraction of remaining distance per second)
+        // e.g., 10.0 = cover 10x the remaining distance per second (very fast)
+        // e.g., 5.0 = cover 5x the remaining distance per second (fast)
+        // e.g., 2.0 = cover 2x the remaining distance per second (moderate)
+        m_zoomSpeed = std::max(0.1f, std::min(100.0f, speed));
+    }
+
+    void Image::AdvanceZoomAnimation(unsigned long long nowMs)
+    {
+        if (m_zoomScale == m_targetZoomScale)
+        {
+            return;
+        }
+
+        if (m_lastZoomAnimMs == 0)
+        {
+            m_lastZoomAnimMs = nowMs;
+        }
+
+        // Time-based linear interpolation: move towards target at fixed speed per second
+        // m_zoomSpeed is the fraction of remaining distance to cover per second
+        // e.g., 10.0 = 10x per second means we cover 10x the remaining distance each second
+        const unsigned long long elapsed = nowMs - m_lastZoomAnimMs;
+        m_lastZoomAnimMs = nowMs;
+
+        if (elapsed == 0)
+        {
+            return;
+        }
+
+        const float diff = m_targetZoomScale - m_zoomScale;
+        const float elapsedSeconds = static_cast<float>(elapsed) / 1000.0f;
+        
+        // Calculate how much of the remaining distance to cover in this frame
+        // m_zoomSpeed is "fraction per second", so we multiply by elapsed time
+        // e.g., if m_zoomSpeed = 10.0 and elapsedSeconds = 0.016 (60fps),
+        // then we cover 10.0 * 0.016 = 0.16 (16%) of the remaining distance
+        const float fractionToCover = m_zoomSpeed * elapsedSeconds;
+        const float step = diff * fractionToCover;
+        
+        m_zoomScale += step;
+
+        // Snap to target if very close
+        if (std::abs(m_targetZoomScale - m_zoomScale) < 0.001f)
+        {
+            m_zoomScale = m_targetZoomScale;
+        }
+        else
+        {
+            // Continue animation
+            if (BackplateRef() != nullptr)
+            {
+                BackplateRef()->RequestAnimationFrame();
+            }
+        }
+
+        Invalidate();
+    }
+
     bool Image::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)
     {
         switch (message)
@@ -1151,6 +1297,49 @@ namespace FD2D
             }
             break;
         }
+        case WM_MOUSEWHEEL:
+        {
+            // Only handle zoom for main image (FullResolution)
+            if (m_request.purpose != ImageCore::ImagePurpose::FullResolution)
+            {
+                break;
+            }
+
+            // WM_MOUSEWHEEL uses screen coordinates, convert to client coordinates
+            POINT ptScreen { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            POINT ptClient = ptScreen;
+            if (BackplateRef() != nullptr)
+            {
+                ScreenToClient(BackplateRef()->Window(), &ptClient);
+            }
+
+            const D2D1_RECT_F r = LayoutRect();
+#ifdef _DEBUG
+            wchar_t dbg[256];
+            swprintf_s(dbg, L"[FD2D][Image][WM_MOUSEWHEEL] ptClient=(%d,%d) LayoutRect=[%.1f,%.1f,%.1f,%.1f] zoomScale=%.2f\n",
+                ptClient.x, ptClient.y, r.left, r.top, r.right, r.bottom, m_zoomScale);
+            OutputDebugStringW(dbg);
+#endif
+            if (static_cast<float>(ptClient.x) >= r.left &&
+                static_cast<float>(ptClient.x) <= r.right &&
+                static_cast<float>(ptClient.y) >= r.top &&
+                static_cast<float>(ptClient.y) <= r.bottom)
+            {
+                const short delta = GET_WHEEL_DELTA_WPARAM(wParam);
+                const bool shiftPressed = (GET_KEYSTATE_WPARAM(wParam) & MK_SHIFT) != 0;
+                const float zoomStep = shiftPressed ? 0.1f : 0.5f; // Shift: 10%, No Shift: 50%
+                const float zoomFactor = (delta > 0) ? (1.0f + zoomStep) : (1.0f - zoomStep);
+                const float newZoom = m_zoomScale * zoomFactor;
+#ifdef _DEBUG
+                swprintf_s(dbg, L"[FD2D][Image][WM_MOUSEWHEEL] delta=%d zoomFactor=%.2f newZoom=%.2f\n",
+                    delta, zoomFactor, newZoom);
+                OutputDebugStringW(dbg);
+#endif
+                SetZoomScale(newZoom);
+                return true;
+            }
+            break;
+        }
         default:
             break;
         }
@@ -1163,6 +1352,18 @@ namespace FD2D
         if (!context || !m_backplate)
         {
             return;
+        }
+
+        // Advance smooth zoom animation (for GPU path)
+        if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
+        {
+            AdvanceZoomAnimation(NowMs());
+        }
+
+        // Advance smooth zoom animation (for GPU path)
+        if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
+        {
+            AdvanceZoomAnimation(NowMs());
         }
 
         ID3D11Device* device = m_backplate->D3DDevice();
@@ -1197,10 +1398,26 @@ namespace FD2D
                 return;
             }
 
-            const float l = toNdcX(rectPx.left);
-            const float r = toNdcX(rectPx.right);
-            const float t = toNdcY(rectPx.top);
-            const float b = toNdcY(rectPx.bottom);
+            // Apply zoom scale for GPU path
+            D2D1_RECT_F zoomedRect = rectPx;
+            if (m_zoomScale != 1.0f)
+            {
+                const float centerX = (rectPx.left + rectPx.right) * 0.5f;
+                const float centerY = (rectPx.top + rectPx.bottom) * 0.5f;
+                const float width = rectPx.right - rectPx.left;
+                const float height = rectPx.bottom - rectPx.top;
+                const float scaledWidth = width * m_zoomScale;
+                const float scaledHeight = height * m_zoomScale;
+                zoomedRect.left = centerX - scaledWidth * 0.5f;
+                zoomedRect.right = centerX + scaledWidth * 0.5f;
+                zoomedRect.top = centerY - scaledHeight * 0.5f;
+                zoomedRect.bottom = centerY + scaledHeight * 0.5f;
+            }
+
+            const float l = toNdcX(zoomedRect.left);
+            const float r = toNdcX(zoomedRect.right);
+            const float t = toNdcY(zoomedRect.top);
+            const float b = toNdcY(zoomedRect.bottom);
 
             // Update vertex buffer
             D3D11_MAPPED_SUBRESOURCE mapped {};

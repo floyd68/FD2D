@@ -169,6 +169,57 @@ namespace FD2D
         return true;
     }
 
+    bool Wnd::RemoveChild(const std::wstring& childName)
+    {
+        if (childName.empty())
+        {
+            return false;
+        }
+
+        auto it = m_children.find(childName);
+        if (it == m_children.end())
+        {
+            return false;
+        }
+
+        std::shared_ptr<Wnd> child = it->second;
+
+        if (child && m_backplate != nullptr)
+        {
+            child->OnDetached();
+        }
+
+        m_children.erase(it);
+
+        for (auto vit = m_childrenOrdered.begin(); vit != m_childrenOrdered.end(); ++vit)
+        {
+            if (*vit && (*vit)->Name() == childName)
+            {
+                m_childrenOrdered.erase(vit);
+                break;
+            }
+        }
+
+        return true;
+    }
+
+    void Wnd::ClearChildren()
+    {
+        if (m_backplate != nullptr)
+        {
+            for (auto& child : m_childrenOrdered)
+            {
+                if (child)
+                {
+                    child->OnDetached();
+                }
+            }
+        }
+
+        m_children.clear();
+        m_childrenOrdered.clear();
+    }
+
     const std::unordered_map<std::wstring, std::shared_ptr<Wnd>>& Wnd::Children() const
     {
         return m_children;

@@ -82,6 +82,9 @@ namespace FD2D
         bool HasActiveAnimation(unsigned long long nowMs) const;
         void ProcessAnimationTick(unsigned long long nowMs);
 
+        // Force layout recalculation on next render.
+        void RequestLayout();
+
     private:
         static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
         bool HandleMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESULT& result);

@@ -528,7 +528,9 @@ namespace FD2D
             D2D1_RENDER_TARGET_TYPE_DEFAULT,
             D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
             96.0f,
-            96.0f);
+            96.0f,
+            D2D1_RENDER_TARGET_USAGE_NONE,
+            D2D1_FEATURE_LEVEL_DEFAULT);
 
         const D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps = D2D1::HwndRenderTargetProperties(
             m_window,
@@ -536,6 +538,11 @@ namespace FD2D
             D2D1_PRESENT_OPTIONS_NONE);
 
         HRESULT hr = factory->CreateHwndRenderTarget(props, hwndProps, &m_hwndRenderTarget);
+        if (SUCCEEDED(hr) && m_hwndRenderTarget)
+        {
+            // Enable high-quality antialiasing for better image quality
+            m_hwndRenderTarget->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        }
         return hr;
     }
 
@@ -671,6 +678,17 @@ namespace FD2D
         if (FAILED(hr))
         {
             return hr;
+        }
+
+        // Enable high-quality antialiasing and interpolation for better image quality
+        if (m_d2dContext)
+        {
+            m_d2dContext->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            m_d2dContext->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
+            // Set high-quality cubic interpolation if available (Direct2D 1.1+)
+            #ifdef D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC
+            m_d2dContext->SetInterpolationMode(D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
+            #endif
         }
 
         RECT clientRect {};
@@ -842,6 +860,15 @@ namespace FD2D
         }
 
         m_layoutDirty = true;
+    }
+
+    void Backplate::RequestLayout()
+    {
+        m_layoutDirty = true;
+        if (m_window != nullptr)
+        {
+            InvalidateRect(m_window, nullptr, FALSE);
+        }
     }
 
     void Backplate::Render()

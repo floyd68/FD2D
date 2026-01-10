@@ -7,6 +7,7 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <d3d11_1.h>
+#include <d2d1_1.h>  // For Direct2D 1.1+ interpolation modes
 #include <functional>
 #include <mutex>
 #include <atomic>
@@ -64,6 +65,14 @@ namespace FD2D
         void SetLoadingSpinnerEnabled(bool enabled);
         bool LoadingSpinnerEnabled() const { return m_loadingSpinnerEnabled; }
         std::shared_ptr<Spinner> LoadingSpinner() const { return m_loadingSpinner; }
+
+        // Zoom control (for main image only)
+        void SetZoomScale(float scale);
+        float ZoomScale() const { return m_zoomScale; }
+        void ResetZoom();
+        void SetZoomSpeed(float speed); // Set zoom interpolation speed (0.0-1.0, higher = faster)
+        float ZoomSpeed() const { return m_zoomSpeed; }
+        void AdvanceZoomAnimation(unsigned long long nowMs);
 
         void OnRenderD3D(ID3D11DeviceContext* context) override;
         void OnRender(ID2D1RenderTarget* target) override;
@@ -124,6 +133,12 @@ namespace FD2D
         Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_prevGpuSrv {};
         UINT m_gpuWidth { 0 };
         UINT m_gpuHeight { 0 };
+
+        // Zoom state (for main image only)
+        float m_zoomScale { 1.0f };
+        float m_targetZoomScale { 1.0f };
+        unsigned long long m_lastZoomAnimMs { 0 };
+        float m_zoomSpeed { 100.0f }; // zoom interpolation speed (fraction of remaining distance per second, e.g., 10.0 = 10x per second)
     };
 }
 
