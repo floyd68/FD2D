@@ -1,6 +1,9 @@
 #include "Image.h"
 #include "Backplate.h"
 #include "Spinner.h"
+#include "Core.h"  // For GetSupportedD2DVersion
+#include "../ImageCore/ImageCache.h"
+#include "../ImageCore/ImageRequest.h"
 #include <algorithm>
 #include <windowsx.h>
 #include <cmath>
@@ -170,17 +173,61 @@ namespace FD2D
                 return hr;
             }
 
+            // Create sampler state with highest quality settings for optimal image quality
             D3D11_SAMPLER_DESC sd {};
-            sd.Filter = D3D11_FILTER_ANISOTROPIC;
+            sd.Filter = D3D11_FILTER_ANISOTROPIC;  // Highest quality filtering mode
             sd.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
             sd.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
             sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-            sd.MaxAnisotropy = 16; // High quality anisotropic filtering
-            sd.MaxLOD = D3D11_FLOAT32_MAX;
+            
+            // Query device feature level to determine maximum supported anisotropy
+            D3D_FEATURE_LEVEL featureLevel = device->GetFeatureLevel();
+            UINT maxAnisotropy = 16; // Default: D3D11 supports up to 16
+            
+            // Most modern hardware supports 16x anisotropy, which is the maximum
+            // Some older hardware might support less, but we'll use 16 as it's the best quality
+            // D3D11CreateDevice will fail if the requested anisotropy is not supported,
+            // so we'll use the maximum standard value
+            if (featureLevel >= D3D_FEATURE_LEVEL_10_0)
+            {
+                // Feature Level 10.0+ supports up to 16x anisotropy
+                maxAnisotropy = 16;
+            }
+            else
+            {
+                // Feature Level 9.x supports up to 4x or 16x depending on driver
+                // Use 16, but CreateSamplerState will clamp to device maximum if needed
+                maxAnisotropy = 16;
+            }
+            
+            sd.MaxAnisotropy = maxAnisotropy;
+            sd.MinLOD = 0.0f;  // Use highest resolution mip level (best quality)
+            sd.MaxLOD = D3D11_FLOAT32_MAX;  // Allow all mip levels for proper mipmapping
+            sd.MipLODBias = 0.0f;  // No bias (neutral, best quality)
+            sd.ComparisonFunc = D3D11_COMPARISON_NEVER;  // No comparison sampling (standard texture sampling)
+            sd.BorderColor[0] = 0.0f;  // Black border (used with BORDER address mode, not CLAMP)
+            sd.BorderColor[1] = 0.0f;
+            sd.BorderColor[2] = 0.0f;
+            sd.BorderColor[3] = 0.0f;
+            
             hr = device->CreateSamplerState(&sd, &g_sampler);
             if (FAILED(hr))
             {
-                return hr;
+                // Fallback: Try with reduced anisotropy if 16x is not supported
+                if (maxAnisotropy > 1)
+                {
+                    sd.MaxAnisotropy = 8;
+                    hr = device->CreateSamplerState(&sd, &g_sampler);
+                }
+                if (FAILED(hr) && maxAnisotropy > 1)
+                {
+                    sd.MaxAnisotropy = 4;
+                    hr = device->CreateSamplerState(&sd, &g_sampler);
+                }
+                if (FAILED(hr))
+                {
+                    return hr;
+                }
             }
 
             D3D11_BLEND_DESC blend {};
@@ -998,35 +1045,47 @@ namespace FD2D
             const D2D1_RECT_F sourceRect = D2D1::RectF(0.0f, 0.0f, bitmapSize.width, bitmapSize.height);
             const D2D1_RECT_F destRect = computeAspectFitDestRect(layoutRect, bitmapSize);
 
-            // Select interpolation mode based on zoom level for optimal quality
-            // Note: CUBIC and MULTI_SAMPLE_LINEAR may not be available in all Windows SDK versions
-            // Using LINEAR as fallback, but D3D path uses ANISOTROPIC for high quality
+            // Select interpolation mode based on Direct2D version and zoom level for optimal quality
+            // Use the highest quality mode supported by the runtime Direct2D version
             D2D1_BITMAP_INTERPOLATION_MODE interpMode = D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
             
-            // Try to use high-quality modes if available (Direct2D 1.1+)
-            // These constants may not be defined in older Windows SDK versions
-            #ifdef D2D1_BITMAP_INTERPOLATION_MODE_CUBIC
+            // Get current Direct2D version to select the best available option
+            FD2D::D2DVersion d2dVersion = FD2D::Core::GetSupportedD2DVersion();
+            
             if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
             {
-                if (m_zoomScale > 1.0f)
+                // Direct2D 1.1+ supports CUBIC and MULTI_SAMPLE_LINEAR
+                if (d2dVersion >= FD2D::D2DVersion::D2D1_1)
                 {
-                    // Zoomed in: use cubic interpolation for smooth upscaling (16-sample high quality)
-                    interpMode = D2D1_BITMAP_INTERPOLATION_MODE_CUBIC;
+                    if (m_zoomScale > 1.0f)
+                    {
+                        // Zoomed in: use cubic interpolation for smooth upscaling (16-sample high quality)
+                        #ifdef D2D1_BITMAP_INTERPOLATION_MODE_CUBIC
+                        interpMode = D2D1_BITMAP_INTERPOLATION_MODE_CUBIC;
+                        #endif
+                    }
+                    else if (m_zoomScale < 1.0f)
+                    {
+                        // Zoomed out: use multi-sample linear for smooth downscaling (anti-aliased)
+                        #ifdef D2D1_BITMAP_INTERPOLATION_MODE_MULTI_SAMPLE_LINEAR
+                        interpMode = D2D1_BITMAP_INTERPOLATION_MODE_MULTI_SAMPLE_LINEAR;
+                        #else
+                        // Fallback to cubic if multi-sample linear is not available
+                        #ifdef D2D1_BITMAP_INTERPOLATION_MODE_CUBIC
+                        interpMode = D2D1_BITMAP_INTERPOLATION_MODE_CUBIC;
+                        #endif
+                        #endif
+                    }
+                    else
+                    {
+                        // Normal size: use cubic for high quality rendering
+                        #ifdef D2D1_BITMAP_INTERPOLATION_MODE_CUBIC
+                        interpMode = D2D1_BITMAP_INTERPOLATION_MODE_CUBIC;
+                        #endif
+                    }
                 }
-                else if (m_zoomScale < 1.0f)
-                {
-                    // Zoomed out: use multi-sample linear for smooth downscaling (anti-aliased)
-                    #ifdef D2D1_BITMAP_INTERPOLATION_MODE_MULTI_SAMPLE_LINEAR
-                    interpMode = D2D1_BITMAP_INTERPOLATION_MODE_MULTI_SAMPLE_LINEAR;
-                    #endif
-                }
-                else
-                {
-                    // Normal size: use cubic for high quality rendering
-                    interpMode = D2D1_BITMAP_INTERPOLATION_MODE_CUBIC;
-                }
+                // Direct2D 1.0 fallback: use LINEAR (already set as default)
             }
-            #endif
 
             target->DrawBitmap(
                 bmp,
@@ -1221,6 +1280,7 @@ namespace FD2D
         m_panX = 0.0f;
         m_panY = 0.0f;
         m_panning = false;
+        m_pointerZoomActive = false;
         m_lastZoomAnimMs = NowMs();
         // Immediately request animation frame for fast response
         if (BackplateRef() != nullptr)
@@ -1279,11 +1339,31 @@ namespace FD2D
         // Update position using velocity
         m_zoomScale += m_zoomVelocity * dt;
 
+        // Pointer-based zoom: keep the mouse position fixed by updating pan as zoom changes.
+        if (m_pointerZoomActive && !m_panning)
+        {
+            const float startZoom = (m_pointerZoomStartZoom > 0.0001f) ? m_pointerZoomStartZoom : 0.0001f;
+            const float ratio = m_zoomScale / startZoom;
+
+            // Zoom is applied around the center of LayoutRect(), so use that center.
+            const D2D1_RECT_F r = LayoutRect();
+            const float centerX = (r.left + r.right) * 0.5f;
+            const float centerY = (r.top + r.bottom) * 0.5f;
+            const float dx = m_pointerZoomMouseX - centerX;
+            const float dy = m_pointerZoomMouseY - centerY;
+
+            // For transform: screen = center + (x * zoom) + pan,
+            // this maintains the same underlying point at (mouseX, mouseY) across zoom changes.
+            m_panX = dx - ((dx - m_pointerZoomStartPanX) * ratio);
+            m_panY = dy - ((dy - m_pointerZoomStartPanY) * ratio);
+        }
+
         // Snap to target if very close and velocity is negligible
         if (std::abs(diff) < 0.001f && std::abs(m_zoomVelocity) < 0.001f)
         {
             m_zoomScale = m_targetZoomScale;
             m_zoomVelocity = 0.0f;
+            m_pointerZoomActive = false;
         }
         else
         {
@@ -1320,6 +1400,7 @@ namespace FD2D
                 {
                     // Start panning - store Layout coordinates (same as client coordinates)
                     m_panning = true;
+                    m_pointerZoomActive = false;
                     m_panStartX = static_cast<float>(pt.x);
                     m_panStartY = static_cast<float>(pt.y);
                     m_panStartOffsetX = m_panX;
@@ -1358,6 +1439,7 @@ namespace FD2D
                 
                 m_panX = m_panStartOffsetX + deltaX;
                 m_panY = m_panStartOffsetY + deltaY;
+                m_pointerZoomActive = false;
                 
                 Invalidate();
                 return true;
@@ -1427,6 +1509,14 @@ namespace FD2D
                     delta, zoomFactor, m_targetZoomScale, newZoom);
                 OutputDebugStringW(dbg);
 #endif
+                // Always do pointer-based zoom (keep the point under the mouse fixed).
+                m_pointerZoomActive = true;
+                m_pointerZoomStartZoom = m_zoomScale;
+                m_pointerZoomStartPanX = m_panX;
+                m_pointerZoomStartPanY = m_panY;
+                m_pointerZoomMouseX = static_cast<float>(pt.x);
+                m_pointerZoomMouseY = static_cast<float>(pt.y);
+
                 SetZoomScale(newZoom);
                 
                 return true;

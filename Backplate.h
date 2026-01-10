@@ -85,6 +85,9 @@ namespace FD2D
         // Force layout recalculation on next render.
         void RequestLayout();
 
+        // Update window title bar with renderer information
+        void UpdateTitleBarInfo();
+
     private:
         static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
         bool HandleMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESULT& result);

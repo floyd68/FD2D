@@ -152,6 +152,14 @@ namespace FD2D
         float m_panStartY { 0.0f };
         float m_panStartOffsetX { 0.0f };  // Pan offset when panning started
         float m_panStartOffsetY { 0.0f };
+
+        // Pointer-based zoom state (keep mouse position fixed while zoom animates)
+        bool m_pointerZoomActive { false };
+        float m_pointerZoomStartZoom { 1.0f };
+        float m_pointerZoomStartPanX { 0.0f };
+        float m_pointerZoomStartPanY { 0.0f };
+        float m_pointerZoomMouseX { 0.0f }; // in layout/client coordinates
+        float m_pointerZoomMouseY { 0.0f };
     };
 }
 

@@ -222,6 +222,8 @@ namespace FD2D
         {
             // 창이 완전히 생성된 후 렌더 타겟 생성
             EnsureRenderTarget();
+            // 타이틀바 정보 업데이트
+            UpdateTitleBarInfo();
             result = 0;
             return true;
         }
@@ -553,6 +555,9 @@ namespace FD2D
             }
         }
 
+        // Update title bar info after render target is created/ensured
+        UpdateTitleBarInfo();
+
         return S_OK;
     }
 
@@ -603,7 +608,11 @@ namespace FD2D
         if (SUCCEEDED(hr) && m_hwndRenderTarget)
         {
             // Enable high-quality antialiasing for better image quality
+            // PER_PRIMITIVE is the highest quality mode (available in all Direct2D versions)
             m_hwndRenderTarget->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            
+            // Enable ClearType for text rendering (highest quality)
+            m_hwndRenderTarget->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
         }
         return hr;
     }
@@ -615,7 +624,9 @@ namespace FD2D
         UNREFERENCED_PARAMETER(causeHr);
 
         m_rendererId = L"d2d_hwndrt";
-        return EnsureRenderTargetD2D();
+        HRESULT hr = EnsureRenderTargetD2D();
+        UpdateTitleBarInfo();
+        return hr;
     }
 
     HRESULT Backplate::RecreateSwapChainTargets()
@@ -742,16 +753,39 @@ namespace FD2D
             return hr;
         }
 
-        // Enable high-quality antialiasing and interpolation for better image quality
+        // Enable high-quality antialiasing and interpolation based on Direct2D version
         if (m_d2dContext)
         {
+            // Antialiasing: PER_PRIMITIVE is the highest quality mode (available in all D2D versions)
             m_d2dContext->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            
+            // Text antialiasing: CLEARTYPE is the highest quality mode (available in all D2D versions)
             m_d2dContext->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
-            // Set high-quality cubic interpolation if available (Direct2D 1.1+)
-            #ifdef D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC
-            m_d2dContext->SetInterpolationMode(D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
-            #endif
+            
+            // Interpolation mode: Select the best mode based on Direct2D version
+            FD2D::D2DVersion d2dVersion = FD2D::Core::GetSupportedD2DVersion();
+            if (d2dVersion >= FD2D::D2DVersion::D2D1_3)
+            {
+                // Direct2D 1.3+ supports HIGH_QUALITY_CUBIC (best quality, available in Windows 10+)
+                #ifdef D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC
+                m_d2dContext->SetInterpolationMode(D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
+                #elif defined(D2D1_INTERPOLATION_MODE_CUBIC)
+                // Fallback to CUBIC if HIGH_QUALITY_CUBIC is not available
+                m_d2dContext->SetInterpolationMode(D2D1_INTERPOLATION_MODE_CUBIC);
+                #endif
+            }
+            else if (d2dVersion >= FD2D::D2DVersion::D2D1_1)
+            {
+                // Direct2D 1.1-1.2: Use CUBIC (best available)
+                #ifdef D2D1_INTERPOLATION_MODE_CUBIC
+                m_d2dContext->SetInterpolationMode(D2D1_INTERPOLATION_MODE_CUBIC);
+                #endif
+            }
+            // Direct2D 1.0: Use default (LINEAR), which is already set
         }
+
+        // Update title bar info after render target is created
+        UpdateTitleBarInfo();
 
         RECT clientRect {};
         GetClientRect(m_window, &clientRect);
@@ -1133,6 +1167,66 @@ namespace FD2D
             return m_hwndRenderTarget.Get();
         }
         return m_d2dContext.Get();
+    }
+
+    void Backplate::UpdateTitleBarInfo()
+    {
+        if (m_window == nullptr)
+        {
+            return;
+        }
+
+        // Get current window title
+        wchar_t currentTitle[256] = {};
+        GetWindowTextW(m_window, currentTitle, static_cast<int>(std::size(currentTitle)));
+
+        // Extract base title (remove existing info if present)
+        std::wstring baseTitle = currentTitle;
+        size_t infoPos = baseTitle.find(L" [");
+        if (infoPos != std::wstring::npos)
+        {
+            baseTitle = baseTitle.substr(0, infoPos);
+        }
+        if (baseTitle.empty())
+        {
+            baseTitle = L"FICture2"; // Default title
+        }
+
+        // Get Direct2D version
+        const char* d2dVersionStr = Core::GetD2DVersionString();
+        
+        // Extract version number (e.g., "Direct2D 1.3 (Windows 10+)" -> "1.3")
+        std::string d2dVersionA = d2dVersionStr;
+        size_t versionPos = d2dVersionA.find("1.");
+        std::string versionNum = "1.0";
+        if (versionPos != std::string::npos)
+        {
+            size_t endPos = versionPos + 3; // "1.x"
+            if (endPos > d2dVersionA.length()) endPos = d2dVersionA.length();
+            versionNum = d2dVersionA.substr(versionPos, endPos - versionPos);
+        }
+
+        // Convert to wide string
+        size_t len = versionNum.length();
+        std::wstring versionNumW(len + 1, L'\0');
+        mbstowcs_s(nullptr, &versionNumW[0], len + 1, versionNum.c_str(), len);
+        versionNumW.resize(len);
+
+        // Check if using D3D11 renderer
+        bool usingD3D11 = (m_rendererId.empty() || m_rendererId == L"d3d11_swapchain");
+
+        // Build new title with info on the right
+        wchar_t newTitle[512];
+        if (usingD3D11)
+        {
+            swprintf_s(newTitle, L"%ls [D2D %ls | D3D11]", baseTitle.c_str(), versionNumW.c_str());
+        }
+        else
+        {
+            swprintf_s(newTitle, L"%ls [D2D %ls]", baseTitle.c_str(), versionNumW.c_str());
+        }
+
+        SetWindowTextW(m_window, newTitle);
     }
 }
 
