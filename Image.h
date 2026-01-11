@@ -20,6 +20,13 @@ namespace FD2D
     {
     public:
         using ClickHandler = std::function<void()>;
+        struct LoadedInfo
+        {
+            uint32_t width { 0 };
+            uint32_t height { 0 };
+            DXGI_FORMAT format { DXGI_FORMAT_UNKNOWN };
+            std::wstring sourcePath {};
+        };
         struct ViewTransform
         {
             float zoomScale { 1.0f };
@@ -54,6 +61,9 @@ namespace FD2D
         float ZoomStiffness() const { return m_zoomStiffness; }
         void AdvanceZoomAnimation(unsigned long long nowMs);
 
+        // Snapshot of the currently displayed (loaded) image metadata (UI thread).
+        LoadedInfo GetLoadedInfo() const;
+
         // View transform (zoom/pan) for sync scenarios (compare mode).
         ViewTransform GetViewTransform() const;
         void SetViewTransform(const ViewTransform& vt, bool notify = true);
@@ -86,7 +96,8 @@ namespace FD2D
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_backdropBrush {};
         
-        // 변환 대기 중인 이미지 데이터 (render thread에서 변환)
+        // Pending decoded payload produced on a worker thread.
+        // Consumed on the render/UI thread to create D2D bitmaps / upload to D3D resources.
         mutable std::mutex m_pendingMutex;
         std::shared_ptr<std::vector<uint8_t>> m_pendingBlocks {};
         uint32_t m_pendingW { 0 };
@@ -104,13 +115,18 @@ namespace FD2D
         UINT m_gpuWidth { 0 };
         UINT m_gpuHeight { 0 };
 
+        // Loaded metadata for the currently displayed image (GPU or CPU path).
+        uint32_t m_loadedW { 0 };
+        uint32_t m_loadedH { 0 };
+        DXGI_FORMAT m_loadedFormat { DXGI_FORMAT_UNKNOWN };
+
         // Zoom state (for main image only)
         float m_zoomScale { 1.0f };
         float m_targetZoomScale { 1.0f };
         float m_zoomVelocity { 0.0f }; // Velocity for critically damped spring animation
         unsigned long long m_lastZoomAnimMs { 0 };
         float m_zoomSpeed { 100.0f }; // zoom interpolation speed (fraction of remaining distance per second, e.g., 10.0 = 10x per second)
-        float m_zoomStiffness { 80.0f }; // Spring stiffness for critically damped animation (higher = faster response)
+        float m_zoomStiffness { 100.0f }; // Spring stiffness for critically damped animation (higher = faster response)
         
         // Panning state (for main image only)
         float m_panX { 0.0f };  // Pan offset in layout coordinates

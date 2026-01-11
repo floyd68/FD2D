@@ -294,12 +294,6 @@ namespace FD2D
 
                 if (SUCCEEDED(hrBmp) && d2dBitmap)
                 {
-                    if (m_bitmap && m_loadedFilePath != pendingSource)
-                    {
-                        m_prevBitmap = m_bitmap;
-                        m_prevLoadedFilePath = m_loadedFilePath;
-                        m_fadeStartMs = FD2D::Util::NowMs();
-                    }
                     m_bitmap = d2dBitmap;
                     m_loadedFilePath = pendingSource;
                 }
@@ -370,43 +364,12 @@ namespace FD2D
             const D2D1_RECT_F destRect = computeAspectFitDestRect(layoutRect, bitmapSize);
 
             D2D1_BITMAP_INTERPOLATION_MODE interpMode = D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
-            const FD2D::D2DVersion d2dVersion = FD2D::Core::GetSupportedD2DVersion();
-            if (d2dVersion >= FD2D::D2DVersion::D2D1_1)
-            {
-                #ifdef D2D1_BITMAP_INTERPOLATION_MODE_CUBIC
-                interpMode = D2D1_BITMAP_INTERPOLATION_MODE_CUBIC;
-                #endif
-            }
-
             target->DrawBitmap(bmp, destRect, opacity, interpMode, sourceRect);
         };
 
-        bool isFading = false;
-        float fadeT = 1.0f;
-        if (m_prevBitmap && m_fadeStartMs != 0 && m_fadeDurationMs > 0)
-        {
-            const unsigned long long elapsed = FD2D::Util::NowMs() - m_fadeStartMs;
-            fadeT = FD2D::Util::Clamp01(static_cast<float>(elapsed) / static_cast<float>(m_fadeDurationMs));
-            isFading = fadeT < 1.0f;
-        }
-
         if (m_bitmap)
         {
-            if (isFading && m_prevBitmap)
-            {
-                drawBmp(m_prevBitmap.Get(), 1.0f - fadeT);
-                drawBmp(m_bitmap.Get(), fadeT);
-            }
-            else
-            {
-                if (m_prevBitmap)
-                {
-                    m_prevBitmap.Reset();
-                    m_prevLoadedFilePath.clear();
-                    m_fadeStartMs = 0;
-                }
-                drawBmp(m_bitmap.Get(), 1.0f);
-            }
+            drawBmp(m_bitmap.Get(), 1.0f);
         }
 
         const bool shouldShowSpinner = m_loadingSpinnerEnabled && m_loading.load();
@@ -439,10 +402,6 @@ namespace FD2D
                 if (m_bitmap)
                 {
                     r = computeAspectFitDestRect(r, m_bitmap->GetSize());
-                }
-                else if (m_prevBitmap)
-                {
-                    r = computeAspectFitDestRect(r, m_prevBitmap->GetSize());
                 }
 
                 float selT = 1.0f;
@@ -508,11 +467,6 @@ namespace FD2D
         }
 
         Wnd::OnRender(target);
-
-        if (isFading && BackplateRef() != nullptr)
-        {
-            BackplateRef()->RequestAnimationFrame();
-        }
     }
 
     bool ThumbImage::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)

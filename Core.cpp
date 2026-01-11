@@ -5,15 +5,12 @@
 // These are used only for QueryInterface, avoiding compile-time dependencies
 DEFINE_GUID(IID_ID2D1Factory2_, 0x94f81a73, 0x9212, 0x4376, 0x9c, 0x58, 0xb1, 0x6a, 0x3a, 0x0d, 0x39, 0x92);
 DEFINE_GUID(IID_ID2D1Factory3_, 0x0869759f, 0x4f00, 0x413f, 0xb0, 0x3e, 0x2b, 0xda, 0x45, 0x40, 0x4d, 0x0f);
-DEFINE_GUID(IID_ID2D1Factory4_, 0xbd4ec2d2, 0x8892, 0x4c88, 0xbb, 0x7a, 0x9b, 0x3f, 0x0a, 0x31, 0xc9, 0x71);
-DEFINE_GUID(IID_ID2D1Factory5_, 0xc4349994, 0x838e, 0x4b0f, 0x8c, 0xab, 0x44, 0x97, 0xd9, 0xee, 0xcc, 0xb1);
 
 namespace FD2D
 {
     bool Core::s_initialized = false;
     HINSTANCE Core::s_instance = nullptr;
     D2DVersion Core::s_d2dVersion = D2DVersion::D2D1_0;
-    BitmapSamplingMode Core::s_bitmapSamplingMode = BitmapSamplingMode::HighQuality;
     ComPtr<ID2D1Factory> Core::s_d2dFactory {};
     ComPtr<ID2D1Factory1> Core::s_d2dFactory1 {};
     ComPtr<IDWriteFactory> Core::s_dwriteFactory {};
@@ -33,30 +30,6 @@ namespace FD2D
         // Try to query for the highest available Direct2D version at runtime
         // Query interfaces from newest to oldest to find the highest supported version
         // Use QueryInterface with IID GUIDs directly to avoid compile-time dependencies
-        
-        // Try Direct2D 1.5 (Windows 10 October 2018 Update+)
-        {
-            void* factory5 = nullptr;
-            HRESULT hr = s_d2dFactory1->QueryInterface(IID_ID2D1Factory5_, &factory5);
-            if (SUCCEEDED(hr) && factory5)
-            {
-                reinterpret_cast<IUnknown*>(factory5)->Release();
-                s_d2dVersion = D2DVersion::D2D1_5;
-                return S_OK;
-            }
-        }
-        
-        // Try Direct2D 1.4 (Windows 10 Creators Update+)
-        {
-            void* factory4 = nullptr;
-            HRESULT hr = s_d2dFactory1->QueryInterface(IID_ID2D1Factory4_, &factory4);
-            if (SUCCEEDED(hr) && factory4)
-            {
-                reinterpret_cast<IUnknown*>(factory4)->Release();
-                s_d2dVersion = D2DVersion::D2D1_4;
-                return S_OK;
-            }
-        }
         
         // Try Direct2D 1.3 (Windows 10+)
         {
@@ -189,36 +162,9 @@ namespace FD2D
             return "Direct2D 1.2 (Windows 8.1+)";
         case D2DVersion::D2D1_3:
             return "Direct2D 1.3 (Windows 10+)";
-        case D2DVersion::D2D1_4:
-            return "Direct2D 1.4 (Windows 10 Creators Update+)";
-        case D2DVersion::D2D1_5:
-            return "Direct2D 1.5 (Windows 10 October 2018 Update+)";
         default:
             return "Unknown Direct2D Version";
         }
-    }
-
-    BitmapSamplingMode Core::GetBitmapSamplingMode()
-    {
-        return s_bitmapSamplingMode;
-    }
-
-    void Core::SetBitmapSamplingMode(BitmapSamplingMode mode)
-    {
-        s_bitmapSamplingMode = mode;
-    }
-
-    BitmapSamplingMode Core::ToggleBitmapSamplingMode()
-    {
-        if (s_bitmapSamplingMode == BitmapSamplingMode::HighQuality)
-        {
-            s_bitmapSamplingMode = BitmapSamplingMode::PixelPerfect;
-        }
-        else
-        {
-            s_bitmapSamplingMode = BitmapSamplingMode::HighQuality;
-        }
-        return s_bitmapSamplingMode;
     }
 }
 

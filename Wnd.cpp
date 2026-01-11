@@ -310,6 +310,30 @@ namespace FD2D
         // All LayoutRects are in the same client coordinate system, so no conversion needed
         if (IsMouseMessage(message))
         {
+            // For wheel input, route based on cursor position so the pane under the mouse receives it
+            // even if another control currently owns focus.
+            if (message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL)
+            {
+                const POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
+                {
+                    const auto& child = *it;
+                    if (!child)
+                    {
+                        continue;
+                    }
+                    if (!RectContainsPoint(child->LayoutRect(), pt))
+                    {
+                        continue;
+                    }
+                    if (child->OnMessage(message, wParam, lParam))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
             for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
             {
                 const auto& child = *it;

@@ -74,6 +74,7 @@ namespace FD2D
             Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv {};
             UINT width { 0 };
             UINT height { 0 };
+            DXGI_FORMAT format { DXGI_FORMAT_UNKNOWN };
             std::list<std::wstring>::iterator lruIt {};
         };
 
@@ -82,7 +83,12 @@ namespace FD2D
         static std::list<std::wstring> g_srvCacheLru;
         static size_t g_srvCacheCapacity = 64; // simple entry-count cap
 
-        static bool TryGetSrvFromCache(const std::wstring& key, Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>& outSrv, UINT& outW, UINT& outH)
+        static bool TryGetSrvFromCache(
+            const std::wstring& key,
+            Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>& outSrv,
+            UINT& outW,
+            UINT& outH,
+            DXGI_FORMAT& outFormat)
         {
             std::lock_guard<std::mutex> lock(g_srvCacheMutex);
             auto it = g_srvCache.find(key);
@@ -99,10 +105,16 @@ namespace FD2D
             outSrv = it->second.srv;
             outW = it->second.width;
             outH = it->second.height;
+            outFormat = it->second.format;
             return true;
         }
 
-        static void PutSrvToCache(const std::wstring& key, const Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>& srv, UINT w, UINT h)
+        static void PutSrvToCache(
+            const std::wstring& key,
+            const Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>& srv,
+            UINT w,
+            UINT h,
+            DXGI_FORMAT format)
         {
             if (!srv)
             {
@@ -122,6 +134,7 @@ namespace FD2D
             entry.srv = srv;
             entry.width = w;
             entry.height = h;
+            entry.format = format;
             entry.lruIt = g_srvCacheLru.begin();
             g_srvCache.emplace(key, std::move(entry));
 
@@ -211,32 +224,11 @@ namespace FD2D
 
             // Create sampler state with highest quality settings for optimal image quality
             D3D11_SAMPLER_DESC sd {};
-            sd.Filter = D3D11_FILTER_ANISOTROPIC;  // Highest quality filtering mode
+            sd.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;  // Highest quality filtering mode
             sd.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
             sd.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
             sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-            
-            // Query device feature level to determine maximum supported anisotropy
-            D3D_FEATURE_LEVEL featureLevel = device->GetFeatureLevel();
-            UINT maxAnisotropy = 16; // Default: D3D11 supports up to 16
-            
-            // Most modern hardware supports 16x anisotropy, which is the maximum
-            // Some older hardware might support less, but we'll use 16 as it's the best quality
-            // D3D11CreateDevice will fail if the requested anisotropy is not supported,
-            // so we'll use the maximum standard value
-            if (featureLevel >= D3D_FEATURE_LEVEL_10_0)
-            {
-                // Feature Level 10.0+ supports up to 16x anisotropy
-                maxAnisotropy = 16;
-            }
-            else
-            {
-                // Feature Level 9.x supports up to 4x or 16x depending on driver
-                // Use 16, but CreateSamplerState will clamp to device maximum if needed
-                maxAnisotropy = 16;
-            }
-            
-            sd.MaxAnisotropy = maxAnisotropy;
+            sd.MaxAnisotropy = 1;
             sd.MinLOD = 0.0f;  // Use highest resolution mip level (best quality)
             sd.MaxLOD = D3D11_FLOAT32_MAX;  // Allow all mip levels for proper mipmapping
             sd.MipLODBias = 0.0f;  // No bias (neutral, best quality)
@@ -248,23 +240,7 @@ namespace FD2D
             
             hr = device->CreateSamplerState(&sd, &g_sampler);
             if (FAILED(hr))
-            {
-                // Fallback: Try with reduced anisotropy if 16x is not supported
-                if (maxAnisotropy > 1)
-                {
-                    sd.MaxAnisotropy = 8;
-                    hr = device->CreateSamplerState(&sd, &g_sampler);
-                }
-                if (FAILED(hr) && maxAnisotropy > 1)
-                {
-                    sd.MaxAnisotropy = 4;
-                    hr = device->CreateSamplerState(&sd, &g_sampler);
-                }
-                if (FAILED(hr))
-                {
-                    return hr;
-                }
-            }
+                return hr;
 
             D3D11_BLEND_DESC blend {};
             blend.RenderTarget[0].BlendEnable = TRUE;
@@ -383,6 +359,16 @@ namespace FD2D
         vt.panX = m_panX;
         vt.panY = m_panY;
         return vt;
+    }
+
+    Image::LoadedInfo Image::GetLoadedInfo() const
+    {
+        LoadedInfo info {};
+        info.width = m_loadedW;
+        info.height = m_loadedH;
+        info.format = m_loadedFormat;
+        info.sourcePath = m_loadedFilePath;
+        return info;
     }
 
     void Image::SetViewTransform(const ViewTransform& vt, bool notify)
@@ -519,6 +505,9 @@ namespace FD2D
             m_pendingFormat = DXGI_FORMAT_UNKNOWN;
             m_pendingSourcePath.clear();
         }
+        m_loadedW = 0;
+        m_loadedH = 0;
+        m_loadedFormat = DXGI_FORMAT_UNKNOWN;
 
         // Selection changed: clear any in-flight token so we can start a new request on next render.
         m_inflightToken.store(0);
@@ -528,13 +517,17 @@ namespace FD2D
         {
             Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> cachedSrv;
             UINT cw = 0, ch = 0;
-            if (TryGetSrvFromCache(normalized, cachedSrv, cw, ch))
+            DXGI_FORMAT cachedFormat = DXGI_FORMAT_UNKNOWN;
+            if (TryGetSrvFromCache(normalized, cachedSrv, cw, ch, cachedFormat))
             {
                 m_gpuSrv = cachedSrv;
                 m_gpuWidth = cw;
                 m_gpuHeight = ch;
                 m_loadedFilePath = normalized;
                 m_filePath = normalized;
+                m_loadedW = cw;
+                m_loadedH = ch;
+                m_loadedFormat = cachedFormat;
 
                 // Cancel CPU path bitmaps for main image
                 m_bitmap.Reset();
@@ -805,8 +798,11 @@ namespace FD2D
                                 m_gpuWidth = pendingW;
                                 m_gpuHeight = pendingH;
                                 m_loadedFilePath = pendingSourcePath;
+                                m_loadedW = pendingW;
+                                m_loadedH = pendingH;
+                                m_loadedFormat = pendingFormat;
 
-                                PutSrvToCache(pendingSourcePath, m_gpuSrv, m_gpuWidth, m_gpuHeight);
+                                PutSrvToCache(pendingSourcePath, m_gpuSrv, m_gpuWidth, m_gpuHeight, pendingFormat);
 
                                 m_bitmap.Reset();
 
@@ -852,6 +848,9 @@ namespace FD2D
                         {
                             m_bitmap = d2dBitmap;
                             m_loadedFilePath = pendingSourcePath;
+                            m_loadedW = pendingW;
+                            m_loadedH = pendingH;
+                            m_loadedFormat = pendingFormat;
                             // Ensure the D3D pass won't keep drawing a stale GPU SRV under CPU-decoded images.
                             m_gpuSrv.Reset();
                             m_gpuWidth = 0;
@@ -992,39 +991,10 @@ namespace FD2D
             
             if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
             {
-                if (FD2D::Core::GetBitmapSamplingMode() == FD2D::BitmapSamplingMode::PixelPerfect)
+                // Pixel-perfect sampling for compare workflows.
+                if (d2dVersion >= FD2D::D2DVersion::D2D1_1)
                 {
                     interpMode = D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR;
-                }
-                // Direct2D 1.1+ supports CUBIC and MULTI_SAMPLE_LINEAR
-                else if (d2dVersion >= FD2D::D2DVersion::D2D1_1)
-                {
-                    if (m_zoomScale > 1.0f)
-                    {
-                        // Zoomed in: use cubic interpolation for smooth upscaling (16-sample high quality)
-                        #ifdef D2D1_BITMAP_INTERPOLATION_MODE_CUBIC
-                        interpMode = D2D1_BITMAP_INTERPOLATION_MODE_CUBIC;
-                        #endif
-                    }
-                    else if (m_zoomScale < 1.0f)
-                    {
-                        // Zoomed out: use multi-sample linear for smooth downscaling (anti-aliased)
-                        #ifdef D2D1_BITMAP_INTERPOLATION_MODE_MULTI_SAMPLE_LINEAR
-                        interpMode = D2D1_BITMAP_INTERPOLATION_MODE_MULTI_SAMPLE_LINEAR;
-                        #else
-                        // Fallback to cubic if multi-sample linear is not available
-                        #ifdef D2D1_BITMAP_INTERPOLATION_MODE_CUBIC
-                        interpMode = D2D1_BITMAP_INTERPOLATION_MODE_CUBIC;
-                        #endif
-                        #endif
-                    }
-                    else
-                    {
-                        // Normal size: use cubic for high quality rendering
-                        #ifdef D2D1_BITMAP_INTERPOLATION_MODE_CUBIC
-                        interpMode = D2D1_BITMAP_INTERPOLATION_MODE_CUBIC;
-                        #endif
-                    }
                 }
                 // Direct2D 1.0 fallback: use LINEAR (already set as default)
             }
@@ -1540,7 +1510,16 @@ namespace FD2D
         // If a CPU-decoded image for the current selection is pending, avoid drawing the old GPU SRV this frame.
         // Backplate renders D3D first, then D2D; so this prevents a 1-frame "show-through" when the new CPU
         // image has transparency.
-        if (m_pendingBlocks && IsCpuBgra8DxgiFormat(m_pendingFormat) && m_pendingSourcePath == m_filePath)
+        //
+        // NOTE: m_pending* is written by a worker thread; guard access to avoid data races.
+        bool hasPendingCpuForCurrent = false;
+        {
+            std::lock_guard<std::mutex> lock(m_pendingMutex);
+            hasPendingCpuForCurrent = (m_pendingBlocks
+                && IsCpuBgra8DxgiFormat(m_pendingFormat)
+                && m_pendingSourcePath == m_filePath);
+        }
+        if (hasPendingCpuForCurrent)
         {
             return;
         }

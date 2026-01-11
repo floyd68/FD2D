@@ -63,10 +63,6 @@ namespace FD2D
         HRESULT m_failedHr { S_OK };
 
         Microsoft::WRL::ComPtr<ID2D1Bitmap> m_bitmap {};
-        Microsoft::WRL::ComPtr<ID2D1Bitmap> m_prevBitmap {};
-        std::wstring m_prevLoadedFilePath {};
-        unsigned long long m_fadeStartMs { 0 };
-        unsigned long long m_fadeDurationMs { 180 };
 
         mutable std::mutex m_pendingMutex;
         // Pending decoded image produced on the worker thread.
