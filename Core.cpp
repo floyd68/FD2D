@@ -13,6 +13,7 @@ namespace FD2D
     bool Core::s_initialized = false;
     HINSTANCE Core::s_instance = nullptr;
     D2DVersion Core::s_d2dVersion = D2DVersion::D2D1_0;
+    BitmapSamplingMode Core::s_bitmapSamplingMode = BitmapSamplingMode::HighQuality;
     ComPtr<ID2D1Factory> Core::s_d2dFactory {};
     ComPtr<ID2D1Factory1> Core::s_d2dFactory1 {};
     ComPtr<IDWriteFactory> Core::s_dwriteFactory {};
@@ -195,6 +196,29 @@ namespace FD2D
         default:
             return "Unknown Direct2D Version";
         }
+    }
+
+    BitmapSamplingMode Core::GetBitmapSamplingMode()
+    {
+        return s_bitmapSamplingMode;
+    }
+
+    void Core::SetBitmapSamplingMode(BitmapSamplingMode mode)
+    {
+        s_bitmapSamplingMode = mode;
+    }
+
+    BitmapSamplingMode Core::ToggleBitmapSamplingMode()
+    {
+        if (s_bitmapSamplingMode == BitmapSamplingMode::HighQuality)
+        {
+            s_bitmapSamplingMode = BitmapSamplingMode::PixelPerfect;
+        }
+        else
+        {
+            s_bitmapSamplingMode = BitmapSamplingMode::HighQuality;
+        }
+        return s_bitmapSamplingMode;
     }
 }
 

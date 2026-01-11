@@ -510,6 +510,23 @@ namespace FD2D
                 result = 0;
                 return true;
             }
+
+            // Q: toggle bitmap sampling/filtering mode (high-quality vs pixel-perfect).
+            if (wParam == 'Q')
+            {
+                const bool isRepeat = ((lParam & (1LL << 30)) != 0);
+                if (!isRepeat)
+                {
+                    FD2D::Core::ToggleBitmapSamplingMode();
+                    if (m_window != nullptr)
+                    {
+                        InvalidateRect(m_window, nullptr, FALSE);
+                        UpdateWindow(m_window);
+                    }
+                }
+                result = 0;
+                return true;
+            }
             break;
         }
 

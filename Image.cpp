@@ -985,8 +985,6 @@ namespace FD2D
             const D2D1_RECT_F sourceRect = D2D1::RectF(0.0f, 0.0f, bitmapSize.width, bitmapSize.height);
             const D2D1_RECT_F destRect = computeAspectFitDestRect(layoutRect, bitmapSize);
 
-            // Select interpolation mode based on Direct2D version and zoom level for optimal quality
-            // Use the highest quality mode supported by the runtime Direct2D version
             D2D1_BITMAP_INTERPOLATION_MODE interpMode = D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
             
             // Get current Direct2D version to select the best available option
@@ -994,8 +992,12 @@ namespace FD2D
             
             if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
             {
+                if (FD2D::Core::GetBitmapSamplingMode() == FD2D::BitmapSamplingMode::PixelPerfect)
+                {
+                    interpMode = D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR;
+                }
                 // Direct2D 1.1+ supports CUBIC and MULTI_SAMPLE_LINEAR
-                if (d2dVersion >= FD2D::D2DVersion::D2D1_1)
+                else if (d2dVersion >= FD2D::D2DVersion::D2D1_1)
                 {
                     if (m_zoomScale > 1.0f)
                     {

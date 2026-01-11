@@ -41,6 +41,12 @@ namespace FD2D
         D2D1_5   // Direct2D 1.5 (Windows 10 October 2018 Update+)
     };
 
+    enum class BitmapSamplingMode
+    {
+        HighQuality,
+        PixelPerfect
+    };
+
     class Core
     {
     public:
@@ -56,12 +62,18 @@ namespace FD2D
         static D2DVersion GetSupportedD2DVersion();
         static const char* GetD2DVersionString();
 
+        // Bitmap sampling/filtering (renderer option)
+        static BitmapSamplingMode GetBitmapSamplingMode();
+        static void SetBitmapSamplingMode(BitmapSamplingMode mode);
+        static BitmapSamplingMode ToggleBitmapSamplingMode();
+
     private:
         static HRESULT DetectD2DVersion();
         
         static bool s_initialized;
         static HINSTANCE s_instance;
         static D2DVersion s_d2dVersion;
+        static BitmapSamplingMode s_bitmapSamplingMode;
         static ComPtr<ID2D1Factory> s_d2dFactory;
         static ComPtr<ID2D1Factory1> s_d2dFactory1;
         static ComPtr<IDWriteFactory> s_dwriteFactory;
