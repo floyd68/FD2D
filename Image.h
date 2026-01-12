@@ -69,6 +69,13 @@ namespace FD2D
         void SetViewTransform(const ViewTransform& vt, bool notify = true);
         void SetOnViewChanged(ViewChangedHandler handler);
 
+        // Alpha visualization:
+        // - When enabled, draws a checkerboard backdrop in the image destination rect so transparent pixels
+        //   show a standard checker pattern.
+        // - When disabled, keeps the existing solid backdrop behavior.
+        void SetAlphaCheckerboardEnabled(bool enabled);
+        bool AlphaCheckerboardEnabled() const { return m_alphaCheckerboardEnabled; }
+
         void OnRenderD3D(ID3D11DeviceContext* context) override;
         void OnRender(ID2D1RenderTarget* target) override;
         bool OnMessage(UINT message, WPARAM wParam, LPARAM lParam) override;
@@ -95,6 +102,9 @@ namespace FD2D
         Microsoft::WRL::ComPtr<ID2D1Bitmap> m_bitmap {};
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_backdropBrush {};
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_checkerLightBrush {};
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_checkerDarkBrush {};
+        bool m_alphaCheckerboardEnabled { false };
         
         // Pending decoded payload produced on a worker thread.
         // Consumed on the render/UI thread to create D2D bitmaps / upload to D3D resources.

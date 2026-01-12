@@ -65,9 +65,11 @@ namespace FD2D
         static Microsoft::WRL::ComPtr<ID3D11Buffer> g_vb {};
         static Microsoft::WRL::ComPtr<ID3D11Buffer> g_cb {};
         static Microsoft::WRL::ComPtr<ID3D11SamplerState> g_sampler {};
+        static Microsoft::WRL::ComPtr<ID3D11SamplerState> g_samplerWrap {};
         static Microsoft::WRL::ComPtr<ID3D11BlendState> g_blend {};
         static Microsoft::WRL::ComPtr<ID3D11RasterizerState> g_rsScissor {};
         static Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> g_backdropSrv {};
+        static Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> g_checkerSrv {};
 
         struct SrvCacheEntry
         {
@@ -152,7 +154,7 @@ namespace FD2D
             {
                 return E_INVALIDARG;
             }
-            if (g_vs && g_ps && g_inputLayout && g_vb && g_sampler && g_blend)
+            if (g_vs && g_ps && g_inputLayout && g_vb && g_sampler && g_samplerWrap && g_blend && g_rsScissor && g_cb && g_backdropSrv && g_checkerSrv)
             {
                 return S_OK;
             }
@@ -242,6 +244,20 @@ namespace FD2D
             if (FAILED(hr))
                 return hr;
 
+            // Wrap sampler for tiled checkerboard background.
+            if (!g_samplerWrap)
+            {
+                D3D11_SAMPLER_DESC sdWrap = sd;
+                sdWrap.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+                sdWrap.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+                sdWrap.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+                hr = device->CreateSamplerState(&sdWrap, &g_samplerWrap);
+                if (FAILED(hr))
+                {
+                    return hr;
+                }
+            }
+
             D3D11_BLEND_DESC blend {};
             blend.RenderTarget[0].BlendEnable = TRUE;
             blend.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
@@ -320,8 +336,71 @@ namespace FD2D
                 }
             }
 
+            // 64x64 checkerboard SRV for alpha visualization (tiled via wrap sampler).
+            if (!g_checkerSrv)
+            {
+                constexpr UINT texW = 64;
+                constexpr UINT texH = 64;
+                constexpr UINT tile = 8; // 8px squares
+
+                std::vector<UINT32> pixels;
+                pixels.resize(static_cast<size_t>(texW) * static_cast<size_t>(texH));
+
+                const UINT32 light = 0xFFF0F0F0; // AARRGGBB
+                const UINT32 dark = 0xFF707070;  // AARRGGBB
+
+                for (UINT y = 0; y < texH; ++y)
+                {
+                    for (UINT x = 0; x < texW; ++x)
+                    {
+                        const UINT tx = x / tile;
+                        const UINT ty = y / tile;
+                        const bool useDark = (((tx + ty) & 1U) != 0);
+                        pixels[static_cast<size_t>(y) * texW + x] = useDark ? dark : light;
+                    }
+                }
+
+                D3D11_TEXTURE2D_DESC td {};
+                td.Width = texW;
+                td.Height = texH;
+                td.MipLevels = 1;
+                td.ArraySize = 1;
+                td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                td.SampleDesc.Count = 1;
+                td.Usage = D3D11_USAGE_IMMUTABLE;
+                td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+                D3D11_SUBRESOURCE_DATA init {};
+                init.pSysMem = pixels.data();
+                init.SysMemPitch = texW * sizeof(UINT32);
+
+                Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
+                hr = device->CreateTexture2D(&td, &init, &tex);
+                if (FAILED(hr))
+                {
+                    return hr;
+                }
+
+                hr = device->CreateShaderResourceView(tex.Get(), nullptr, &g_checkerSrv);
+                if (FAILED(hr))
+                {
+                    return hr;
+                }
+            }
+
             return S_OK;
         }
+    }
+
+    void Image::SetAlphaCheckerboardEnabled(bool enabled)
+    {
+        if (m_alphaCheckerboardEnabled == enabled)
+        {
+            return;
+        }
+
+        m_alphaCheckerboardEnabled = enabled;
+        Invalidate();
     }
 
     Image::Image()
@@ -971,7 +1050,54 @@ namespace FD2D
             return destRect;
         };
 
-        const auto drawBitmapAspectFit = [this, target, &computeAspectFitDestRect](ID2D1Bitmap* bmp, float opacity)
+        const auto ensureCheckerBrushes = [this, target]()
+        {
+            if (m_checkerLightBrush && m_checkerDarkBrush)
+            {
+                return;
+            }
+
+            // Checker colors (opaque).
+            (void)target->CreateSolidColorBrush(D2D1::ColorF(0.94f, 0.94f, 0.94f, 1.0f), &m_checkerLightBrush);
+            (void)target->CreateSolidColorBrush(D2D1::ColorF(0.44f, 0.44f, 0.44f, 1.0f), &m_checkerDarkBrush);
+        };
+
+        const auto drawCheckerboard = [this, target, &ensureCheckerBrushes](const D2D1_RECT_F& rect)
+        {
+            if (!m_alphaCheckerboardEnabled)
+            {
+                return;
+            }
+
+            ensureCheckerBrushes();
+            if (!m_checkerLightBrush || !m_checkerDarkBrush)
+            {
+                return;
+            }
+
+            constexpr float tile = 8.0f; // DIP
+            if (tile <= 1.0f)
+            {
+                return;
+            }
+
+            const float startX = std::floor(rect.left / tile) * tile;
+            const float startY = std::floor(rect.top / tile) * tile;
+
+            for (float y = startY; y < rect.bottom; y += tile)
+            {
+                for (float x = startX; x < rect.right; x += tile)
+                {
+                    const int ix = static_cast<int>(std::floor((x - startX) / tile));
+                    const int iy = static_cast<int>(std::floor((y - startY) / tile));
+                    const bool dark = (((ix + iy) & 1) != 0);
+                    const D2D1_RECT_F r { x, y, x + tile, y + tile };
+                    target->FillRectangle(r, dark ? m_checkerDarkBrush.Get() : m_checkerLightBrush.Get());
+                }
+            }
+        };
+
+        const auto drawBitmapAspectFit = [this, target, &computeAspectFitDestRect, &drawCheckerboard](ID2D1Bitmap* bmp, float opacity)
         {
             if (bmp == nullptr || opacity <= 0.0f)
             {
@@ -983,6 +1109,8 @@ namespace FD2D
 
             const D2D1_RECT_F sourceRect = D2D1::RectF(0.0f, 0.0f, bitmapSize.width, bitmapSize.height);
             const D2D1_RECT_F destRect = computeAspectFitDestRect(layoutRect, bitmapSize);
+
+            drawCheckerboard(destRect);
 
             D2D1_BITMAP_INTERPOLATION_MODE interpMode = D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
             
@@ -1408,7 +1536,7 @@ namespace FD2D
         const auto toNdcX = [cs](float x) { return (x / static_cast<float>(cs.width)) * 2.0f - 1.0f; };
         const auto toNdcY = [cs](float y) { return 1.0f - (y / static_cast<float>(cs.height)) * 2.0f; };
 
-        const auto drawSrvRect = [&](ID3D11ShaderResourceView* srv, const D2D1_RECT_F& rectPx, float opacity)
+        const auto drawSrvRect = [&](ID3D11ShaderResourceView* srv, const D2D1_RECT_F& rectPx, float opacity, float uMax, float vMax, ID3D11SamplerState* samplerOverride)
         {
             if (!srv || opacity <= 0.0f)
             {
@@ -1450,9 +1578,9 @@ namespace FD2D
             {
                 auto* v = reinterpret_cast<QuadVertex*>(mapped.pData);
                 v[0] = { l, t, 0.0f, 0.0f };
-                v[1] = { r, t, 1.0f, 0.0f };
-                v[2] = { l, b, 0.0f, 1.0f };
-                v[3] = { r, b, 1.0f, 1.0f };
+                v[1] = { r, t, uMax, 0.0f };
+                v[2] = { l, b, 0.0f, vMax };
+                v[3] = { r, b, uMax, vMax };
                 context->Unmap(g_vb.Get(), 0);
             }
 
@@ -1464,7 +1592,8 @@ namespace FD2D
 
             context->VSSetShader(g_vs.Get(), nullptr, 0);
             context->PSSetShader(g_ps.Get(), nullptr, 0);
-            context->PSSetSamplers(0, 1, g_sampler.GetAddressOf());
+            ID3D11SamplerState* samp = samplerOverride ? samplerOverride : g_sampler.Get();
+            context->PSSetSamplers(0, 1, &samp);
             context->PSSetShaderResources(0, 1, &srv);
 
             float blendFactor[4] = { 0,0,0,0 };
@@ -1499,7 +1628,7 @@ namespace FD2D
         // during loading/transitions.
         if (m_request.purpose == ImageCore::ImagePurpose::FullResolution && g_backdropSrv)
         {
-            drawSrvRect(g_backdropSrv.Get(), layout, 1.0f);
+            drawSrvRect(g_backdropSrv.Get(), layout, 1.0f, 1.0f, 1.0f, nullptr);
         }
 
         if (!m_gpuSrv || m_gpuWidth == 0 || m_gpuHeight == 0)
@@ -1546,8 +1675,18 @@ namespace FD2D
             dest.right = dest.left + scaledW;
         }
 
+        // Checkerboard for alpha visualization (behind the image, in the image dest rect only).
+        if (m_alphaCheckerboardEnabled && g_checkerSrv && g_samplerWrap)
+        {
+            const float w = (std::max)(1.0f, dest.right - dest.left);
+            const float h = (std::max)(1.0f, dest.bottom - dest.top);
+            const float uMax = w / 64.0f;
+            const float vMax = h / 64.0f;
+            drawSrvRect(g_checkerSrv.Get(), dest, 1.0f, uMax, vMax, g_samplerWrap.Get());
+        }
+
         // No cross-fade: draw the currently available SRV (can be the previous image while the next loads).
-        drawSrvRect(m_gpuSrv.Get(), dest, 1.0f);
+        drawSrvRect(m_gpuSrv.Get(), dest, 1.0f, 1.0f, 1.0f, nullptr);
 
         // Restore previous raster/scissor state so we don't affect other controls.
         if (prevScissorCount > 0 && !prevScissors.empty())
