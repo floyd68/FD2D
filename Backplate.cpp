@@ -887,7 +887,15 @@ namespace FD2D
 
     void Backplate::SetFocusedWnd(Wnd* wnd)
     {
+        if (m_focusedWnd == wnd)
+        {
+            return;
+        }
         m_focusedWnd = wnd;
+        if (m_window != nullptr)
+        {
+            InvalidateRect(m_window, nullptr, FALSE);
+        }
     }
 
     void Backplate::ClearFocusIf(Wnd* wnd)
@@ -1487,6 +1495,55 @@ namespace FD2D
         m_layoutDirty = true;
     }
 
+    void Backplate::SetClearColor(const D2D1_COLOR_F& color)
+    {
+        m_clearColor = color;
+        if (m_window != nullptr)
+        {
+            InvalidateRect(m_window, nullptr, FALSE);
+        }
+    }
+
+    bool Backplate::ClearRectD3D(const D2D1_RECT_F& rect, const D2D1_COLOR_F& color)
+    {
+        if (m_rendererId == L"d2d_hwndrt" || !m_d3dContext || !m_rtv)
+        {
+            return false;
+        }
+
+        Microsoft::WRL::ComPtr<ID3D11DeviceContext1> ctx1 {};
+        if (FAILED(m_d3dContext.As(&ctx1)) || !ctx1)
+        {
+            return false;
+        }
+
+        const D2D1_SIZE_U cs = ClientSize();
+        if (cs.width == 0 || cs.height == 0)
+        {
+            return false;
+        }
+
+        D3D11_RECT r {};
+        r.left = static_cast<LONG>(std::floor(rect.left));
+        r.top = static_cast<LONG>(std::floor(rect.top));
+        r.right = static_cast<LONG>(std::ceil(rect.right));
+        r.bottom = static_cast<LONG>(std::ceil(rect.bottom));
+
+        r.left = (std::max)(0L, (std::min)(r.left, static_cast<LONG>(cs.width)));
+        r.top = (std::max)(0L, (std::min)(r.top, static_cast<LONG>(cs.height)));
+        r.right = (std::max)(0L, (std::min)(r.right, static_cast<LONG>(cs.width)));
+        r.bottom = (std::max)(0L, (std::min)(r.bottom, static_cast<LONG>(cs.height)));
+
+        if (r.left >= r.right || r.top >= r.bottom)
+        {
+            return false;
+        }
+
+        const float c[4] = { color.r, color.g, color.b, color.a };
+        ctx1->ClearView(m_rtv.Get(), c, &r, 1);
+        return true;
+    }
+
     void Backplate::RequestLayout()
     {
         m_layoutDirty = true;
@@ -1522,7 +1579,7 @@ namespace FD2D
             m_hwndRenderTarget->BeginDraw();
             m_hwndRenderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
             // Dark neutral gray with a *tiny* blue bias (low saturation)
-            m_hwndRenderTarget->Clear(D2D1::ColorF(0.09f, 0.09f, 0.10f, 1.0f));
+            m_hwndRenderTarget->Clear(m_clearColor);
 
             for (auto& pair : m_children)
             {
@@ -1543,8 +1600,7 @@ namespace FD2D
         // D3D pass (background + GPU images)
         if (m_d3dContext && m_rtv)
         {
-            // Dark neutral gray with a *tiny* blue bias (low saturation)
-            const float clearColor[4] = { 0.09f, 0.09f, 0.10f, 1.0f };
+            const float clearColor[4] = { m_clearColor.r, m_clearColor.g, m_clearColor.b, m_clearColor.a };
             m_d3dContext->OMSetRenderTargets(1, m_rtv.GetAddressOf(), nullptr);
             m_d3dContext->ClearRenderTargetView(m_rtv.Get(), clearColor);
 

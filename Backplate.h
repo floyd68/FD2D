@@ -110,6 +110,15 @@ namespace FD2D
         // debounced to avoid excessive INI writes.
         void SetOnWindowPlacementChanged(std::function<void(HWND)> handler);
 
+        // Global clear/background color (applies to both D2D-only and D3D swapchain backends).
+        // Default matches the previous hardcoded clear.
+        void SetClearColor(const D2D1_COLOR_F& color);
+        D2D1_COLOR_F ClearColor() const { return m_clearColor; }
+
+        // Per-rect clear for the D3D swapchain backend (used for per-ImageBrowser background).
+        // Returns false if not supported/available (e.g., D2D-only backend).
+        bool ClearRectD3D(const D2D1_RECT_F& rect, const D2D1_COLOR_F& color);
+
     private:
         static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
         bool HandleMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESULT& result);
@@ -176,6 +185,8 @@ namespace FD2D
         bool m_dropTargetRegistered { false };
         Microsoft::WRL::ComPtr<IDropTarget> m_dropTarget {};
         std::wstring m_dragPath {};
+
+        D2D1_COLOR_F m_clearColor { 0.09f, 0.09f, 0.10f, 1.0f };
     };
 }
 

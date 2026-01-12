@@ -69,7 +69,62 @@ namespace FD2D
         static Microsoft::WRL::ComPtr<ID3D11BlendState> g_blend {};
         static Microsoft::WRL::ComPtr<ID3D11RasterizerState> g_rsScissor {};
         static Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> g_backdropSrv {};
+        static UINT32 g_backdropColor = 0;
         static Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> g_checkerSrv {};
+
+        static UINT32 ColorFToAarrggbb(const D2D1_COLOR_F& c)
+        {
+            const auto ToByte = [](float v) -> UINT32
+            {
+                v = (std::max)(0.0f, (std::min)(1.0f, v));
+                return static_cast<UINT32>(std::floor(v * 255.0f + 0.5f));
+            };
+
+            const UINT32 a = ToByte(c.a);
+            const UINT32 r = ToByte(c.r);
+            const UINT32 g = ToByte(c.g);
+            const UINT32 b = ToByte(c.b);
+            return (a << 24) | (r << 16) | (g << 8) | b;
+        }
+
+        static HRESULT EnsureBackdropSrv(ID3D11Device* device, UINT32 aarrggbb)
+        {
+            if (!device)
+            {
+                return E_INVALIDARG;
+            }
+
+            if (g_backdropSrv && g_backdropColor == aarrggbb)
+            {
+                return S_OK;
+            }
+
+            g_backdropSrv.Reset();
+            g_backdropColor = aarrggbb;
+
+            D3D11_TEXTURE2D_DESC td {};
+            td.Width = 1;
+            td.Height = 1;
+            td.MipLevels = 1;
+            td.ArraySize = 1;
+            td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            td.SampleDesc.Count = 1;
+            td.Usage = D3D11_USAGE_IMMUTABLE;
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+            D3D11_SUBRESOURCE_DATA init {};
+            init.pSysMem = &aarrggbb;
+            init.SysMemPitch = sizeof(aarrggbb);
+
+            Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
+            HRESULT hr = device->CreateTexture2D(&td, &init, &tex);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
+
+            return device->CreateShaderResourceView(tex.Get(), nullptr, &g_backdropSrv);
+        }
 
         struct SrvCacheEntry
         {
@@ -154,7 +209,7 @@ namespace FD2D
             {
                 return E_INVALIDARG;
             }
-            if (g_vs && g_ps && g_inputLayout && g_vb && g_sampler && g_samplerWrap && g_blend && g_rsScissor && g_cb && g_backdropSrv && g_checkerSrv)
+            if (g_vs && g_ps && g_inputLayout && g_vb && g_sampler && g_samplerWrap && g_blend && g_rsScissor && g_cb && g_checkerSrv)
             {
                 return S_OK;
             }
@@ -300,41 +355,8 @@ namespace FD2D
                 return hr;
             }
 
-            // 1x1 backdrop SRV for drawing a stable letterbox under aspect-fit images.
-            if (!g_backdropSrv)
-            {
-                // Match the Backplate clear (dark neutral gray with tiny blue bias).
-                // IMPORTANT: this is AARRGGBB; in memory it's BGRA.
-                // (R,G,B)=(0x17,0x17,0x1A) => bytes: 1A 17 17 FF
-                const UINT32 backdrop = 0xFF17171A;
-
-                D3D11_TEXTURE2D_DESC td {};
-                td.Width = 1;
-                td.Height = 1;
-                td.MipLevels = 1;
-                td.ArraySize = 1;
-                td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                td.SampleDesc.Count = 1;
-                td.Usage = D3D11_USAGE_IMMUTABLE;
-                td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-                D3D11_SUBRESOURCE_DATA init {};
-                init.pSysMem = &backdrop;
-                init.SysMemPitch = sizeof(backdrop);
-
-                Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
-                hr = device->CreateTexture2D(&td, &init, &tex);
-                if (FAILED(hr))
-                {
-                    return hr;
-                }
-
-                hr = device->CreateShaderResourceView(tex.Get(), nullptr, &g_backdropSrv);
-                if (FAILED(hr))
-                {
-                    return hr;
-                }
-            }
+            // Ensure default 1x1 backdrop SRV exists (actual color is updated at draw time from Backplate).
+            (void)EnsureBackdropSrv(device, 0xFF17171A);
 
             // 64x64 checkerboard SRV for alpha visualization (tiled via wrap sampler).
             if (!g_checkerSrv)
@@ -448,6 +470,26 @@ namespace FD2D
         info.format = m_loadedFormat;
         info.sourcePath = m_loadedFilePath;
         return info;
+    }
+
+    void Image::SetBackdropColor(const D2D1_COLOR_F& color)
+    {
+        // Avoid excessive invalidation if unchanged.
+        if (m_backdropColorOverrideValid &&
+            std::abs(m_backdropColorOverride.r - color.r) < 0.0001f &&
+            std::abs(m_backdropColorOverride.g - color.g) < 0.0001f &&
+            std::abs(m_backdropColorOverride.b - color.b) < 0.0001f &&
+            std::abs(m_backdropColorOverride.a - color.a) < 0.0001f)
+        {
+            return;
+        }
+
+        m_backdropColorOverride = color;
+        m_backdropColorOverrideValid = true;
+
+        // Force brush refresh next render (D2D path).
+        m_backdropColorValid = false;
+        Invalidate();
     }
 
     void Image::SetViewTransform(const ViewTransform& vt, bool notify)
@@ -800,10 +842,23 @@ namespace FD2D
         // afterwards, so drawing a backdrop here would cover the GPU image.
         if (m_request.purpose == ImageCore::ImagePurpose::FullResolution && !gpuActive)
         {
-            if (!m_backdropBrush)
+            D2D1_COLOR_F bg = m_backdropColorOverrideValid
+                ? m_backdropColorOverride
+                : (BackplateRef() ? BackplateRef()->ClearColor() : D2D1::ColorF(0.09f, 0.09f, 0.10f, 1.0f));
+
+            const bool needsBrush = (!m_backdropBrush) ||
+                (!m_backdropColorValid) ||
+                (std::abs(m_backdropColor.r - bg.r) > 0.0001f) ||
+                (std::abs(m_backdropColor.g - bg.g) > 0.0001f) ||
+                (std::abs(m_backdropColor.b - bg.b) > 0.0001f) ||
+                (std::abs(m_backdropColor.a - bg.a) > 0.0001f);
+
+            if (needsBrush)
             {
-                // Match Backplate clear (dark neutral gray with tiny blue bias).
-                (void)target->CreateSolidColorBrush(D2D1::ColorF(0.09f, 0.09f, 0.10f, 1.0f), &m_backdropBrush);
+                m_backdropBrush.Reset();
+                (void)target->CreateSolidColorBrush(bg, &m_backdropBrush);
+                m_backdropColor = bg;
+                m_backdropColorValid = true;
             }
             if (m_backdropBrush)
             {
@@ -1483,6 +1538,10 @@ namespace FD2D
         }
 
         (void)EnsureD3DQuadResources(device);
+
+        // Keep the 1x1 backdrop SRV in sync with our backdrop color.
+        const D2D1_COLOR_F bg = m_backdropColorOverrideValid ? m_backdropColorOverride : m_backplate->ClearColor();
+        (void)EnsureBackdropSrv(device, ColorFToAarrggbb(bg));
 
         const D2D1_SIZE_U cs = m_backplate->ClientSize();
         if (cs.width == 0 || cs.height == 0)
