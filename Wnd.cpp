@@ -233,6 +233,40 @@ namespace FD2D
         m_childrenOrdered.clear();
     }
 
+    bool Wnd::ReorderChildren(const std::vector<std::wstring>& childNamesInOrder)
+    {
+        std::unordered_map<std::wstring, bool> seen;
+        seen.reserve(childNamesInOrder.size());
+
+        std::vector<std::shared_ptr<Wnd>> newOrder;
+        newOrder.reserve(childNamesInOrder.size());
+
+        for (const auto& childName : childNamesInOrder)
+        {
+            if (childName.empty())
+            {
+                return false;
+            }
+
+            if (seen.find(childName) != seen.end())
+            {
+                return false;
+            }
+            seen.emplace(childName, true);
+
+            auto it = m_children.find(childName);
+            if (it == m_children.end())
+            {
+                return false;
+            }
+
+            newOrder.push_back(it->second);
+        }
+
+        m_childrenOrdered = std::move(newOrder);
+        return true;
+    }
+
     const std::unordered_map<std::wstring, std::shared_ptr<Wnd>>& Wnd::Children() const
     {
         return m_children;

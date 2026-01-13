@@ -50,6 +50,9 @@ namespace FD2D
         bool AddChild(const std::shared_ptr<Wnd>& child);
         bool RemoveChild(const std::wstring& childName);
         void ClearChildren();
+        // Reorders the visual child iteration order without detaching/attaching children.
+        // Returns false if any name is missing or duplicated; on failure, order is unchanged.
+        bool ReorderChildren(const std::vector<std::wstring>& childNamesInOrder);
         const std::unordered_map<std::wstring, std::shared_ptr<Wnd>>& Children() const;
         // Deterministic child iteration order (insertion order).
         // Many panels assume child iteration order defines visual order.
