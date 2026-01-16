@@ -139,90 +139,12 @@ namespace FD2D
         m_scrollStep = (std::max)(1.0f, step);
     }
 
-    void ScrollView::SetSmoothScrollEnabled(bool enabled)
-    {
-        m_smoothScrollEnabled = enabled;
-        m_lastSmoothAnimMs = 0;
-        if (!m_smoothScrollEnabled)
-        {
-            m_targetScrollX = m_scrollX;
-            m_targetScrollY = m_scrollY;
-        }
-        Invalidate();
-    }
-
     void ScrollView::SetSmoothTimeMs(unsigned int timeMs)
     {
         m_smoothTimeMs = (std::max)(1U, timeMs);
     }
 
-    void ScrollView::EnsureVisible(const D2D1_RECT_F& rect, float padding)
-    {
-        const float pad = (std::max)(0.0f, padding);
-
-        // Viewport in client coordinates (same space as LayoutRect()).
-        const D2D1_RECT_F viewport = LayoutRect();
-
-        // Visible region in content coordinates is offset by current scroll.
-        const float visibleLeft = viewport.left + m_scrollX;
-        const float visibleRight = viewport.right + m_scrollX;
-        const float visibleTop = viewport.top + m_scrollY;
-        const float visibleBottom = viewport.bottom + m_scrollY;
-
-        float newScrollX = m_scrollX;
-        float newScrollY = m_scrollY;
-
-        if (m_enableHScroll)
-        {
-            if (rect.left < (visibleLeft + pad))
-            {
-                newScrollX = (rect.left - viewport.left) - pad;
-            }
-            else if (rect.right > (visibleRight - pad))
-            {
-                newScrollX = (rect.right - viewport.right) + pad;
-            }
-        }
-
-        if (m_enableVScroll)
-        {
-            if (rect.top < (visibleTop + pad))
-            {
-                newScrollY = (rect.top - viewport.top) - pad;
-            }
-            else if (rect.bottom > (visibleBottom - pad))
-            {
-                newScrollY = (rect.bottom - viewport.bottom) + pad;
-            }
-        }
-
-        // Apply only if something changed (avoids extra invalidation churn).
-        const float eps = 0.5f;
-        if (m_enableHScroll && std::fabs(newScrollX - m_scrollX) > eps)
-        {
-            if (m_smoothScrollEnabled)
-            {
-                SetTargetScrollX(newScrollX);
-            }
-            else
-            {
-                SetScrollX(newScrollX);
-            }
-        }
-        if (m_enableVScroll && std::fabs(newScrollY - m_scrollY) > eps)
-        {
-            if (m_smoothScrollEnabled)
-            {
-                SetTargetScrollY(newScrollY);
-            }
-            else
-            {
-                SetScrollY(newScrollY);
-            }
-        }
-    }
-
-    void ScrollView::EnsureCentered(const D2D1_RECT_F& rect)
+    void ScrollView::EnsureCentered(const D2D1_RECT_F& rect, bool Immediate)
     {
         const D2D1_RECT_F viewportOuter = LayoutRect();
 
@@ -270,24 +192,24 @@ namespace FD2D
         const float eps = 0.5f;
         if (m_enableHScroll && std::fabs(newScrollX - m_scrollX) > eps)
         {
-            if (m_smoothScrollEnabled)
+            if (Immediate)
             {
-                SetTargetScrollX(newScrollX);
+                SetScrollX(newScrollX);
             }
             else
             {
-                SetScrollX(newScrollX);
+                SetTargetScrollX(newScrollX);
             }
         }
         if (m_enableVScroll && std::fabs(newScrollY - m_scrollY) > eps)
         {
-            if (m_smoothScrollEnabled)
+            if (Immediate)
             {
-                SetTargetScrollY(newScrollY);
+                SetScrollY(newScrollY);
             }
             else
             {
-                SetScrollY(newScrollY);
+                SetTargetScrollY(newScrollY);
             }
         }
     }
@@ -435,11 +357,6 @@ namespace FD2D
 
     void ScrollView::AdvanceSmoothScroll(unsigned long long nowMs)
     {
-        if (!m_smoothScrollEnabled)
-        {
-            return;
-        }
-
         const float dx = m_targetScrollX - m_scrollX;
         const float dy = m_targetScrollY - m_scrollY;
         const float eps = 0.25f;
@@ -526,26 +443,12 @@ namespace FD2D
                 const float step = -ticks * m_scrollStep;
                 if (m_enableHScroll && (!m_enableVScroll || shift))
                 {
-                    if (m_smoothScrollEnabled)
-                    {
-                        SetTargetScrollX(m_targetScrollX + step);
-                    }
-                    else
-                    {
-                        SetScrollX(m_scrollX + step);
-                    }
+                    SetTargetScrollX(m_targetScrollX + step);
                     return true;
                 }
                 else if (m_enableVScroll)
                 {
-                    if (m_smoothScrollEnabled)
-                    {
-                        SetTargetScrollY(m_targetScrollY + step);
-                    }
-                    else
-                    {
-                        SetScrollY(m_scrollY + step);
-                    }
+                    SetTargetScrollY(m_targetScrollY + step);
                     return true;
                 }
             }
@@ -568,14 +471,7 @@ namespace FD2D
             const float step = -ticks * m_scrollStep;
             if (m_enableHScroll)
             {
-                if (m_smoothScrollEnabled)
-                {
-                    SetTargetScrollX(m_targetScrollX + step);
-                }
-                else
-                {
-                    SetScrollX(m_scrollX + step);
-                }
+                SetTargetScrollX(m_targetScrollX + step);
                 return true;
             }
             break;
