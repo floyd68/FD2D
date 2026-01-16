@@ -74,6 +74,23 @@ namespace FD2D
         return backplate;
     }
 
+    bool Application::RegisterBackplate(const std::shared_ptr<Backplate>& backplate)
+    {
+        if (!backplate)
+        {
+            return false;
+        }
+
+        const std::wstring name = backplate->Name();
+        if (name.empty() || m_backplates.find(name) != m_backplates.end())
+        {
+            return false;
+        }
+
+        m_backplates[name] = backplate;
+        return true;
+    }
+
     std::shared_ptr<Backplate> Application::GetBackplate(const std::wstring& name) const
     {
         auto it = m_backplates.find(name);

@@ -57,7 +57,7 @@ namespace FD2D
 
         Backplate();
         explicit Backplate(const std::wstring& name);
-        ~Backplate();
+        virtual ~Backplate();
 
         void SetName(const std::wstring& name);
         const std::wstring& Name() const;
@@ -143,6 +143,9 @@ namespace FD2D
         void HandleFileDragLeave();
 
         class DropTarget;
+
+    protected:
+        virtual Wnd* FindTargetWnd(const POINT& ptClient);
 
         HWND m_window { nullptr };
         D2D1_SIZE_U m_size { 0, 0 };

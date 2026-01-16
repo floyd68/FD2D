@@ -506,6 +506,8 @@ namespace FD2D
         m_pointerZoomActive = false;
         m_lastZoomAnimMs = FD2D::Util::NowMs();
 
+        ClampPanToVisible();
+
         const bool prevSuppress = m_suppressViewNotify;
         if (!notify)
         {
@@ -525,6 +527,121 @@ namespace FD2D
     void Image::SetOnViewChanged(ViewChangedHandler handler)
     {
         m_onViewChanged = std::move(handler);
+    }
+
+    bool Image::TryGetBitmapSize(D2D1_SIZE_F& outSize) const
+    {
+        if (m_loadedW > 0 && m_loadedH > 0)
+        {
+            outSize = { static_cast<float>(m_loadedW), static_cast<float>(m_loadedH) };
+            return true;
+        }
+
+        if (m_gpuWidth > 0 && m_gpuHeight > 0)
+        {
+            outSize = { static_cast<float>(m_gpuWidth), static_cast<float>(m_gpuHeight) };
+            return true;
+        }
+
+        if (m_bitmap)
+        {
+            outSize = m_bitmap->GetSize();
+            return true;
+        }
+
+        return false;
+    }
+
+    bool Image::TryComputeAspectFitBaseRect(const D2D1_RECT_F& layoutRect, const D2D1_SIZE_F& bitmapSize, D2D1_RECT_F& outRect) const
+    {
+        const float layoutWidth = layoutRect.right - layoutRect.left;
+        const float layoutHeight = layoutRect.bottom - layoutRect.top;
+
+        if (!(layoutWidth > 0.0f && layoutHeight > 0.0f && bitmapSize.width > 0.0f && bitmapSize.height > 0.0f))
+        {
+            return false;
+        }
+
+        const float bitmapAspect = bitmapSize.width / bitmapSize.height;
+        const float layoutAspect = layoutWidth / layoutHeight;
+
+        D2D1_RECT_F destRect = layoutRect;
+        if (bitmapAspect > layoutAspect)
+        {
+            const float scaledHeight = layoutWidth / bitmapAspect;
+            const float yOffset = (layoutHeight - scaledHeight) * 0.5f;
+            destRect.top = layoutRect.top + yOffset;
+            destRect.bottom = destRect.top + scaledHeight;
+        }
+        else
+        {
+            const float scaledWidth = layoutHeight * bitmapAspect;
+            const float xOffset = (layoutWidth - scaledWidth) * 0.5f;
+            destRect.left = layoutRect.left + xOffset;
+            destRect.right = destRect.left + scaledWidth;
+        }
+
+        outRect = destRect;
+        return true;
+    }
+
+    void Image::ClampPanToVisible()
+    {
+        if (m_request.purpose != ImageCore::ImagePurpose::FullResolution)
+        {
+            return;
+        }
+
+        D2D1_SIZE_F bitmapSize {};
+        if (!TryGetBitmapSize(bitmapSize))
+        {
+            return;
+        }
+
+        const D2D1_RECT_F layoutRect = LayoutRect();
+        D2D1_RECT_F baseRect {};
+        if (!TryComputeAspectFitBaseRect(layoutRect, bitmapSize, baseRect))
+        {
+            return;
+        }
+
+        const float width = baseRect.right - baseRect.left;
+        const float height = baseRect.bottom - baseRect.top;
+        if (width <= 0.0f || height <= 0.0f)
+        {
+            return;
+        }
+
+        const float scaledWidth = width * m_zoomScale;
+        const float scaledHeight = height * m_zoomScale;
+        if (scaledWidth <= 0.0f || scaledHeight <= 0.0f)
+        {
+            return;
+        }
+
+        const float centerX = (baseRect.left + baseRect.right) * 0.5f;
+        const float centerY = (baseRect.top + baseRect.bottom) * 0.5f;
+        constexpr float kMinVisible = 1.0f;
+
+        float minPanX = (layoutRect.left + kMinVisible) - (centerX + scaledWidth * 0.5f);
+        float maxPanX = (layoutRect.right - kMinVisible) - (centerX - scaledWidth * 0.5f);
+        if (minPanX > maxPanX)
+        {
+            const float mid = (minPanX + maxPanX) * 0.5f;
+            minPanX = mid;
+            maxPanX = mid;
+        }
+        m_panX = (std::max)(minPanX, (std::min)(maxPanX, m_panX));
+
+        float minPanY = (layoutRect.top + kMinVisible) - (centerY + scaledHeight * 0.5f);
+        float maxPanY = (layoutRect.bottom - kMinVisible) - (centerY - scaledHeight * 0.5f);
+        if (minPanY > maxPanY)
+        {
+            const float mid = (minPanY + maxPanY) * 0.5f;
+            minPanY = mid;
+            maxPanY = mid;
+        }
+        m_panY = (std::max)(minPanY, (std::min)(maxPanY, m_panY));
     }
 
     void Image::SetRect(const D2D1_RECT_F& rect)
@@ -1308,6 +1425,8 @@ namespace FD2D
             m_panY = dy - ((dy - m_pointerZoomStartPanY) * ratio);
         }
 
+        ClampPanToVisible();
+
         // Snap to target if very close and velocity is negligible
         if (std::abs(diff) < 0.001f && std::abs(m_zoomVelocity) < 0.001f)
         {
@@ -1406,6 +1525,7 @@ namespace FD2D
                 {
                     m_panX = m_panStartOffsetX + deltaX;
                     m_panY = m_panStartOffsetY + deltaY;
+                    ClampPanToVisible();
                     m_pointerZoomActive = false;
                     Invalidate();
                     if (!m_suppressViewNotify && m_onViewChanged)

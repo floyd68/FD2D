@@ -19,6 +19,7 @@ namespace FD2D
 
         std::shared_ptr<Backplate> CreateBackplate(const std::wstring& name);
         std::shared_ptr<Backplate> CreateWindowedBackplate(const std::wstring& name, const WindowOptions& options);
+        bool RegisterBackplate(const std::shared_ptr<Backplate>& backplate);
 
         std::shared_ptr<Backplate> GetBackplate(const std::wstring& name) const;
 

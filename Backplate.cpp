@@ -456,6 +456,12 @@ namespace FD2D
         UpdateWindow(m_window);
     }
 
+    Wnd* Backplate::FindTargetWnd(const POINT& ptClient)
+    {
+        UNREFERENCED_PARAMETER(ptClient);
+        return nullptr;
+    }
+
     LRESULT CALLBACK Backplate::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
         Backplate* self = reinterpret_cast<Backplate*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
@@ -827,11 +833,13 @@ namespace FD2D
             }
         };
 
+        bool hasMousePoint = false;
+        POINT ptClient {};
         if (IsMouseMessage(message) && m_window != nullptr)
         {
             // Extract coordinates from lParam
             POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            POINT ptClient = pt;
+            ptClient = pt;
             
             // Convert screen coordinates to client coordinates if needed
             // WM_MOUSEWHEEL always uses screen coordinates
@@ -853,6 +861,43 @@ namespace FD2D
             
             // Reconstruct lParam with client coordinates (which match Layout coordinate system)
             convertedLParam = MAKELPARAM(ptClient.x, ptClient.y);
+            hasMousePoint = true;
+        }
+
+        auto IsMouseDownMessage = [](UINT msg) -> bool
+        {
+            switch (msg)
+            {
+            case WM_LBUTTONDOWN:
+            case WM_RBUTTONDOWN:
+            case WM_MBUTTONDOWN:
+            case WM_XBUTTONDOWN:
+                return true;
+            default:
+                return false;
+            }
+        };
+
+        if (hasMousePoint && IsMouseDownMessage(message))
+        {
+            Wnd* target = FindTargetWnd(ptClient);
+            if (target != nullptr)
+            {
+                target->RequestFocus();
+            }
+        }
+
+        if (hasMousePoint && message == WM_RBUTTONUP)
+        {
+            Wnd* target = FindTargetWnd(ptClient);
+            if (target != nullptr)
+            {
+                if (target->OnMessage(message, convertedWParam, convertedLParam))
+                {
+                    result = 0;
+                    return true;
+                }
+            }
         }
 
         // Focus-based routing for non-mouse messages:

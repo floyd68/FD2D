@@ -92,6 +92,9 @@ namespace FD2D
             const std::wstring& sourcePath,
             HRESULT hr,
             ImageCore::DecodedImage image);
+        bool TryGetBitmapSize(D2D1_SIZE_F& outSize) const;
+        bool TryComputeAspectFitBaseRect(const D2D1_RECT_F& layoutRect, const D2D1_SIZE_F& bitmapSize, D2D1_RECT_F& outRect) const;
+        void ClampPanToVisible();
 
         std::wstring m_filePath {};
         // The source path currently represented by m_bitmap (can lag behind m_filePath while loading the next image).
