@@ -32,6 +32,8 @@ namespace FD2D
         DWORD style { 0 };
         DWORD exStyle { 0 };
         const wchar_t* className { L"FD2DWindowClass" };
+        HICON iconLarge { nullptr };
+        HICON iconSmall { nullptr };
         // Renderer backend selection (optional).
         // - nullptr or L"d3d11_swapchain": D3D11 swapchain + D2D interop (default, fastest, supports GPU DDS)
         // - L"d2d_hwndrt": D2D-only ID2D1HwndRenderTarget (more compatible, no D3D pass, no GPU DDS)

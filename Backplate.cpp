@@ -975,13 +975,13 @@ namespace FD2D
         wcex.cbClsExtra = 0;
         wcex.cbWndExtra = 0;
         wcex.hInstance = hInstance;
-        wcex.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
+        wcex.hIcon = options.iconLarge ? options.iconLarge : LoadIcon(nullptr, IDI_APPLICATION);
         wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
         // No GDI background brush; the swapchain is the only surface we want presented.
         wcex.hbrBackground = nullptr;
         wcex.lpszMenuName = nullptr;
         wcex.lpszClassName = options.className;
-        wcex.hIconSm = LoadIcon(nullptr, IDI_APPLICATION);
+        wcex.hIconSm = options.iconSmall ? options.iconSmall : LoadIcon(nullptr, IDI_APPLICATION);
 
         if (RegisterClassExW(&wcex) == 0)
         {
@@ -1072,6 +1072,15 @@ namespace FD2D
         if (window == nullptr)
         {
             return HRESULT_FROM_WIN32(GetLastError());
+        }
+
+        if (opts.iconLarge)
+        {
+            SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(opts.iconLarge));
+        }
+        if (opts.iconSmall)
+        {
+            SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(opts.iconSmall));
         }
 
         RECT rc {};
