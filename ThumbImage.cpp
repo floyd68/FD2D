@@ -197,45 +197,45 @@ namespace FD2D
 
         const std::wstring normalizedSource = FD2D::Util::NormalizePath(sourcePath);
 
-        if (SUCCEEDED(hr) && image.blocks && !image.blocks->empty())
+    if (SUCCEEDED(hr) && image.blocks && !image.blocks->empty())
+    {
         {
-            {
-                std::lock_guard<std::mutex> lock(m_pendingMutex);
-                m_pendingW = 0;
-                m_pendingH = 0;
-                m_pendingRowPitch = 0;
-                m_pendingFormat = DXGI_FORMAT_UNKNOWN;
-                m_pendingBlocks.reset();
-                m_pendingSourcePath = normalizedSource;
-                m_failedFilePath.clear();
-                m_failedHr = S_OK;
-                m_pendingW = image.width;
-                m_pendingH = image.height;
-                m_pendingRowPitch = image.rowPitchBytes;
-                m_pendingFormat = image.dxgiFormat;
-                m_pendingBlocks = std::move(image.blocks);
-            }
-
-            if (BackplateRef() != nullptr)
-            {
-                BackplateRef()->RequestAsyncRedraw();
-            }
+            std::lock_guard<std::mutex> lock(m_pendingMutex);
+            m_pendingW = 0;
+            m_pendingH = 0;
+            m_pendingRowPitch = 0;
+            m_pendingFormat = DXGI_FORMAT_UNKNOWN;
+            m_pendingBlocks.reset();
+            m_pendingSourcePath = normalizedSource;
+            m_failedFilePath.clear();
+            m_failedHr = S_OK;
+            m_pendingW = image.width;
+            m_pendingH = image.height;
+            m_pendingRowPitch = image.rowPitchBytes;
+            m_pendingFormat = image.dxgiFormat;
+            m_pendingBlocks = std::move(image.blocks);
         }
-        else
+
+        if (BackplateRef() != nullptr)
         {
-            {
-                std::lock_guard<std::mutex> lock(m_pendingMutex);
-                m_failedFilePath = normalizedSource;
-                m_failedHr = hr;
-            }
-            m_loading.store(false);
-            m_inflightToken.store(0);
-
-            if (BackplateRef() != nullptr)
-            {
-                BackplateRef()->RequestAsyncRedraw();
-            }
+            BackplateRef()->RequestAsyncRedraw();
         }
+    }
+    else
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_pendingMutex);
+            m_failedFilePath = normalizedSource;
+            m_failedHr = hr;
+        }
+        m_loading.store(false);
+        m_inflightToken.store(0);
+
+        if (BackplateRef() != nullptr)
+        {
+            BackplateRef()->RequestAsyncRedraw();
+        }
+    }
     }
 
     void ThumbImage::OnRender(ID2D1RenderTarget* target)
@@ -270,48 +270,48 @@ namespace FD2D
             }
         }
 
-        if (!pendingSource.empty() && pendingBlocks && pendingW > 0 && pendingH > 0 && pendingRowPitch > 0)
+    if (!pendingSource.empty() && pendingBlocks && pendingW > 0 && pendingH > 0 && pendingRowPitch > 0)
+    {
+        HRESULT hrBmp = E_FAIL;
+
+        // Thumbnails always render via D2D bitmap; expect CPU BGRA8 output.
+        if (pendingFormat == DXGI_FORMAT_B8G8R8A8_UNORM || pendingFormat == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB)
         {
-            HRESULT hrBmp = E_FAIL;
+            D2D1_BITMAP_PROPERTIES props{};
+            props.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            props.pixelFormat.alphaMode = D2D1_ALPHA_MODE_IGNORE;
+            props.dpiX = 96.0f;
+            props.dpiY = 96.0f;
 
-            // Thumbnails always render via D2D bitmap; expect CPU BGRA8 output.
-            if (pendingFormat == DXGI_FORMAT_B8G8R8A8_UNORM || pendingFormat == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB)
+            Microsoft::WRL::ComPtr<ID2D1Bitmap> d2dBitmap;
+            const D2D1_SIZE_U size = D2D1::SizeU(pendingW, pendingH);
+            hrBmp = target->CreateBitmap(
+                size,
+                pendingBlocks->data(),
+                pendingRowPitch,
+                &props,
+                &d2dBitmap);
+
+            if (SUCCEEDED(hrBmp) && d2dBitmap)
             {
-                D2D1_BITMAP_PROPERTIES props{};
-                props.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                props.pixelFormat.alphaMode = D2D1_ALPHA_MODE_IGNORE;
-                props.dpiX = 96.0f;
-                props.dpiY = 96.0f;
-
-                Microsoft::WRL::ComPtr<ID2D1Bitmap> d2dBitmap;
-                const D2D1_SIZE_U size = D2D1::SizeU(pendingW, pendingH);
-                hrBmp = target->CreateBitmap(
-                    size,
-                    pendingBlocks->data(),
-                    pendingRowPitch,
-                    &props,
-                    &d2dBitmap);
-
-                if (SUCCEEDED(hrBmp) && d2dBitmap)
-                {
-                    m_bitmap = d2dBitmap;
-                    m_loadedFilePath = pendingSource;
-                }
+                m_bitmap = d2dBitmap;
+                m_loadedFilePath = pendingSource;
             }
-            else
-            {
-                hrBmp = E_FAIL;
-            }
-
-            if (FAILED(hrBmp))
-            {
-                std::lock_guard<std::mutex> lock(m_pendingMutex);
-                m_failedFilePath = pendingSource;
-                m_failedHr = hrBmp;
-            }
-            m_loading.store(false);
-            m_inflightToken.store(0);
         }
+        else
+        {
+            hrBmp = E_FAIL;
+        }
+
+        if (FAILED(hrBmp))
+        {
+            std::lock_guard<std::mutex> lock(m_pendingMutex);
+            m_failedFilePath = pendingSource;
+            m_failedHr = hrBmp;
+        }
+        m_loading.store(false);
+        m_inflightToken.store(0);
+    }
 
         if (m_bitmap == nullptr && !m_loading.load())
         {
@@ -363,14 +363,21 @@ namespace FD2D
             const D2D1_RECT_F sourceRect = D2D1::RectF(0.0f, 0.0f, bitmapSize.width, bitmapSize.height);
             const D2D1_RECT_F destRect = computeAspectFitDestRect(layoutRect, bitmapSize);
 
+            /*
+            OutputDebugStringW((L"[ThumbImage] OnRender: Drawing bitmap, bitmapSize=" + 
+                std::to_wstring(bitmapSize.width) + L"x" + std::to_wstring(bitmapSize.height) + 
+                L", layoutRect=(" + std::to_wstring(layoutRect.left) + L"," + std::to_wstring(layoutRect.top) + L"," + 
+                std::to_wstring(layoutRect.right) + L"," + std::to_wstring(layoutRect.bottom) + L")\n").c_str());
+                */
+
             D2D1_BITMAP_INTERPOLATION_MODE interpMode = D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
             target->DrawBitmap(bmp, destRect, opacity, interpMode, sourceRect);
         };
 
-        if (m_bitmap)
-        {
-            drawBmp(m_bitmap.Get(), 1.0f);
-        }
+    if (m_bitmap)
+    {
+        drawBmp(m_bitmap.Get(), 1.0f);
+    }
 
         const bool shouldShowSpinner = m_loadingSpinnerEnabled && m_loading.load();
         if (m_loadingSpinner)

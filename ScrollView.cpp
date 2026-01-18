@@ -399,6 +399,12 @@ namespace FD2D
 
         // Clip to viewport + apply translation
         const D2D1_RECT_F clip = LayoutRect();
+        
+        // Debug: Check if clip rect is valid
+        if (Name() == L"thumbScroll")
+        {
+        }
+        
         target->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
         D2D1_MATRIX_3X2_F oldTransform {};
