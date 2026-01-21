@@ -12,6 +12,28 @@
 
 namespace FD2D
 {
+    namespace
+    {
+        static void LogThumbHr(const wchar_t* stage, const std::wstring& path, HRESULT hr)
+        {
+            if (SUCCEEDED(hr))
+            {
+                return;
+            }
+
+            wchar_t buf[512] {};
+            if (!path.empty())
+            {
+                swprintf_s(buf, L"[ThumbImage] %s failed (%s): 0x%08X\n", stage, path.c_str(), static_cast<unsigned>(hr));
+            }
+            else
+            {
+                swprintf_s(buf, L"[ThumbImage] %s failed: 0x%08X\n", stage, static_cast<unsigned>(hr));
+            }
+            OutputDebugStringW(buf);
+        }
+    }
+
     ThumbImage::ThumbImage()
         : Wnd()
         , m_request()
@@ -305,6 +327,7 @@ namespace FD2D
 
         if (FAILED(hrBmp))
         {
+            LogThumbHr(L"D2D CreateBitmap", pendingSource, hrBmp);
             std::lock_guard<std::mutex> lock(m_pendingMutex);
             m_failedFilePath = pendingSource;
             m_failedHr = hrBmp;

@@ -15,6 +15,25 @@ namespace FD2D
 {
     namespace
     {
+        static void LogImageHr(const wchar_t* stage, const std::wstring& path, HRESULT hr)
+        {
+            if (SUCCEEDED(hr))
+            {
+                return;
+            }
+
+            wchar_t buf[512] {};
+            if (!path.empty())
+            {
+                swprintf_s(buf, L"[Image] %s failed (%s): 0x%08X\n", stage, path.c_str(), static_cast<unsigned>(hr));
+            }
+            else
+            {
+                swprintf_s(buf, L"[Image] %s failed: 0x%08X\n", stage, static_cast<unsigned>(hr));
+            }
+            OutputDebugStringW(buf);
+        }
+
         static bool IsCompressedDxgiFormat(DXGI_FORMAT fmt)
         {
             switch (fmt)
@@ -1122,6 +1141,14 @@ namespace FD2D
                                 usedGpu = true;
                                 applied = true;
                             }
+                            else
+                            {
+                                LogImageHr(L"D3D CreateShaderResourceView", pendingSourcePath, hrSrv);
+                            }
+                        }
+                        else
+                        {
+                            LogImageHr(L"D3D CreateTexture2D", pendingSourcePath, hrTex);
                         }
 
                         if (!applied)
@@ -1174,6 +1201,7 @@ namespace FD2D
 
                     if (FAILED(hrBmp) && !applied)
                     {
+                        LogImageHr(L"D2D CreateBitmap", pendingSourcePath, hrBmp);
                         {
                             std::lock_guard<std::mutex> lock(m_pendingMutex);
                             m_failedFilePath = pendingSourcePath;
