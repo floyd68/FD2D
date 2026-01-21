@@ -64,6 +64,13 @@ namespace FD2D
         // Snapshot of the currently displayed (loaded) image metadata (UI thread).
         LoadedInfo GetLoadedInfo() const;
 
+        // Clear any displayed image and pending loads.
+        void ClearSource();
+
+        // Enable/disable zoom and pan interactions (click can still be handled).
+        void SetInteractionEnabled(bool enabled);
+        bool InteractionEnabled() const { return m_interactionEnabled; }
+
         // View transform (zoom/pan) for sync scenarios (compare mode).
         ViewTransform GetViewTransform() const;
         void SetViewTransform(const ViewTransform& vt, bool notify = true);
@@ -116,6 +123,7 @@ namespace FD2D
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_checkerLightBrush {};
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_checkerDarkBrush {};
         bool m_alphaCheckerboardEnabled { false };
+        bool m_interactionEnabled { true };
 
         D2D1_COLOR_F m_backdropColorOverride { 0.09f, 0.09f, 0.10f, 1.0f };
         bool m_backdropColorOverrideValid { false };

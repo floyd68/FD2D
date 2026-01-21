@@ -793,6 +793,68 @@ namespace FD2D
         return S_OK;
     }
 
+    void Image::ClearSource()
+    {
+        if (m_currentHandle != 0)
+        {
+            ImageCore::ImageLoader::Instance().Cancel(m_currentHandle);
+            m_currentHandle = 0;
+        }
+
+        m_loading.store(false);
+        m_inflightToken.store(0);
+
+        {
+            std::lock_guard<std::mutex> lock(m_pendingMutex);
+            m_pendingBlocks.reset();
+            m_pendingW = 0;
+            m_pendingH = 0;
+            m_pendingRowPitch = 0;
+            m_pendingFormat = DXGI_FORMAT_UNKNOWN;
+            m_pendingSourcePath.clear();
+            m_failedFilePath.clear();
+            m_failedHr = S_OK;
+        }
+
+        m_filePath.clear();
+        m_loadedFilePath.clear();
+        m_loadedW = 0;
+        m_loadedH = 0;
+        m_loadedFormat = DXGI_FORMAT_UNKNOWN;
+
+        m_bitmap.Reset();
+        m_gpuSrv.Reset();
+        m_gpuWidth = 0;
+        m_gpuHeight = 0;
+
+        m_request.source.clear();
+
+        Invalidate();
+    }
+
+    void Image::SetInteractionEnabled(bool enabled)
+    {
+        if (m_interactionEnabled == enabled)
+        {
+            return;
+        }
+
+        m_interactionEnabled = enabled;
+        if (!m_interactionEnabled)
+        {
+            m_panArmed = false;
+            m_panning = false;
+            m_pointerZoomActive = false;
+            if (BackplateRef() != nullptr && BackplateRef()->Window() != nullptr)
+            {
+                if (GetCapture() == BackplateRef()->Window())
+                {
+                    ReleaseCapture();
+                }
+            }
+        }
+    }
+
     void Image::SetOnClick(ClickHandler handler)
     {
         m_onClick = std::move(handler);
@@ -1453,6 +1515,36 @@ namespace FD2D
 
     bool Image::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)
     {
+        if (!m_interactionEnabled)
+        {
+            switch (message)
+            {
+            case WM_LBUTTONDOWN:
+            {
+                POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                const D2D1_RECT_F r = LayoutRect();
+                if (static_cast<float>(pt.x) >= r.left &&
+                    static_cast<float>(pt.x) <= r.right &&
+                    static_cast<float>(pt.y) >= r.top &&
+                    static_cast<float>(pt.y) <= r.bottom)
+                {
+                    if (m_onClick)
+                    {
+                        m_onClick();
+                        return true;
+                    }
+                }
+                break;
+            }
+            case WM_MOUSEMOVE:
+            case WM_LBUTTONUP:
+            case WM_MOUSEWHEEL:
+                return false;
+            default:
+                break;
+            }
+        }
+
         switch (message)
         {
         case WM_LBUTTONDOWN:
