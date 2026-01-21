@@ -83,7 +83,8 @@ namespace FD2D
         static Microsoft::WRL::ComPtr<ID3D11InputLayout> g_inputLayout {};
         static Microsoft::WRL::ComPtr<ID3D11Buffer> g_vb {};
         static Microsoft::WRL::ComPtr<ID3D11Buffer> g_cb {};
-        static Microsoft::WRL::ComPtr<ID3D11SamplerState> g_sampler {};
+        static Microsoft::WRL::ComPtr<ID3D11SamplerState> g_samplerPoint {};
+        static Microsoft::WRL::ComPtr<ID3D11SamplerState> g_samplerLinear {};
         static Microsoft::WRL::ComPtr<ID3D11SamplerState> g_samplerWrap {};
         static Microsoft::WRL::ComPtr<ID3D11BlendState> g_blend {};
         static Microsoft::WRL::ComPtr<ID3D11RasterizerState> g_rsScissor {};
@@ -228,7 +229,7 @@ namespace FD2D
             {
                 return E_INVALIDARG;
             }
-            if (g_vs && g_ps && g_inputLayout && g_vb && g_sampler && g_samplerWrap && g_blend && g_rsScissor && g_cb && g_checkerSrv)
+            if (g_vs && g_ps && g_inputLayout && g_vb && g_samplerPoint && g_samplerLinear && g_samplerWrap && g_blend && g_rsScissor && g_cb && g_checkerSrv)
             {
                 return S_OK;
             }
@@ -298,30 +299,42 @@ namespace FD2D
                 return hr;
             }
 
-            // Create sampler state with highest quality settings for optimal image quality
-            D3D11_SAMPLER_DESC sd {};
-            sd.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;  // Highest quality filtering mode
-            sd.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-            sd.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-            sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-            sd.MaxAnisotropy = 1;
-            sd.MinLOD = 0.0f;  // Use highest resolution mip level (best quality)
-            sd.MaxLOD = D3D11_FLOAT32_MAX;  // Allow all mip levels for proper mipmapping
-            sd.MipLODBias = 0.0f;  // No bias (neutral, best quality)
-            sd.ComparisonFunc = D3D11_COMPARISON_NEVER;  // No comparison sampling (standard texture sampling)
-            sd.BorderColor[0] = 0.0f;  // Black border (used with BORDER address mode, not CLAMP)
-            sd.BorderColor[1] = 0.0f;
-            sd.BorderColor[2] = 0.0f;
-            sd.BorderColor[3] = 0.0f;
-            
-            hr = device->CreateSamplerState(&sd, &g_sampler);
+            // Low-quality point sampling (pixelated)
+            D3D11_SAMPLER_DESC sdPoint {};
+            sdPoint.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+            sdPoint.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sdPoint.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sdPoint.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sdPoint.MaxAnisotropy = 1;
+            sdPoint.MinLOD = 0.0f;
+            sdPoint.MaxLOD = D3D11_FLOAT32_MAX;
+            sdPoint.MipLODBias = 0.0f;
+            sdPoint.ComparisonFunc = D3D11_COMPARISON_NEVER;
+            sdPoint.BorderColor[0] = 0.0f;
+            sdPoint.BorderColor[1] = 0.0f;
+            sdPoint.BorderColor[2] = 0.0f;
+            sdPoint.BorderColor[3] = 0.0f;
+
+            hr = device->CreateSamplerState(&sdPoint, &g_samplerPoint);
             if (FAILED(hr))
+            {
                 return hr;
+            }
+
+            // High-quality sampling (smooth)
+            D3D11_SAMPLER_DESC sdLinear = sdPoint;
+            sdLinear.Filter = D3D11_FILTER_ANISOTROPIC;
+            sdLinear.MaxAnisotropy = 16;
+            hr = device->CreateSamplerState(&sdLinear, &g_samplerLinear);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
 
             // Wrap sampler for tiled checkerboard background.
             if (!g_samplerWrap)
             {
-                D3D11_SAMPLER_DESC sdWrap = sd;
+                D3D11_SAMPLER_DESC sdWrap = sdPoint;
                 sdWrap.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
                 sdWrap.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
                 sdWrap.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
@@ -1381,12 +1394,33 @@ namespace FD2D
             
             if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
             {
+            if (m_highQualitySampling)
+            {
+                    if (d2dVersion >= FD2D::D2DVersion::D2D1_1)
+                    {
+                        Microsoft::WRL::ComPtr<ID2D1DeviceContext> dc;
+                        if (SUCCEEDED(target->QueryInterface(IID_PPV_ARGS(&dc))) && dc)
+                        {
+                            dc->DrawBitmap(
+                                bmp,
+                                destRect,
+                                opacity,
+                                D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+                                sourceRect);
+                            return;
+                        }
+                    }
+                    interpMode = D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
+            }
+            else
+            {
                 // Pixel-perfect sampling for compare workflows.
                 if (d2dVersion >= FD2D::D2DVersion::D2D1_1)
                 {
                     interpMode = D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR;
                 }
                 // Direct2D 1.0 fallback: use LINEAR (already set as default)
+            }
             }
 
             target->DrawBitmap(
@@ -1419,7 +1453,7 @@ namespace FD2D
     void Image::SetZoomScale(float scale)
     {
         constexpr float kMinZoom = 0.1f;
-        constexpr float kMaxZoom = 10.0f;
+        constexpr float kMaxZoom = 50.0f;
         m_targetZoomScale = std::max(kMinZoom, std::min(kMaxZoom, scale));
         m_lastZoomAnimMs = FD2D::Util::NowMs();
         // Immediately request animation frame for fast response
@@ -1891,7 +1925,9 @@ namespace FD2D
 
             context->VSSetShader(g_vs.Get(), nullptr, 0);
             context->PSSetShader(g_ps.Get(), nullptr, 0);
-            ID3D11SamplerState* samp = samplerOverride ? samplerOverride : g_sampler.Get();
+            ID3D11SamplerState* samp = samplerOverride
+                ? samplerOverride
+                : (m_highQualitySampling ? g_samplerLinear.Get() : g_samplerPoint.Get());
             context->PSSetSamplers(0, 1, &samp);
             context->PSSetShaderResources(0, 1, &srv);
 
@@ -2001,7 +2037,21 @@ namespace FD2D
         }
         context->RSSetState(prevRs.Get());
     }
+    void Image::SetHighQualitySampling(bool enabled)
+    {
+        if (m_highQualitySampling == enabled)
+        {
+            return;
+        }
+
+        m_highQualitySampling = enabled;
+        Invalidate();
+    }
+
+    void Image::ToggleSamplingQuality()
+    {
+        m_highQualitySampling = !m_highQualitySampling;
+        Invalidate();
+    }
 }
-
-
 

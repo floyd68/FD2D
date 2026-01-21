@@ -602,10 +602,6 @@ namespace FD2D
         {
             // 창이 완전히 생성된 후 렌더 타겟 생성
             EnsureRenderTarget();
-            // 타이틀바 정보 업데이트
-            UpdateTitleBarInfo();
-            DragAcceptFiles(m_window, TRUE);
-            (void)EnsureDropTargetRegistered();
             result = 0;
             return true;
         }
@@ -631,51 +627,6 @@ namespace FD2D
             BeginPaint(m_window, &ps);
             Render();
             EndPaint(m_window, &ps);
-            result = 0;
-            return true;
-        }
-
-        case WM_DROPFILES:
-        {
-            const HDROP hDrop = reinterpret_cast<HDROP>(wParam);
-            if (hDrop == nullptr)
-            {
-                result = 0;
-                return true;
-            }
-
-            wchar_t pathBuf[MAX_PATH] {};
-            const UINT fileCount = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
-            if (fileCount == 0)
-            {
-                DragFinish(hDrop);
-                result = 0;
-                return true;
-            }
-
-            POINT pt {};
-            (void)DragQueryPoint(hDrop, &pt); // client coordinates
-
-            const UINT cch = DragQueryFileW(hDrop, 0, pathBuf, static_cast<UINT>(std::size(pathBuf)));
-            DragFinish(hDrop);
-
-            if (cch == 0)
-            {
-                result = 0;
-                return true;
-            }
-
-            const std::wstring path(pathBuf);
-
-            // Route to UI tree: hit-test top-level children and allow Wnd overrides to handle.
-            for (auto& pair : m_children)
-            {
-                if (pair.second && pair.second->OnFileDrop(path, pt))
-                {
-                    break;
-                }
-            }
-
             result = 0;
             return true;
         }
@@ -753,8 +704,6 @@ namespace FD2D
         {
             // WM_CLOSE isn't guaranteed (e.g., DestroyWindow()); ensure we still persist once.
             InvokeBeforeDestroyOnce();
-            HandleFileDragLeave();
-            UnregisterDropTarget();
             if (m_window != nullptr && m_placeAutosaveTimerId != 0)
             {
                 KillTimer(m_window, m_placeAutosaveTimerId);
@@ -1055,6 +1004,8 @@ namespace FD2D
             style = (opts.chrome == ChromeStyle::Standard) ? WS_OVERLAPPEDWINDOW : WS_POPUP;
         }
 
+        m_rendererId = (opts.rendererId != nullptr) ? opts.rendererId : L"";
+
         HWND window = CreateWindowExW(
             exStyle,
             opts.className,
@@ -1086,8 +1037,6 @@ namespace FD2D
         RECT rc {};
         GetClientRect(window, &rc);
         m_size = D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top);
-
-        m_rendererId = (opts.rendererId != nullptr) ? opts.rendererId : L"";
 
         return S_OK;
     }
@@ -1810,62 +1759,7 @@ namespace FD2D
 
     void Backplate::UpdateTitleBarInfo()
     {
-        if (m_window == nullptr)
-        {
-            return;
-        }
-
-        // Get current window title
-        wchar_t currentTitle[256] = {};
-        GetWindowTextW(m_window, currentTitle, static_cast<int>(std::size(currentTitle)));
-
-        // Extract base title (remove existing info if present)
-        std::wstring baseTitle = currentTitle;
-        size_t infoPos = baseTitle.find(L" [");
-        if (infoPos != std::wstring::npos)
-        {
-            baseTitle = baseTitle.substr(0, infoPos);
-        }
-        if (baseTitle.empty())
-        {
-            baseTitle = L"FICture2"; // Default title
-        }
-
-        // Get Direct2D version
-        const char* d2dVersionStr = Core::GetD2DVersionString();
-        
-        // Extract version number (e.g., "Direct2D 1.3 (Windows 10+)" -> "1.3")
-        std::string d2dVersionA = d2dVersionStr;
-        size_t versionPos = d2dVersionA.find("1.");
-        std::string versionNum = "1.0";
-        if (versionPos != std::string::npos)
-        {
-            size_t endPos = versionPos + 3; // "1.x"
-            if (endPos > d2dVersionA.length()) endPos = d2dVersionA.length();
-            versionNum = d2dVersionA.substr(versionPos, endPos - versionPos);
-        }
-
-        // Convert to wide string
-        size_t len = versionNum.length();
-        std::wstring versionNumW(len + 1, L'\0');
-        mbstowcs_s(nullptr, &versionNumW[0], len + 1, versionNum.c_str(), len);
-        versionNumW.resize(len);
-
-        // Check if using D3D11 renderer
-        bool usingD3D11 = (m_rendererId.empty() || m_rendererId == L"d3d11_swapchain");
-
-        // Build new title with info on the right
-        wchar_t newTitle[512];
-        if (usingD3D11)
-        {
-            swprintf_s(newTitle, L"%ls [D2D %ls | D3D11]", baseTitle.c_str(), versionNumW.c_str());
-        }
-        else
-        {
-            swprintf_s(newTitle, L"%ls [D2D %ls]", baseTitle.c_str(), versionNumW.c_str());
-        }
-
-        SetWindowTextW(m_window, newTitle);
+        // Base Backplate does not impose application-specific title formatting.
     }
 }
 

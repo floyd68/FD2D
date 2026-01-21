@@ -102,7 +102,7 @@ namespace FD2D
         void RequestLayout();
 
         // Update window title bar with renderer information
-        void UpdateTitleBarInfo();
+        virtual void UpdateTitleBarInfo();
 
         // Called once right before the Backplate window begins destruction (WM_CLOSE/WM_DESTROY).
         // Use this to persist window placement/settings while the HWND is still valid.
@@ -123,7 +123,6 @@ namespace FD2D
 
     private:
         static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-        bool HandleMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESULT& result);
         bool RegisterClass(const WindowOptions& options);
         HRESULT Subclass(HWND windowHandle);
         HRESULT CreateRenderTarget();
@@ -138,16 +137,17 @@ namespace FD2D
         void SchedulePlacementAutosave();
         void FlushPlacementAutosave();
 
+        class DropTarget;
+
+    protected:
+        virtual Wnd* FindTargetWnd(const POINT& ptClient);
+        virtual bool HandleMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESULT& result);
+
         // OLE drag&drop (for live drag-hover visuals)
         bool EnsureDropTargetRegistered();
         void UnregisterDropTarget();
         void HandleFileDragOver(const std::wstring& path, const POINT& ptClient);
         void HandleFileDragLeave();
-
-        class DropTarget;
-
-    protected:
-        virtual Wnd* FindTargetWnd(const POINT& ptClient);
 
         HWND m_window { nullptr };
         D2D1_SIZE_U m_size { 0, 0 };

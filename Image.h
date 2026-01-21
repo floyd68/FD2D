@@ -83,6 +83,13 @@ namespace FD2D
         void SetAlphaCheckerboardEnabled(bool enabled);
         bool AlphaCheckerboardEnabled() const { return m_alphaCheckerboardEnabled; }
 
+        // Sampling quality:
+        // - Low: nearest/point (pixelated, exact)
+        // - High: linear/aniso (smooth, higher quality)
+        void SetHighQualitySampling(bool enabled);
+        bool HighQualitySampling() const { return m_highQualitySampling; }
+        void ToggleSamplingQuality();
+
         // Backdrop color behind the image (letterbox + behind transparent pixels).
         // This is separate from Backplate::ClearColor so containers (e.g., ImageBrowser)
         // can control their own background and focused background colors.
@@ -124,6 +131,7 @@ namespace FD2D
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_checkerDarkBrush {};
         bool m_alphaCheckerboardEnabled { false };
         bool m_interactionEnabled { true };
+        bool m_highQualitySampling { true };
 
         D2D1_COLOR_F m_backdropColorOverride { 0.09f, 0.09f, 0.10f, 1.0f };
         bool m_backdropColorOverrideValid { false };
