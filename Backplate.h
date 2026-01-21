@@ -11,6 +11,7 @@
 #include <string>
 #include <atomic>
 #include <functional>
+#include <vector>
 
 #include "Wnd.h"
 
@@ -142,11 +143,12 @@ namespace FD2D
     protected:
         virtual Wnd* FindTargetWnd(const POINT& ptClient);
         virtual bool HandleMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESULT& result);
+        virtual bool HandleFileDropPaths(const std::vector<std::wstring>& paths, const POINT& ptClient);
 
         // OLE drag&drop (for live drag-hover visuals)
         bool EnsureDropTargetRegistered();
         void UnregisterDropTarget();
-        void HandleFileDragOver(const std::wstring& path, const POINT& ptClient);
+        bool HandleFileDragOver(const std::wstring& path, const POINT& ptClient);
         void HandleFileDragLeave();
 
         HWND m_window { nullptr };

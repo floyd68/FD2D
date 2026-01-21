@@ -8,6 +8,7 @@
 #include <windowsx.h>  // For GET_X_LPARAM, GET_Y_LPARAM, MAKELPARAM
 #include <ole2.h>
 #include <oleidl.h>
+#include <vector>
 
 namespace FD2D
 {
@@ -176,6 +177,48 @@ namespace FD2D
             ReleaseStgMedium(&stg);
             return out;
         }
+
+        static std::vector<std::wstring> GetAllPathsFromDataObject(IDataObject* dataObject)
+        {
+            std::vector<std::wstring> out;
+            if (dataObject == nullptr)
+            {
+                return out;
+            }
+
+            FORMATETC fmt {};
+            fmt.cfFormat = CF_HDROP;
+            fmt.ptd = nullptr;
+            fmt.dwAspect = DVASPECT_CONTENT;
+            fmt.lindex = -1;
+            fmt.tymed = TYMED_HGLOBAL;
+
+            STGMEDIUM stg {};
+            if (FAILED(dataObject->GetData(&fmt, &stg)))
+            {
+                return out;
+            }
+
+            const HDROP hDrop = reinterpret_cast<HDROP>(stg.hGlobal);
+            if (hDrop != nullptr)
+            {
+                wchar_t buf[MAX_PATH] {};
+                const UINT fileCount = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+                out.reserve(fileCount);
+                for (UINT i = 0; i < fileCount; ++i)
+                {
+                    const UINT cch = DragQueryFileW(hDrop, i, buf, static_cast<UINT>(std::size(buf)));
+                    if (cch == 0)
+                    {
+                        continue;
+                    }
+                    out.emplace_back(buf);
+                }
+            }
+
+            ReleaseStgMedium(&stg);
+            return out;
+        }
     }
 
     class Backplate::DropTarget final : public IDropTarget
@@ -257,8 +300,8 @@ namespace FD2D
                 POINT ptClient = ptScreen;
                 ScreenToClient(m_owner->m_window, &ptClient);
 
-                m_owner->HandleFileDragOver(m_owner->m_dragPath, ptClient);
-                *pdwEffect = DROPEFFECT_COPY;
+                const bool handled = m_owner->HandleFileDragOver(m_owner->m_dragPath, ptClient);
+                *pdwEffect = handled ? DROPEFFECT_COPY : DROPEFFECT_NONE;
                 return S_OK;
             }
 
@@ -287,7 +330,7 @@ namespace FD2D
                     return S_OK;
                 }
 
-                const std::wstring path = GetFirstPathFromDataObject(pDataObj);
+                const auto paths = GetAllPathsFromDataObject(pDataObj);
 
                 POINT ptScreen { pt.x, pt.y };
                 POINT ptClient = ptScreen;
@@ -297,15 +340,9 @@ namespace FD2D
                 m_owner->HandleFileDragLeave();
                 m_owner->m_dragPath.clear();
 
-                for (auto& pair : m_owner->m_children)
-                {
-                    if (pair.second && pair.second->OnFileDrop(path, ptClient))
-                    {
-                        break;
-                    }
-                }
+                const bool handled = m_owner->HandleFileDropPaths(paths, ptClient);
 
-                *pdwEffect = DROPEFFECT_COPY;
+                *pdwEffect = handled ? DROPEFFECT_COPY : DROPEFFECT_NONE;
                 return S_OK;
             }
 
@@ -352,16 +389,18 @@ namespace FD2D
         m_dragPath.clear();
     }
 
-    void Backplate::HandleFileDragOver(const std::wstring& path, const POINT& ptClient)
+    bool Backplate::HandleFileDragOver(const std::wstring& path, const POINT& ptClient)
     {
         // Clear any prior visuals.
         HandleFileDragLeave();
 
         FileDragVisual visual = FileDragVisual::None;
+        bool handled = false;
         for (auto& pair : m_children)
         {
             if (pair.second && pair.second->OnFileDrag(path, ptClient, visual))
             {
+                handled = true;
                 break;
             }
         }
@@ -370,6 +409,8 @@ namespace FD2D
         {
             InvalidateRect(m_window, nullptr, FALSE);
         }
+
+        return handled;
     }
 
     void Backplate::HandleFileDragLeave()
@@ -386,6 +427,25 @@ namespace FD2D
         {
             InvalidateRect(m_window, nullptr, FALSE);
         }
+    }
+
+    bool Backplate::HandleFileDropPaths(const std::vector<std::wstring>& paths, const POINT& ptClient)
+    {
+        if (paths.empty())
+        {
+            return false;
+        }
+
+        const std::wstring& path = paths.front();
+        for (auto& pair : m_children)
+        {
+            if (pair.second && pair.second->OnFileDrop(path, ptClient))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     void Backplate::RequestAsyncRedraw()
