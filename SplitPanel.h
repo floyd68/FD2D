@@ -37,6 +37,7 @@ namespace FD2D
         ConstraintPropagation PropagationPolicy() const { return m_propagation; }
 
         void OnSplitChanged(std::function<void(float ratio)> handler);
+        bool IsSplitterDragging() const;
 
         Size Measure(Size available) override;
         Size MinSize() const override;

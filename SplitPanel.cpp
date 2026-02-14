@@ -118,6 +118,11 @@ namespace FD2D
         m_splitChanged = std::move(handler);
     }
 
+    bool SplitPanel::IsSplitterDragging() const
+    {
+        return (m_splitter != nullptr) && m_splitter->IsDragging();
+    }
+
     float SplitPanel::ClampRatioForPaneConstraints(const Rect& childArea, float splitterExtent, float ratio) const
     {
         float availableExtent = 0.0f;

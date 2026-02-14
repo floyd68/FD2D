@@ -44,6 +44,10 @@ namespace FD2D
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brush {};
         Microsoft::WRL::ComPtr<IDWriteTextFormat> m_format {};
         Microsoft::WRL::ComPtr<IDWriteInlineObject> m_ellipsisSign {};
+        Microsoft::WRL::ComPtr<IDWriteTextLayout> m_textLayout {};
+        float m_layoutWidth { 0.0f };
+        float m_layoutHeight { 0.0f };
+        bool m_textLayoutDirty { true };
     };
 }
 

@@ -86,6 +86,8 @@ namespace FD2D
         ID3D11Device* D3DDevice() const { return m_rendererId == L"d2d_hwndrt" ? nullptr : m_d3dDevice.Get(); }
         ID3D11DeviceContext* D3DContext() const { return m_rendererId == L"d2d_hwndrt" ? nullptr : m_d3dContext.Get(); }
         D2D1_SIZE_U ClientSize() const { return m_size; }
+        D2D1_SIZE_U RenderSurfaceSize() const { return m_renderSurfaceSize; }
+        D2D1_SIZE_F LogicalToRenderScale() const { return m_logicalToRenderScale; }
 
         // Cross-thread redraw signaling without PostMessage:
         // worker thread calls RequestAsyncRedraw() -> signals event (coalesced)
@@ -124,6 +126,7 @@ namespace FD2D
 
         // Check if currently rendering (to prevent recursive layout changes)
         bool IsRendering() const { return m_isRendering; }
+        bool IsInSizeMove() const { return m_inSizeMove; }
 
         // Per-rect clear for the D3D swapchain backend (used for per-ImageBrowser background).
         // Returns false if not supported/available (e.g., D2D-only backend).
@@ -206,6 +209,7 @@ namespace FD2D
         std::function<void(HWND)> m_onWindowPlacementChanged {};
         UINT_PTR m_placeAutosaveTimerId { 0 };
         bool m_inSizeMove { false };
+        bool m_resizeResourcesPending { false };
         bool m_offscreenResizePending { false };
 
         bool m_dropTargetRegistered { false };
@@ -213,6 +217,8 @@ namespace FD2D
         std::wstring m_dragPath {};
 
         D2D1_COLOR_F m_clearColor { 0.09f, 0.09f, 0.10f, 1.0f };
+        D2D1_SIZE_U m_renderSurfaceSize { 0, 0 };
+        D2D1_SIZE_F m_logicalToRenderScale { 1.0f, 1.0f };
         
         // Prevent recursive rendering (e.g., when layout changes during OnRender)
         bool m_isRendering { false };
