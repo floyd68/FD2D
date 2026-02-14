@@ -1,5 +1,7 @@
 #include "SplitPanel.h"
+#include "Backplate.h"
 #include <algorithm>
+#include <cmath>
 
 namespace FD2D
 {
@@ -64,7 +66,15 @@ namespace FD2D
 
     void SplitPanel::SetSplitRatio(float ratio)
     {
-        m_splitRatio = (std::max)(0.0f, (std::min)(1.0f, ratio));
+        const float newRatio = (std::max)(0.0f, (std::min)(1.0f, ratio));
+        
+        // Only invalidate if ratio actually changed (prevents unnecessary re-renders)
+        if (std::abs(m_splitRatio - newRatio) < 0.001f)
+        {
+            return;
+        }
+        
+        m_splitRatio = newRatio;
         if (m_splitter)
         {
             // Splitter의 현재 비율 업데이트 (내부적으로만)
