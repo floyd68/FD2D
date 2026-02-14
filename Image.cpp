@@ -1817,13 +1817,26 @@ namespace FD2D
         const D2D1_COLOR_F bg = m_backdropColorOverrideValid ? m_backdropColorOverride : m_backplate->ClearColor();
         (void)EnsureBackdropSrv(device, ColorFToAarrggbb(bg));
 
-        const D2D1_SIZE_U cs = m_backplate->ClientSize();
+        const D2D1_SIZE_U logicalCs = m_backplate->ClientSize();
+        D2D1_SIZE_U cs = m_backplate->RenderSurfaceSize();
         if (cs.width == 0 || cs.height == 0)
+        {
+            cs = logicalCs;
+        }
+        if (cs.width == 0 || cs.height == 0 || logicalCs.width == 0 || logicalCs.height == 0)
         {
             return;
         }
 
-        const D2D1_RECT_F layout = LayoutRect();
+        const D2D1_SIZE_F logicalToRender = m_backplate->LogicalToRenderScale();
+        const D2D1_RECT_F rawLayout = LayoutRect();
+        D2D1_RECT_F layout
+        {
+            rawLayout.left * logicalToRender.width,
+            rawLayout.top * logicalToRender.height,
+            rawLayout.right * logicalToRender.width,
+            rawLayout.bottom * logicalToRender.height
+        };
         const float layoutW = layout.right - layout.left;
         const float layoutH = layout.bottom - layout.top;
         if (!(layoutW > 0.0f && layoutH > 0.0f))
@@ -1878,6 +1891,8 @@ namespace FD2D
 
             // Apply zoom scale and pan offset for GPU path
             D2D1_RECT_F zoomedRect = rectPx;
+            const float panRenderX = m_panX * logicalToRender.width;
+            const float panRenderY = m_panY * logicalToRender.height;
             if (m_zoomScale != 1.0f)
             {
                 const float centerX = (rectPx.left + rectPx.right) * 0.5f;
@@ -1886,18 +1901,18 @@ namespace FD2D
                 const float height = rectPx.bottom - rectPx.top;
                 const float scaledWidth = width * m_zoomScale;
                 const float scaledHeight = height * m_zoomScale;
-                zoomedRect.left = centerX - scaledWidth * 0.5f + m_panX;
+                zoomedRect.left = centerX - scaledWidth * 0.5f + panRenderX;
                 zoomedRect.right = zoomedRect.left + scaledWidth;
-                zoomedRect.top = centerY - scaledHeight * 0.5f + m_panY;
+                zoomedRect.top = centerY - scaledHeight * 0.5f + panRenderY;
                 zoomedRect.bottom = zoomedRect.top + scaledHeight;
             }
             else if (std::abs(m_panX) > 0.001f || std::abs(m_panY) > 0.001f)
             {
                 // Apply pan even when not zoomed (though this shouldn't normally happen)
-                zoomedRect.left += m_panX;
-                zoomedRect.right += m_panX;
-                zoomedRect.top += m_panY;
-                zoomedRect.bottom += m_panY;
+                zoomedRect.left += panRenderX;
+                zoomedRect.right += panRenderX;
+                zoomedRect.top += panRenderY;
+                zoomedRect.bottom += panRenderY;
             }
 
             const float l = toNdcX(zoomedRect.left);

@@ -474,8 +474,16 @@ namespace FD2D
         m_asyncRedrawPending.store(false);
         ResetEvent(m_asyncRedrawEvent);
 
-        // Trigger a prompt repaint (once per coalesced burst).
-        RedrawWindow(m_window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+        // During interactive resizing, avoid synchronous repaint pressure.
+        if (m_inSizeMove)
+        {
+            InvalidateRect(m_window, nullptr, FALSE);
+        }
+        else
+        {
+            // Trigger a prompt repaint (once per coalesced burst).
+            RedrawWindow(m_window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+        }
     }
 
     void Backplate::RequestAnimationFrame()
@@ -504,8 +512,15 @@ namespace FD2D
             return;
         }
 
+        // Adaptive animation cadence:
+        // - Default: ~60fps for smooth interactions.
+        // - While async redraw bursts are pending (thumbnail decode completions) or during live resize:
+        //   back off to ~30fps to reduce UI-thread render pressure.
+        const unsigned long long minTickIntervalMs =
+            (m_inSizeMove || m_asyncRedrawPending.load()) ? 33ULL : 16ULL;
+
         const unsigned long long lastTick = m_lastAnimationTickMs.load();
-        if (lastTick != 0 && (nowMs - lastTick) < 16ULL)
+        if (lastTick != 0 && (nowMs - lastTick) < minTickIntervalMs)
         {
             return;
         }
@@ -597,14 +612,15 @@ namespace FD2D
         case WM_EXITSIZEMOVE:
         {
             m_inSizeMove = false;
-            if (m_offscreenResizePending)
+            if (m_resizeResourcesPending)
             {
-                m_offscreenResizePending = false;
-                m_offscreenRT.Reset();
-                m_offscreenBitmap.Reset();
-                m_offscreenTexture.Reset();
-                m_offscreenRTV.Reset();
-                m_offscreenD2DTarget.Reset();
+                m_resizeResourcesPending = false;
+                RECT rc {};
+                if (m_window != nullptr)
+                {
+                    GetClientRect(m_window, &rc);
+                    Resize(static_cast<UINT>(rc.right - rc.left), static_cast<UINT>(rc.bottom - rc.top));
+                }
             }
             // User finished an interactive move/resize; persist immediately.
             FlushPlacementAutosave();
@@ -749,6 +765,18 @@ namespace FD2D
         {
             if (m_placeAutosaveTimerId != 0 && wParam == m_placeAutosaveTimerId)
             {
+                // Avoid synchronous placement persistence during interactive resize.
+                // WM_EXITSIZEMOVE already performs a single final flush.
+                if (m_inSizeMove)
+                {
+                    if (m_window != nullptr)
+                    {
+                        (void)SetTimer(m_window, m_placeAutosaveTimerId, 200, nullptr);
+                    }
+                    result = 0;
+                    return true;
+                }
+
                 if (m_window != nullptr)
                 {
                     KillTimer(m_window, m_placeAutosaveTimerId);
@@ -1519,36 +1547,70 @@ namespace FD2D
             m_size = D2D1::SizeU(width, height);
         }
 
+        if (m_inSizeMove)
+        {
+            // Keep the primary render surface in sync with the live client size
+            // so layout/visual coordinates stay correct while dragging.
+            // Only defer off-screen resource recreation to WM_EXITSIZEMOVE.
+            m_resizeResourcesPending = true;
+            m_offscreenResizePending = true;
+            m_layoutDirty = true;
+
+            if (m_hwndRenderTarget)
+            {
+                (void)m_hwndRenderTarget->Resize(m_size);
+            }
+            else if (m_swapChain && m_d2dContext)
+            {
+                m_d2dTargetBitmap.Reset();
+                (void)m_d2dContext->SetTarget(nullptr);
+                m_rtv.Reset();
+
+                const HRESULT hrResize = m_swapChain->ResizeBuffers(0, m_size.width, m_size.height, DXGI_FORMAT_UNKNOWN, 0);
+                if (SUCCEEDED(hrResize))
+                {
+                    Microsoft::WRL::ComPtr<ID3D11Texture2D> backBufferTex;
+                    if (SUCCEEDED(m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBufferTex))))
+                    {
+                        (void)m_d3dDevice->CreateRenderTargetView(backBufferTex.Get(), nullptr, &m_rtv);
+                    }
+
+                    Microsoft::WRL::ComPtr<IDXGISurface> backBuffer;
+                    if (SUCCEEDED(m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer))))
+                    {
+                        const D2D1_BITMAP_PROPERTIES1 bp = MakeSwapChainBitmapProps();
+                        if (SUCCEEDED(m_d2dContext->CreateBitmapFromDxgiSurface(backBuffer.Get(), &bp, &m_d2dTargetBitmap)))
+                        {
+                            m_d2dContext->SetTarget(m_d2dTargetBitmap.Get());
+                        }
+                    }
+                }
+            }
+
+            if (m_window != nullptr)
+            {
+                InvalidateRect(m_window, nullptr, FALSE);
+            }
+            return;
+        }
+
         if (m_hwndRenderTarget)
         {
             (void)m_hwndRenderTarget->Resize(m_size);
-            // During live resize, defer off-screen recreation to avoid per-step churn.
-            if (m_inSizeMove)
-            {
-                m_offscreenResizePending = true;
-            }
-            else
-            {
-                m_offscreenRT.Reset();
-            }
+            m_offscreenRT.Reset();
+            m_offscreenResizePending = false;
         }
         else if (m_swapChain && m_d2dContext)
         {
             m_d2dTargetBitmap.Reset();
             (void)m_d2dContext->SetTarget(nullptr);
             m_rtv.Reset();
-            if (m_inSizeMove)
-            {
-                m_offscreenResizePending = true;
-            }
-            else
-            {
-                // Reset all off-screen buffers so they get recreated with new size
-                m_offscreenBitmap.Reset();
-                m_offscreenTexture.Reset();
-                m_offscreenRTV.Reset();
-                m_offscreenD2DTarget.Reset();
-            }
+            // Reset all off-screen buffers so they get recreated with new size
+            m_offscreenBitmap.Reset();
+            m_offscreenTexture.Reset();
+            m_offscreenRTV.Reset();
+            m_offscreenD2DTarget.Reset();
+            m_offscreenResizePending = false;
 
             // Resize swap chain buffers
             (void)m_swapChain->ResizeBuffers(0, m_size.width, m_size.height, DXGI_FORMAT_UNKNOWN, 0);
@@ -1602,17 +1664,30 @@ namespace FD2D
             return false;
         }
 
-        const D2D1_SIZE_U cs = ClientSize();
+        D2D1_SIZE_U cs = m_renderSurfaceSize;
+        if (cs.width == 0 || cs.height == 0)
+        {
+            cs = ClientSize();
+        }
         if (cs.width == 0 || cs.height == 0)
         {
             return false;
         }
 
+        const D2D1_SIZE_F scale = m_logicalToRenderScale;
+        const D2D1_RECT_F mappedRect
+        {
+            rect.left * scale.width,
+            rect.top * scale.height,
+            rect.right * scale.width,
+            rect.bottom * scale.height
+        };
+
         D3D11_RECT r {};
-        r.left = static_cast<LONG>(std::floor(rect.left));
-        r.top = static_cast<LONG>(std::floor(rect.top));
-        r.right = static_cast<LONG>(std::ceil(rect.right));
-        r.bottom = static_cast<LONG>(std::ceil(rect.bottom));
+        r.left = static_cast<LONG>(std::floor(mappedRect.left));
+        r.top = static_cast<LONG>(std::floor(mappedRect.top));
+        r.right = static_cast<LONG>(std::ceil(mappedRect.right));
+        r.bottom = static_cast<LONG>(std::ceil(mappedRect.bottom));
 
         r.left = (std::max)(0L, (std::min)(r.left, static_cast<LONG>(cs.width)));
         r.top = (std::max)(0L, (std::min)(r.top, static_cast<LONG>(cs.height)));
@@ -1634,7 +1709,14 @@ namespace FD2D
         m_layoutDirty = true;
         if (m_window != nullptr)
         {
-            Render();
+            if (m_inSizeMove || m_isRendering)
+            {
+                InvalidateRect(m_window, nullptr, FALSE);
+            }
+            else
+            {
+                Render();
+            }
         }
     }
 
@@ -1653,6 +1735,40 @@ namespace FD2D
         do
         {
             m_renderRequested = false;
+            m_renderSurfaceSize = m_size;
+            m_logicalToRenderScale = D2D1::SizeF(1.0f, 1.0f);
+
+            const auto updateRenderMapping = [this](UINT surfaceW, UINT surfaceH)
+            {
+                if (surfaceW == 0 || surfaceH == 0)
+                {
+                    m_renderSurfaceSize = m_size;
+                    m_logicalToRenderScale = D2D1::SizeF(1.0f, 1.0f);
+                    return;
+                }
+
+                m_renderSurfaceSize = D2D1::SizeU(surfaceW, surfaceH);
+                if (m_size.width == 0 || m_size.height == 0)
+                {
+                    m_logicalToRenderScale = D2D1::SizeF(1.0f, 1.0f);
+                    return;
+                }
+
+                // While resize resources are deferred, keep layout in logical client size
+                // but render into the previous surface by applying a coordinate scale.
+                if (m_inSizeMove &&
+                    m_resizeResourcesPending &&
+                    (surfaceW != m_size.width || surfaceH != m_size.height))
+                {
+                    m_logicalToRenderScale = D2D1::SizeF(
+                        static_cast<float>(surfaceW) / static_cast<float>(m_size.width),
+                        static_cast<float>(surfaceH) / static_cast<float>(m_size.height));
+                }
+                else
+                {
+                    m_logicalToRenderScale = D2D1::SizeF(1.0f, 1.0f);
+                }
+            };
 
             if (m_layoutDirty)
             {
@@ -1703,10 +1819,17 @@ namespace FD2D
                 }
             }
 
+            const D2D1_SIZE_U rtPx = renderTarget->GetPixelSize();
+            updateRenderMapping(rtPx.width, rtPx.height);
+            const D2D1_MATRIX_3X2_F logicalToRender = D2D1::Matrix3x2F::Scale(
+                m_logicalToRenderScale.width,
+                m_logicalToRenderScale.height);
+
             renderTarget->BeginDraw();
             renderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
             // Dark neutral gray with a *tiny* blue bias (low saturation)
             renderTarget->Clear(m_clearColor);
+            renderTarget->SetTransform(logicalToRender);
 
             for (auto& pair : m_children)
             {
@@ -1810,6 +1933,23 @@ namespace FD2D
             d3dRenderTarget = m_offscreenRTV.Get();
         }
 
+        UINT d3dSurfaceW = m_size.width;
+        UINT d3dSurfaceH = m_size.height;
+        if (d3dRenderTarget)
+        {
+            Microsoft::WRL::ComPtr<ID3D11Resource> rtResource {};
+            d3dRenderTarget->GetResource(&rtResource);
+            Microsoft::WRL::ComPtr<ID3D11Texture2D> rtTexture {};
+            if (rtResource && SUCCEEDED(rtResource.As(&rtTexture)) && rtTexture)
+            {
+                D3D11_TEXTURE2D_DESC td {};
+                rtTexture->GetDesc(&td);
+                d3dSurfaceW = td.Width;
+                d3dSurfaceH = td.Height;
+            }
+        }
+        updateRenderMapping(d3dSurfaceW, d3dSurfaceH);
+
         // D3D pass (background + GPU images)
         if (m_d3dContext && d3dRenderTarget)
         {
@@ -1820,8 +1960,8 @@ namespace FD2D
             D3D11_VIEWPORT vp {};
             vp.TopLeftX = 0.0f;
             vp.TopLeftY = 0.0f;
-            vp.Width = static_cast<float>(m_size.width);
-            vp.Height = static_cast<float>(m_size.height);
+            vp.Width = static_cast<float>(m_renderSurfaceSize.width);
+            vp.Height = static_cast<float>(m_renderSurfaceSize.height);
             vp.MinDepth = 0.0f;
             vp.MaxDepth = 1.0f;
             m_d3dContext->RSSetViewports(1, &vp);
@@ -1863,7 +2003,9 @@ namespace FD2D
         }
 
         m_d2dContext->BeginDraw();
-        m_d2dContext->SetTransform(D2D1::Matrix3x2F::Identity());
+        m_d2dContext->SetTransform(D2D1::Matrix3x2F::Scale(
+            m_logicalToRenderScale.width,
+            m_logicalToRenderScale.height));
 
         for (auto& pair : m_children)
         {

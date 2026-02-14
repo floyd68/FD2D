@@ -136,32 +136,36 @@ namespace FD2D
                 }
             }
 
-            const DWORD waitRes = MsgWaitForMultipleObjectsEx(
-                waitCount,
-                waitCount > 0 ? events.data() : nullptr,
-                timeoutMs,
-                QS_ALLINPUT,
-                MWMO_INPUTAVAILABLE);
-
-            if (waitRes == WAIT_FAILED)
+            DWORD waitRes = WAIT_TIMEOUT;
+            if (waitCount > 0)
             {
-                return -1;
-            }
+                waitRes = MsgWaitForMultipleObjectsEx(
+                    waitCount,
+                    waitCount > 0 ? events.data() : nullptr,
+                    timeoutMs,
+                    QS_ALLINPUT,
+                    MWMO_INPUTAVAILABLE);
 
-            // One of our async redraw events fired.
-            if (waitRes >= WAIT_OBJECT_0 && waitRes < WAIT_OBJECT_0 + waitCount)
-            {
-                for (const auto& kv : m_backplates)
+                if (waitRes == WAIT_FAILED)
                 {
-                    if (kv.second)
-                    {
-                        kv.second->ProcessAsyncRedraw();
-                    }
+                    return -1;
                 }
-                // Do NOT continue here:
-                // When worker completions arrive frequently (e.g., heavy I/O), we can starve the animation tick
-                // and make spinners/fades appear to "pause". We'll fall through to drain messages and run a
-                // throttled animation tick each loop.
+
+                // One of our async redraw events fired.
+                if (waitRes >= WAIT_OBJECT_0 && waitRes < WAIT_OBJECT_0 + waitCount)
+                {
+                    for (const auto& kv : m_backplates)
+                    {
+                        if (kv.second)
+                        {
+                            kv.second->ProcessAsyncRedraw();
+                        }
+                    }
+                    // Do NOT continue here:
+                    // When worker completions arrive frequently (e.g., heavy I/O), we can starve the animation tick
+                    // and make spinners/fades appear to "pause". We'll fall through to drain messages and run a
+                    // throttled animation tick each loop.
+                }
             }
 
             // Animation tick timeout (no messages/events, but animations are active).

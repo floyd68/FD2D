@@ -273,6 +273,9 @@ namespace FD2D
             return;
         }
 
+        FD2D::Backplate* bp = BackplateRef();
+        const bool deferBitmapUpload = (bp != nullptr && bp->IsInSizeMove());
+
         // Consume pending decoded image -> D2D bitmap (render thread).
         std::wstring pendingSource;
         std::shared_ptr<std::vector<uint8_t>> pendingBlocks {};
@@ -280,6 +283,7 @@ namespace FD2D
         uint32_t pendingH = 0;
         uint32_t pendingRowPitch = 0;
         DXGI_FORMAT pendingFormat = DXGI_FORMAT_UNKNOWN;
+        if (!deferBitmapUpload)
         {
             std::lock_guard<std::mutex> lock(m_pendingMutex);
             if (m_pendingBlocks)
@@ -324,12 +328,6 @@ namespace FD2D
             {
                 m_bitmap = d2dBitmap;
                 m_loadedFilePath = pendingSource;
-                
-                // Notify parent that bitmap size is now available (for variable-width thumbnails)
-                if (BackplateRef() != nullptr)
-                {
-                    BackplateRef()->RequestLayout();
-                }
             }
         }
         else
