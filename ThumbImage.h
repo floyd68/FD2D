@@ -42,6 +42,9 @@ namespace FD2D
         void SetOnClick(ClickHandler handler);
         void SetLoadingSpinnerEnabled(bool enabled);
 
+        // Get the loaded bitmap dimensions (returns 0,0 if not yet loaded)
+        D2D1_SIZE_F GetBitmapSize() const;
+
         void OnRender(ID2D1RenderTarget* target) override;
         bool OnMessage(UINT message, WPARAM wParam, LPARAM lParam) override;
 

@@ -407,7 +407,7 @@ namespace FD2D
 
         if (m_window != nullptr)
         {
-            InvalidateRect(m_window, nullptr, FALSE);
+            Render();
         }
 
         return handled;
@@ -425,7 +425,7 @@ namespace FD2D
 
         if (m_window != nullptr)
         {
-            InvalidateRect(m_window, nullptr, FALSE);
+            Render();
         }
     }
 
@@ -487,9 +487,9 @@ namespace FD2D
     {
         const unsigned long long last = m_lastAnimationRequestMs.load();
         // Consider animation active if someone requested frames recently.
-        // Use a generous window so we don't accidentally drop out of 60fps ticking mid-fade
-        // (e.g., due to a brief message burst / scheduling hiccup).
-        return (last != 0) && (nowMs - last <= 2000ULL);
+        // Use a small window to detect stale animation requests (100ms is ~6 frames at 60fps).
+        // This prevents stuck animation loops when no component actually needs animation.
+        return (last != 0) && (nowMs - last <= 100ULL);
     }
 
     void Backplate::ProcessAnimationTick(unsigned long long nowMs)
@@ -511,9 +511,8 @@ namespace FD2D
         }
         m_lastAnimationTickMs.store(nowMs);
 
-        // Trigger one paint at most per tick.
-        InvalidateRect(m_window, nullptr, FALSE);
-        UpdateWindow(m_window);
+        // Direct rendering: bypass message loop for smoother 60fps animation
+        Render();
     }
 
     Wnd* Backplate::FindTargetWnd(const POINT& ptClient)
@@ -598,6 +597,15 @@ namespace FD2D
         case WM_EXITSIZEMOVE:
         {
             m_inSizeMove = false;
+            if (m_offscreenResizePending)
+            {
+                m_offscreenResizePending = false;
+                m_offscreenRT.Reset();
+                m_offscreenBitmap.Reset();
+                m_offscreenTexture.Reset();
+                m_offscreenRTV.Reset();
+                m_offscreenD2DTarget.Reset();
+            }
             // User finished an interactive move/resize; persist immediately.
             FlushPlacementAutosave();
             result = 0;
@@ -696,12 +704,7 @@ namespace FD2D
             // worker thread에서 PostMessage로 들어온 redraw 요청
             if (m_window)
             {
-                // Fast but cheap:
-                // - InvalidateRect is low overhead and coalesces dirty regions
-                // - We schedule a single UI-thread "flush" message to call UpdateWindow()
-                //   so paint happens promptly without forcing RDW_UPDATENOW for every completion.
-                InvalidateRect(m_window, nullptr, FALSE);
-
+                // Direct rendering: bypass message loop and invalidation
                 if (!m_flushRedrawQueued)
                 {
                     m_flushRedrawQueued = true;
@@ -717,8 +720,8 @@ namespace FD2D
             m_flushRedrawQueued = false;
             if (m_window)
             {
-                // If there is an invalid region, this synchronously triggers WM_PAINT once.
-                UpdateWindow(m_window);
+                // Direct rendering instead of UpdateWindow()
+                Render();
             }
             result = 0;
             return true;
@@ -946,9 +949,10 @@ namespace FD2D
             return;
         }
         m_focusedWnd = wnd;
+        UpdateTitleBarInfo();
         if (m_window != nullptr)
         {
-            InvalidateRect(m_window, nullptr, FALSE);
+            Render();
         }
     }
 
@@ -1474,6 +1478,10 @@ namespace FD2D
 
         m_rtv.Reset();
         m_d2dTargetBitmap.Reset();
+        m_offscreenBitmap.Reset();
+        m_offscreenRTV.Reset();
+        m_offscreenTexture.Reset();
+        m_offscreenD2DTarget.Reset();
     }
 
     void Backplate::DiscardDeviceResources()
@@ -1495,6 +1503,7 @@ namespace FD2D
         m_d3dDevice.Reset();
 
         m_hwndRenderTarget.Reset();
+        m_offscreenRT.Reset();
     }
 
     void Backplate::Resize(UINT width, UINT height)
@@ -1513,12 +1522,33 @@ namespace FD2D
         if (m_hwndRenderTarget)
         {
             (void)m_hwndRenderTarget->Resize(m_size);
+            // During live resize, defer off-screen recreation to avoid per-step churn.
+            if (m_inSizeMove)
+            {
+                m_offscreenResizePending = true;
+            }
+            else
+            {
+                m_offscreenRT.Reset();
+            }
         }
         else if (m_swapChain && m_d2dContext)
         {
             m_d2dTargetBitmap.Reset();
             (void)m_d2dContext->SetTarget(nullptr);
             m_rtv.Reset();
+            if (m_inSizeMove)
+            {
+                m_offscreenResizePending = true;
+            }
+            else
+            {
+                // Reset all off-screen buffers so they get recreated with new size
+                m_offscreenBitmap.Reset();
+                m_offscreenTexture.Reset();
+                m_offscreenRTV.Reset();
+                m_offscreenD2DTarget.Reset();
+            }
 
             // Resize swap chain buffers
             (void)m_swapChain->ResizeBuffers(0, m_size.width, m_size.height, DXGI_FORMAT_UNKNOWN, 0);
@@ -1540,22 +1570,14 @@ namespace FD2D
             }
         }
 
-        Rect root { 0.0f, 0.0f, static_cast<float>(m_size.width), static_cast<float>(m_size.height) };
-        for (auto& pair : m_children)
-        {
-            if (pair.second)
-            {
-                pair.second->Measure({ root.w, root.h });
-                pair.second->Arrange(root);
-            }
-        }
+        // Let the normal layout pass handle child measure/arrange once (avoids duplicate work per WM_SIZE).
+        m_layoutDirty = true;
 
         if (m_window != nullptr)
         {
-            InvalidateRect(m_window, nullptr, FALSE);
+            // Direct rendering for resize.
+            Render();
         }
-
-        m_layoutDirty = true;
     }
 
     void Backplate::SetClearColor(const D2D1_COLOR_F& color)
@@ -1563,7 +1585,7 @@ namespace FD2D
         m_clearColor = color;
         if (m_window != nullptr)
         {
-            InvalidateRect(m_window, nullptr, FALSE);
+            Render();
         }
     }
 
@@ -1612,60 +1634,188 @@ namespace FD2D
         m_layoutDirty = true;
         if (m_window != nullptr)
         {
-            InvalidateRect(m_window, nullptr, FALSE);
+            Render();
         }
     }
 
     void Backplate::Render()
     {
-        if (m_layoutDirty)
+        // Prevent recursive rendering (e.g., layout changes during OnRender triggering Invalidate)
+        if (m_isRendering)
         {
-            Layout();
+            m_renderRequested = true;
+            return;
         }
-        HRESULT hrEnsure = EnsureRenderTarget();
-        if (FAILED(hrEnsure))
+
+        m_isRendering = true;
+
+        // Render loop: continue until no more render requests
+        do
         {
-            // If D3D path failed, try automatic fallback to D2D-only once.
-            if (m_rendererId != L"d2d_hwndrt" && SUCCEEDED(FallbackToD2DOnly(hrEnsure)))
+            m_renderRequested = false;
+
+            if (m_layoutDirty)
             {
-                // Continue rendering with D2D-only below.
+                Layout();
             }
-            else
+            HRESULT hrEnsure = EnsureRenderTarget();
+            if (FAILED(hrEnsure))
             {
-                return;
+                // If D3D path failed, try automatic fallback to D2D-only once.
+                if (m_rendererId != L"d2d_hwndrt" && SUCCEEDED(FallbackToD2DOnly(hrEnsure)))
+                {
+                    // Continue rendering with D2D-only below.
+                }
+                else
+                {
+                    m_isRendering = false;
+                    return;
+                }
             }
-        }
 
         // D2D-only renderer path (no D3D pass).
         if (m_hwndRenderTarget)
         {
-            m_hwndRenderTarget->BeginDraw();
-            m_hwndRenderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
+            ID2D1RenderTarget* renderTarget = m_hwndRenderTarget.Get();
+
+            // During live resize, avoid off-screen path to reduce realloc/copy overhead.
+            const bool useOffscreenThisFrame = m_useOffscreenBuffer && !m_inSizeMove;
+            if (useOffscreenThisFrame)
+            {
+                if (!m_offscreenRT)
+                {
+                    const D2D1_SIZE_F size = m_hwndRenderTarget->GetSize();
+                    const D2D1_SIZE_U pixelSize = D2D1::SizeU(
+                        static_cast<UINT32>(size.width),
+                        static_cast<UINT32>(size.height));
+                    
+                    (void)m_hwndRenderTarget->CreateCompatibleRenderTarget(
+                        &size,
+                        &pixelSize,
+                        nullptr,
+                        D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE,
+                        &m_offscreenRT);
+                }
+
+                if (m_offscreenRT)
+                {
+                    renderTarget = m_offscreenRT.Get();
+                }
+            }
+
+            renderTarget->BeginDraw();
+            renderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
             // Dark neutral gray with a *tiny* blue bias (low saturation)
-            m_hwndRenderTarget->Clear(m_clearColor);
+            renderTarget->Clear(m_clearColor);
 
             for (auto& pair : m_children)
             {
                 if (pair.second)
                 {
-                    pair.second->OnRender(m_hwndRenderTarget.Get());
+                    pair.second->OnRender(renderTarget);
                 }
             }
 
-            HRESULT hr = m_hwndRenderTarget->EndDraw();
+            HRESULT hr = renderTarget->EndDraw();
             if (hr == D2DERR_RECREATE_TARGET)
             {
                 m_hwndRenderTarget.Reset();
+                m_offscreenRT.Reset();
+                return;
             }
-            return;
+
+            // Copy offscreen buffer to window if double-buffering is active
+            if (useOffscreenThisFrame && m_offscreenRT)
+            {
+                Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap;
+                if (SUCCEEDED(m_offscreenRT->GetBitmap(&bitmap)) && bitmap)
+                {
+                    m_hwndRenderTarget->BeginDraw();
+                    m_hwndRenderTarget->Clear(m_clearColor);
+                    
+                    const D2D1_SIZE_F size = m_hwndRenderTarget->GetSize();
+                    const D2D1_RECT_F destRect = D2D1::RectF(0.0f, 0.0f, size.width, size.height);
+                    
+                    m_hwndRenderTarget->DrawBitmap(
+                        bitmap.Get(),
+                        destRect,
+                        1.0f,
+                        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                        nullptr);
+                    
+                    hr = m_hwndRenderTarget->EndDraw();
+                    if (hr == D2DERR_RECREATE_TARGET)
+                    {
+                        m_hwndRenderTarget.Reset();
+                        m_offscreenRT.Reset();
+                    }
+                }
+            }
+            
+            // D2D-only path complete - continue to check if re-render needed
+        }
+        else
+        {
+        // Create D3D11 off-screen resources if enabled
+        const bool useOffscreenThisFrame = m_useOffscreenBuffer && !m_inSizeMove;
+        if (useOffscreenThisFrame && m_d3dDevice && m_size.width > 0 && m_size.height > 0)
+        {
+            if (!m_offscreenTexture || !m_offscreenRTV)
+            {
+                // Create off-screen texture
+                D3D11_TEXTURE2D_DESC texDesc = {};
+                texDesc.Width = m_size.width;
+                texDesc.Height = m_size.height;
+                texDesc.MipLevels = 1;
+                texDesc.ArraySize = 1;
+                texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                texDesc.SampleDesc.Count = 1;
+                texDesc.SampleDesc.Quality = 0;
+                texDesc.Usage = D3D11_USAGE_DEFAULT;
+                texDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                texDesc.CPUAccessFlags = 0;
+                texDesc.MiscFlags = 0;
+
+                if (SUCCEEDED(m_d3dDevice->CreateTexture2D(&texDesc, nullptr, &m_offscreenTexture)))
+                {
+                    (void)m_d3dDevice->CreateRenderTargetView(m_offscreenTexture.Get(), nullptr, &m_offscreenRTV);
+                    
+                    // Create D2D bitmap from offscreen texture
+                    if (m_d2dContext && m_offscreenTexture)
+                    {
+                        Microsoft::WRL::ComPtr<IDXGISurface> surface;
+                        if (SUCCEEDED(m_offscreenTexture.As(&surface)))
+                        {
+                            // Off-screen texture needs PREMULTIPLIED alpha (can be used as both target and source)
+                            D2D1_BITMAP_PROPERTIES1 bp = {};
+                            bp.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                            bp.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
+                            m_d2dContext->GetDpi(&bp.dpiX, &bp.dpiY);
+                            bp.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET;
+                            
+                            (void)m_d2dContext->CreateBitmapFromDxgiSurface(
+                                surface.Get(),
+                                &bp,
+                                &m_offscreenD2DTarget);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Select D3D render target: offscreen or direct
+        ID3D11RenderTargetView* d3dRenderTarget = m_rtv.Get();
+        if (useOffscreenThisFrame && m_offscreenRTV)
+        {
+            d3dRenderTarget = m_offscreenRTV.Get();
         }
 
         // D3D pass (background + GPU images)
-        if (m_d3dContext && m_rtv)
+        if (m_d3dContext && d3dRenderTarget)
         {
             const float clearColor[4] = { m_clearColor.r, m_clearColor.g, m_clearColor.b, m_clearColor.a };
-            m_d3dContext->OMSetRenderTargets(1, m_rtv.GetAddressOf(), nullptr);
-            m_d3dContext->ClearRenderTargetView(m_rtv.Get(), clearColor);
+            m_d3dContext->OMSetRenderTargets(1, &d3dRenderTarget, nullptr);
+            m_d3dContext->ClearRenderTargetView(d3dRenderTarget, clearColor);
 
             D3D11_VIEWPORT vp {};
             vp.TopLeftX = 0.0f;
@@ -1684,7 +1834,7 @@ namespace FD2D
                 }
             }
 
-            // IMPORTANT: ensure we release the swapchain backbuffer from the D3D OM stage
+            // IMPORTANT: ensure we release the render target from the D3D OM stage
             // before letting D2D draw to it.
             ID3D11RenderTargetView* nullRTV[1] = { nullptr };
             m_d3dContext->OMSetRenderTargets(1, nullRTV, nullptr);
@@ -1698,10 +1848,18 @@ namespace FD2D
             (void)RecreateSwapChainTargets();
         }
 
-        // We detach the target after each frame; ensure it is set for this draw.
-        if (m_d2dContext && m_d2dTargetBitmap)
+        // Select D2D render target: offscreen (shared with D3D) or direct
+        ID2D1Image* d2dRenderTarget = m_d2dTargetBitmap.Get();
+        if (useOffscreenThisFrame && m_offscreenD2DTarget)
         {
-            m_d2dContext->SetTarget(m_d2dTargetBitmap.Get());
+            // Use the D2D view of the offscreen texture (already has D3D content)
+            d2dRenderTarget = m_offscreenD2DTarget.Get();
+        }
+
+        // We detach the target after each frame; ensure it is set for this draw.
+        if (m_d2dContext && d2dRenderTarget)
+        {
+            m_d2dContext->SetTarget(d2dRenderTarget);
         }
 
         m_d2dContext->BeginDraw();
@@ -1716,6 +1874,26 @@ namespace FD2D
         }
 
         HRESULT hr = m_d2dContext->EndDraw();
+        
+        // Copy offscreen to swap chain backbuffer if double-buffering
+        if (SUCCEEDED(hr) && useOffscreenThisFrame && m_offscreenD2DTarget && m_d2dTargetBitmap)
+        {
+            m_d2dContext->SetTarget(m_d2dTargetBitmap.Get());
+            m_d2dContext->BeginDraw();
+            m_d2dContext->SetTransform(D2D1::Matrix3x2F::Identity());
+            
+            // Draw the complete offscreen buffer (D3D + D2D) to the swap chain
+            const D2D1_POINT_2F targetOffset = D2D1::Point2F(0.0f, 0.0f);
+            
+            m_d2dContext->DrawImage(
+                m_offscreenD2DTarget.Get(),
+                &targetOffset,
+                nullptr,
+                D2D1_INTERPOLATION_MODE_LINEAR,
+                D2D1_COMPOSITE_MODE_SOURCE_COPY);
+            
+            hr = m_d2dContext->EndDraw();
+        }
         if (FAILED(hr))
         {
             d2dOk = false;
@@ -1739,6 +1917,11 @@ namespace FD2D
         {
             (void)m_swapChain->Present(1, 0);
         }
+        } // end else (D3D11 path)
+
+        } while (m_renderRequested); // Render again if requested during this frame
+
+        m_isRendering = false;
     }
 
     void Backplate::Layout()
@@ -1762,7 +1945,8 @@ namespace FD2D
         if (m_window)
         {
             ShowWindow(m_window, nCmdShow);
-            UpdateWindow(m_window);
+            // Direct rendering for initial display
+            Render();
         }
     }
 
@@ -1783,12 +1967,12 @@ namespace FD2D
         wnd->Measure({ static_cast<float>(m_size.width), static_cast<float>(m_size.height) });
         wnd->Arrange({ 0.0f, 0.0f, static_cast<float>(m_size.width), static_cast<float>(m_size.height) });
 
+        m_layoutDirty = true;
+
         if (m_window != nullptr)
         {
-            InvalidateRect(m_window, nullptr, FALSE);
+            Render();
         }
-
-        m_layoutDirty = true;
 
         return true;
     }
