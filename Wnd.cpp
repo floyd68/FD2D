@@ -476,7 +476,8 @@ namespace FD2D
     {
         if (m_backplate != nullptr)
         {
-            InvalidateRect(m_backplate->Window(), nullptr, FALSE);
+            // Direct rendering instead of message-loop based invalidation
+            m_backplate->Render();
         }
     }
 }

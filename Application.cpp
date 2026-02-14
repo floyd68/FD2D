@@ -201,6 +201,7 @@ namespace FD2D
                     kv.second->ProcessAnimationTick(t);
                 }
             }
+            Sleep(0);
         }
     }
 
