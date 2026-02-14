@@ -12,28 +12,6 @@
 
 namespace FD2D
 {
-    namespace
-    {
-        static void LogThumbHr(const wchar_t* stage, const std::wstring& path, HRESULT hr)
-        {
-            if (SUCCEEDED(hr))
-            {
-                return;
-            }
-
-            wchar_t buf[512] {};
-            if (!path.empty())
-            {
-                swprintf_s(buf, L"[ThumbImage] %s failed (%s): 0x%08X\n", stage, path.c_str(), static_cast<unsigned>(hr));
-            }
-            else
-            {
-                swprintf_s(buf, L"[ThumbImage] %s failed: 0x%08X\n", stage, static_cast<unsigned>(hr));
-            }
-            OutputDebugStringW(buf);
-        }
-    }
-
     ThumbImage::ThumbImage()
         : Wnd()
         , m_request()
@@ -64,24 +42,22 @@ namespace FD2D
 
     Size ThumbImage::Measure(Size available)
     {
-        // Thumbnail mode: respect targetSize as fixed square (helps horizontal strip sizing)
+        // Thumbnail mode: respect targetSize (can be non-square for variable width mode)
         if (m_request.targetSize.w > 0.0f && m_request.targetSize.h > 0.0f)
         {
-            float size = m_request.targetSize.h;
-            if (m_request.targetSize.w > 0.0f)
-            {
-                size = (std::min)(size, m_request.targetSize.w);
-            }
+            float width = m_request.targetSize.w;
+            float height = m_request.targetSize.h;
+            
             if (available.w > 0.0f)
             {
-                size = (std::min)(size, available.w);
+                width = (std::min)(width, available.w);
             }
             if (available.h > 0.0f)
             {
-                size = (std::min)(size, available.h);
+                height = (std::min)(height, available.h);
             }
 
-            m_desired = { size, size };
+            m_desired = { width, height };
             return m_desired;
         }
 
@@ -100,6 +76,27 @@ namespace FD2D
         const std::wstring normalized = FD2D::Util::NormalizePath(filePath);
         if (!normalized.empty() && normalized == m_filePath)
         {
+            // If a previous decode/create failed for the same path, allow explicit retry.
+            // This prevents thumbnails from getting stuck blank after transient failures.
+            bool hadFailure = false;
+            {
+                std::lock_guard<std::mutex> lock(m_pendingMutex);
+                hadFailure = (!m_failedFilePath.empty() && m_failedFilePath == normalized);
+                if (hadFailure)
+                {
+                    m_failedFilePath.clear();
+                    m_failedHr = S_OK;
+                }
+            }
+
+            if (hadFailure || (!m_loading.load() && m_bitmap == nullptr))
+            {
+                m_request.source = m_filePath;
+                RequestImageLoad();
+                Invalidate();
+                return S_OK;
+            }
+
             return S_FALSE;
         }
 
@@ -161,6 +158,15 @@ namespace FD2D
         }
         m_loadingSpinnerEnabled = enabled;
         Invalidate();
+    }
+
+    D2D1_SIZE_F ThumbImage::GetBitmapSize() const
+    {
+        if (m_bitmap)
+        {
+            return m_bitmap->GetSize();
+        }
+        return D2D1::SizeF(0.0f, 0.0f);
     }
 
     void ThumbImage::RequestImageLoad()
@@ -318,6 +324,12 @@ namespace FD2D
             {
                 m_bitmap = d2dBitmap;
                 m_loadedFilePath = pendingSource;
+                
+                // Notify parent that bitmap size is now available (for variable-width thumbnails)
+                if (BackplateRef() != nullptr)
+                {
+                    BackplateRef()->RequestLayout();
+                }
             }
         }
         else
@@ -327,7 +339,6 @@ namespace FD2D
 
         if (FAILED(hrBmp))
         {
-            LogThumbHr(L"D2D CreateBitmap", pendingSource, hrBmp);
             std::lock_guard<std::mutex> lock(m_pendingMutex);
             m_failedFilePath = pendingSource;
             m_failedHr = hrBmp;
@@ -385,13 +396,6 @@ namespace FD2D
             const auto layoutRect = LayoutRect();
             const D2D1_RECT_F sourceRect = D2D1::RectF(0.0f, 0.0f, bitmapSize.width, bitmapSize.height);
             const D2D1_RECT_F destRect = computeAspectFitDestRect(layoutRect, bitmapSize);
-
-            /*
-            OutputDebugStringW((L"[ThumbImage] OnRender: Drawing bitmap, bitmapSize=" + 
-                std::to_wstring(bitmapSize.width) + L"x" + std::to_wstring(bitmapSize.height) + 
-                L", layoutRect=(" + std::to_wstring(layoutRect.left) + L"," + std::to_wstring(layoutRect.top) + L"," + 
-                std::to_wstring(layoutRect.right) + L"," + std::to_wstring(layoutRect.bottom) + L")\n").c_str());
-                */
 
             D2D1_BITMAP_INTERPOLATION_MODE interpMode = D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
             target->DrawBitmap(bmp, destRect, opacity, interpMode, sourceRect);

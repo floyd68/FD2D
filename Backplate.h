@@ -118,6 +118,13 @@ namespace FD2D
         void SetClearColor(const D2D1_COLOR_F& color);
         D2D1_COLOR_F ClearColor() const { return m_clearColor; }
 
+        // Enable/disable off-screen double-buffering (reduces flicker, default: enabled)
+        void SetUseOffscreenBuffer(bool enable) { m_useOffscreenBuffer = enable; }
+        bool UseOffscreenBuffer() const { return m_useOffscreenBuffer; }
+
+        // Check if currently rendering (to prevent recursive layout changes)
+        bool IsRendering() const { return m_isRendering; }
+
         // Per-rect clear for the D3D swapchain backend (used for per-ImageBrowser background).
         // Returns false if not supported/available (e.g., D2D-only backend).
         bool ClearRectD3D(const D2D1_RECT_F& rect, const D2D1_COLOR_F& color);
@@ -167,6 +174,17 @@ namespace FD2D
         Microsoft::WRL::ComPtr<ID2D1HwndRenderTarget> m_hwndRenderTarget {};
         std::wstring m_rendererId {};
 
+        // Off-screen buffer for double-buffering (reduces flicker)
+        Microsoft::WRL::ComPtr<ID2D1BitmapRenderTarget> m_offscreenRT {};  // For D2D-only mode
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> m_offscreenBitmap {};         // For D3D11 D2D pass
+        
+        // D3D11 off-screen resources
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> m_offscreenTexture {};
+        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_offscreenRTV {};
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> m_offscreenD2DTarget {};      // D2D view of offscreen texture
+        
+        bool m_useOffscreenBuffer { true };
+
         std::unordered_map<std::wstring, std::shared_ptr<Wnd>> m_children {};
         WNDPROC m_prevWndProc { nullptr };
         bool m_classRegistered { false };
@@ -188,12 +206,17 @@ namespace FD2D
         std::function<void(HWND)> m_onWindowPlacementChanged {};
         UINT_PTR m_placeAutosaveTimerId { 0 };
         bool m_inSizeMove { false };
+        bool m_offscreenResizePending { false };
 
         bool m_dropTargetRegistered { false };
         Microsoft::WRL::ComPtr<IDropTarget> m_dropTarget {};
         std::wstring m_dragPath {};
 
         D2D1_COLOR_F m_clearColor { 0.09f, 0.09f, 0.10f, 1.0f };
+        
+        // Prevent recursive rendering (e.g., when layout changes during OnRender)
+        bool m_isRendering { false };
+        bool m_renderRequested { false };
     };
 }
 

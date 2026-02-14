@@ -18,10 +18,10 @@ namespace FD2D
         float fillMaxAlpha { 0.10f };
 
         bool breatheEnabled { true };
-        int breathePeriodMs { 1800 };
-        float breatheInflateAmp { 0.60f };
-        float breatheThicknessAmp { 0.35f };
-        float breatheAlphaAmp { 0.08f };
+        int breathePeriodMs { 900 };
+        float breatheInflateAmp { 1.40f };
+        float breatheThicknessAmp { 1.10f };
+        float breatheAlphaAmp { 0.25f };
     };
 }
 
