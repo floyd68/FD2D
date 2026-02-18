@@ -491,7 +491,16 @@ namespace FD2D
                 }
                 target->DrawRoundedRectangle(rr, m_selectionBrush.Get(), accentW);
 
-                if ((selAnimating || (m_selectionStyle.breatheEnabled && m_selectionStyle.breatheInflateAmp > 0.0f)) && BackplateRef() != nullptr)
+                const bool breatheAnimActive =
+                    m_selectionStyle.breatheEnabled &&
+                    m_selectionStyle.breathePeriodMs > 0 &&
+                    (
+                        m_selectionStyle.breatheInflateAmp > 0.0f ||
+                        m_selectionStyle.breatheThicknessAmp > 0.0f ||
+                        m_selectionStyle.breatheAlphaAmp > 0.0f
+                    );
+
+                if ((selAnimating || breatheAnimActive) && BackplateRef() != nullptr)
                 {
                     BackplateRef()->RequestAnimationFrame();
                 }
