@@ -76,6 +76,12 @@ namespace FD2D
         void RequestFocus();
         bool HasFocus() const;
 
+        // Mouse-point override for internal routed events (e.g. ScrollView content translation).
+        // When set, ExtractMousePoint() ignores lParam packing limits and returns full 32-bit coords.
+        static POINT ExtractMousePoint(LPARAM lParam);
+        static void PushMousePointOverride(const POINT& pt);
+        static void PopMousePointOverride();
+
     protected:
         Backplate* BackplateRef() const;
 

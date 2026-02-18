@@ -7,6 +7,9 @@ namespace FD2D
 {
     namespace
     {
+        thread_local int g_mousePointOverrideDepth = 0;
+        thread_local POINT g_mousePointOverride {};
+
         static bool IsMouseMessage(UINT message)
         {
             switch (message)
@@ -53,6 +56,29 @@ namespace FD2D
     Wnd::Wnd(const std::wstring& name)
         : m_name(name)
     {
+    }
+
+    POINT Wnd::ExtractMousePoint(LPARAM lParam)
+    {
+        if (g_mousePointOverrideDepth > 0)
+        {
+            return g_mousePointOverride;
+        }
+        return POINT { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+    }
+
+    void Wnd::PushMousePointOverride(const POINT& pt)
+    {
+        g_mousePointOverride = pt;
+        g_mousePointOverrideDepth++;
+    }
+
+    void Wnd::PopMousePointOverride()
+    {
+        if (g_mousePointOverrideDepth > 0)
+        {
+            g_mousePointOverrideDepth--;
+        }
     }
 
     void Wnd::SetLayoutRect(const D2D1_RECT_F& rect)

@@ -40,14 +40,6 @@ namespace FD2D
             }
         }
 
-        static LPARAM TranslateMouseLParam(LPARAM lParam, float deltaX, float deltaY)
-        {
-            const int x = GET_X_LPARAM(lParam);
-            const int y = GET_Y_LPARAM(lParam);
-            const int newX = static_cast<int>(std::lround(static_cast<double>(x) + static_cast<double>(deltaX)));
-            const int newY = static_cast<int>(std::lround(static_cast<double>(y) + static_cast<double>(deltaY)));
-            return MAKELPARAM(newX, newY);
-        }
     }
 
     bool ScrollView::IsPointInViewport(int x, int y) const
@@ -506,15 +498,24 @@ namespace FD2D
                 }
             }
 
-            // For client-coordinate mouse messages, translate Y by scroll offset.
-            // WM_MOUSEWHEEL/WM_MOUSEHWHEEL use screen coords but Backplate already converted to client.
-            // We don't translate wheel messages by scroll offset since they're position-based.
+            POINT translatedPt = Wnd::ExtractMousePoint(lParam);
+            bool hasOverride = false;
+
+            // For client-coordinate mouse messages, translate by scroll offset.
+            // Keep full 32-bit coordinates via Wnd mouse-point override to avoid lParam 16-bit wrapping.
             if (message != WM_MOUSEWHEEL && message != WM_MOUSEHWHEEL && message != WM_CAPTURECHANGED)
             {
-                lParam = TranslateMouseLParam(lParam, m_scrollX, m_scrollY);
+                translatedPt.x = static_cast<int>(std::lround(static_cast<double>(translatedPt.x) + static_cast<double>(m_scrollX)));
+                translatedPt.y = static_cast<int>(std::lround(static_cast<double>(translatedPt.y) + static_cast<double>(m_scrollY)));
+                Wnd::PushMousePointOverride(translatedPt);
+                hasOverride = true;
             }
 
             const bool handled = m_content->OnMessage(message, wParam, lParam);
+            if (hasOverride)
+            {
+                Wnd::PopMousePointOverride();
+            }
 
             // Track capture-like sequences so we keep forwarding move/up even if cursor exits the viewport.
             if (message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN)

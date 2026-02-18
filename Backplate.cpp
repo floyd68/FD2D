@@ -1011,7 +1011,7 @@ namespace FD2D
 
         WNDCLASSEXW wcex {};
         wcex.cbSize = sizeof(WNDCLASSEX);
-        wcex.style = CS_HREDRAW | CS_VREDRAW;
+        wcex.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
         wcex.lpfnWndProc = Backplate::WndProc;
         wcex.cbClsExtra = 0;
         wcex.cbWndExtra = 0;
