@@ -26,7 +26,7 @@ namespace FD2D
         void SetOnClick(ClickHandler handler);
 
         void OnRender(ID2D1RenderTarget* target) override;
-        bool OnMessage(UINT message, WPARAM wParam, LPARAM lParam) override;
+        bool OnInputEvent(const InputEvent& event) override;
 
     private:
         void EnsureResources(ID2D1RenderTarget* target);

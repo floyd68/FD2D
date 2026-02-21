@@ -1,35 +1,24 @@
 #include "Wnd.h"
 #include "Backplate.h"
 #include <algorithm>
-#include <windowsx.h>  // For GET_X_LPARAM, GET_Y_LPARAM, MAKELPARAM
 
 namespace FD2D
 {
     namespace
     {
-        thread_local int g_mousePointOverrideDepth = 0;
-        thread_local POINT g_mousePointOverride {};
-
-        static bool IsMouseMessage(UINT message)
+        static bool IsMouseInputEventType(InputEventType type)
         {
-            switch (message)
+            switch (type)
             {
-            case WM_MOUSEMOVE:
-            case WM_LBUTTONDOWN:
-            case WM_LBUTTONUP:
-            case WM_LBUTTONDBLCLK:
-            case WM_RBUTTONDOWN:
-            case WM_RBUTTONUP:
-            case WM_RBUTTONDBLCLK:
-            case WM_MBUTTONDOWN:
-            case WM_MBUTTONUP:
-            case WM_MBUTTONDBLCLK:
-            case WM_XBUTTONDOWN:
-            case WM_XBUTTONUP:
-            case WM_XBUTTONDBLCLK:
-            case WM_MOUSEWHEEL:
-            case WM_MOUSEHWHEEL:
-            case WM_CAPTURECHANGED:
+            case InputEventType::MouseMove:
+            case InputEventType::MouseDown:
+            case InputEventType::MouseUp:
+            case InputEventType::MouseDoubleClick:
+            case InputEventType::MouseWheel:
+            case InputEventType::MouseHWheel:
+            case InputEventType::MouseLeave:
+            case InputEventType::CaptureChanged:
+            case InputEventType::SetCursor:
                 return true;
             default:
                 return false;
@@ -56,29 +45,6 @@ namespace FD2D
     Wnd::Wnd(const std::wstring& name)
         : m_name(name)
     {
-    }
-
-    POINT Wnd::ExtractMousePoint(LPARAM lParam)
-    {
-        if (g_mousePointOverrideDepth > 0)
-        {
-            return g_mousePointOverride;
-        }
-        return POINT { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-    }
-
-    void Wnd::PushMousePointOverride(const POINT& pt)
-    {
-        g_mousePointOverride = pt;
-        g_mousePointOverrideDepth++;
-    }
-
-    void Wnd::PopMousePointOverride()
-    {
-        if (g_mousePointOverrideDepth > 0)
-        {
-            g_mousePointOverrideDepth--;
-        }
     }
 
     void Wnd::SetLayoutRect(const D2D1_RECT_F& rect)
@@ -359,22 +325,21 @@ namespace FD2D
         }
     }
 
-    bool Wnd::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)
+    bool Wnd::OnInputEvent(const InputEvent& event)
     {
-        UNREFERENCED_PARAMETER(message);
-        UNREFERENCED_PARAMETER(wParam);
-        UNREFERENCED_PARAMETER(lParam);
-
         // Mouse input should behave like hit-testing: topmost child first, stop at first handled.
         // Note: Coordinates are already in client/Layout coordinate system (converted by Backplate)
         // All LayoutRects are in the same client coordinate system, so no conversion needed
-        if (IsMouseMessage(message))
+        if (IsMouseInputEventType(event.type))
         {
             // For wheel input, route based on cursor position so the pane under the mouse receives it
             // even if another control currently owns focus.
-            if (message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL)
+            if (event.type == InputEventType::MouseWheel || event.type == InputEventType::MouseHWheel)
             {
-                const POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                if (!event.hasPoint)
+                {
+                    return false;
+                }
                 for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
                 {
                     const auto& child = *it;
@@ -382,11 +347,11 @@ namespace FD2D
                     {
                         continue;
                     }
-                    if (!RectContainsPoint(child->LayoutRect(), pt))
+                    if (!RectContainsPoint(child->LayoutRect(), event.point))
                     {
                         continue;
                     }
-                    if (child->OnMessage(message, wParam, lParam))
+                    if (child->OnInputEvent(event))
                     {
                         return true;
                     }
@@ -397,7 +362,7 @@ namespace FD2D
             for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
             {
                 const auto& child = *it;
-                if (child && child->OnMessage(message, wParam, lParam))
+                if (child && child->OnInputEvent(event))
                 {
                     return true;
                 }
@@ -409,7 +374,20 @@ namespace FD2D
         bool handled = false;
         for (auto& child : m_childrenOrdered)
         {
-            if (child && child->OnMessage(message, wParam, lParam))
+            if (child && child->OnInputEvent(event))
+            {
+                handled = true;
+            }
+        }
+        return handled;
+    }
+
+    bool Wnd::OnCommandEvent(const CommandEvent& event)
+    {
+        bool handled = false;
+        for (auto& child : m_childrenOrdered)
+        {
+            if (child && child->OnCommandEvent(event))
             {
                 handled = true;
             }

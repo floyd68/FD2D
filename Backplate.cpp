@@ -24,6 +24,90 @@ namespace FD2D
         return static_cast<unsigned long long>(GetTickCount64());
     }
 
+    
+
+    static InputEventType ToInputEventType(UINT message)
+    {
+        static std::unordered_map <UINT, InputEventType> mapMsg2EventType = {
+            { WM_MOUSEMOVE, InputEventType::MouseMove },
+            { WM_LBUTTONDOWN, InputEventType::MouseDown },
+            { WM_RBUTTONDOWN, InputEventType::MouseDown },
+            { WM_MBUTTONDOWN, InputEventType::MouseDown },
+            { WM_XBUTTONDOWN, InputEventType::MouseDown },
+            { WM_LBUTTONUP, InputEventType::MouseUp },
+            { WM_RBUTTONUP, InputEventType::MouseUp },
+            { WM_MBUTTONUP, InputEventType::MouseUp },
+            { WM_XBUTTONUP, InputEventType::MouseUp },
+            { WM_LBUTTONDBLCLK, InputEventType::MouseDoubleClick },
+            { WM_RBUTTONDBLCLK, InputEventType::MouseDoubleClick },
+            { WM_MBUTTONDBLCLK, InputEventType::MouseDoubleClick },
+            { WM_XBUTTONDBLCLK, InputEventType::MouseDoubleClick },
+            { WM_MOUSEWHEEL, InputEventType::MouseWheel },
+            { WM_MOUSEHWHEEL, InputEventType::MouseHWheel },
+            { WM_MOUSELEAVE, InputEventType::MouseLeave },
+            { WM_CAPTURECHANGED, InputEventType::CaptureChanged },
+            { WM_SETCURSOR, InputEventType::SetCursor },
+            { WM_KEYDOWN, InputEventType::KeyDown },
+            { WM_SYSKEYDOWN, InputEventType::KeyDown },
+            { WM_KEYUP, InputEventType::KeyUp },
+            { WM_SYSKEYUP, InputEventType::KeyUp },
+            { WM_CHAR, InputEventType::Char },
+            { WM_SYSCHAR, InputEventType::SystemChar },
+            { WM_DEADCHAR, InputEventType::DeadChar },
+            { WM_SYSDEADCHAR, InputEventType::SystemDeadChar },
+            { WM_UNICHAR, InputEventType::UniChar }
+        };
+
+		auto it = mapMsg2EventType.find(message);
+        if (it != mapMsg2EventType.end())
+            return it->second;
+        else
+			return InputEventType::None;
+    }
+
+    static MouseButton ToMouseButton(UINT message, WPARAM wParam)
+    {
+        static std::unordered_map<UINT, MouseButton> mapMsg2MouseButton = {
+            { WM_LBUTTONDOWN, MouseButton::Left },
+            { WM_RBUTTONDOWN, MouseButton::Right },
+            { WM_MBUTTONDOWN, MouseButton::Middle },
+            { WM_LBUTTONUP, MouseButton::Left },
+            { WM_RBUTTONUP, MouseButton::Right },
+            { WM_MBUTTONUP, MouseButton::Middle },
+            { WM_LBUTTONDBLCLK, MouseButton::Left },
+            { WM_RBUTTONDBLCLK, MouseButton::Right },
+            { WM_MBUTTONDBLCLK, MouseButton::Middle },
+		};
+		auto it = mapMsg2MouseButton.find(message);
+        if (it != mapMsg2MouseButton.end())
+            return it->second;
+        else
+            return MouseButton::None;
+    }
+
+    static bool IsRoutedMouseMessage(UINT message)
+    {
+        switch (message)
+        {
+        case WM_MOUSEMOVE:
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONUP:
+        case WM_LBUTTONDBLCLK:
+        case WM_RBUTTONDOWN:
+        case WM_RBUTTONUP:
+        case WM_RBUTTONDBLCLK:
+        case WM_MBUTTONDOWN:
+        case WM_MBUTTONUP:
+        case WM_MBUTTONDBLCLK:
+        case WM_MOUSEWHEEL:
+        case WM_MOUSEHWHEEL:
+        case WM_CAPTURECHANGED:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     static D2D1_BITMAP_PROPERTIES1 MakeSwapChainBitmapProps()
     {
         const float dpi = 96.0f;
@@ -715,34 +799,6 @@ namespace FD2D
             return true;
         }
 
-        case Backplate::WM_FD2D_REQUEST_REDRAW:
-        {
-            // worker thread에서 PostMessage로 들어온 redraw 요청
-            if (m_window)
-            {
-                // Direct rendering: bypass message loop and invalidation
-                if (!m_flushRedrawQueued)
-                {
-                    m_flushRedrawQueued = true;
-                    PostMessage(m_window, Backplate::WM_FD2D_FLUSH_REDRAW, 0, 0);
-                }
-            }
-            result = 0;
-            return true;
-        }
-
-        case Backplate::WM_FD2D_FLUSH_REDRAW:
-        {
-            m_flushRedrawQueued = false;
-            if (m_window)
-            {
-                // Direct rendering instead of UpdateWindow()
-                Render();
-            }
-            result = 0;
-            return true;
-        }
-
         case Backplate::WM_FD2D_BROADCAST:
         {
             auto* bm = reinterpret_cast<Backplate::BroadcastMessage*>(lParam);
@@ -752,7 +808,8 @@ namespace FD2D
                 {
                     if (pair.second)
                     {
-                        (void)pair.second->OnMessage(bm->message, bm->wParam, bm->lParam);
+                        const CommandEvent event { bm->message, bm->wParam, bm->lParam };
+                        (void)pair.second->OnCommandEvent(event);
                     }
                 }
                 delete bm;
@@ -808,143 +865,115 @@ namespace FD2D
             break;
         }
 
-        auto IsKeyMessage = [](UINT msg) -> bool
+        const InputEventType inputType = ToInputEventType(message);
+        const bool isInputMessage = (inputType != InputEventType::None);
+        const bool isMouseMessage = IsRoutedMouseMessage(message);
+
+        if (isInputMessage)
         {
-            switch (msg)
+            InputEvent inputEvent {};
+            inputEvent.type = inputType;
+            inputEvent.button = ToMouseButton(message, wParam);
+
+            inputEvent.modifiers.shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            inputEvent.modifiers.control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            inputEvent.modifiers.leftButton = (wParam & MK_LBUTTON) != 0;
+            inputEvent.modifiers.rightButton = (wParam & MK_RBUTTON) != 0;
+            inputEvent.modifiers.middleButton = (wParam & MK_MBUTTON) != 0;
+            inputEvent.modifiers.alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+
+            if (isMouseMessage && m_window != nullptr && message != WM_CAPTURECHANGED)
             {
-            case WM_KEYDOWN:
-            case WM_KEYUP:
-            case WM_SYSKEYDOWN:
-            case WM_SYSKEYUP:
-            case WM_CHAR:
-            case WM_SYSCHAR:
-            case WM_DEADCHAR:
-            case WM_SYSDEADCHAR:
-            case WM_UNICHAR:
-                return true;
-            default:
-                return false;
+                POINT ptClient { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                if (message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL)
+                {
+                    ScreenToClient(m_window, &ptClient);
+                }
+                else if (GetCapture() == m_window)
+                {
+                    POINT cursorPos {};
+                    GetCursorPos(&cursorPos);
+                    ScreenToClient(m_window, &cursorPos);
+                    ptClient = cursorPos;
+                }
+
+                inputEvent.point = ptClient;
+                inputEvent.hasPoint = true;
             }
-        };
 
-        // Route keyboard input only to the focused Wnd (if any).
-        if (IsKeyMessage(message) && m_focusedWnd != nullptr)
-        {
-            const bool handledKey = m_focusedWnd->OnMessage(message, wParam, lParam);
-            if (handledKey)
-            {
-                result = 0;
-                return true;
-            }
-            return false;
-        }
-
-        bool handled = false;
-
-        // For mouse messages: Backplate is responsible for converting screen coordinates to client coordinates
-        // Then forward to children with client coordinates (which match Layout coordinates since LayoutRect uses client coordinate system)
-        WPARAM convertedWParam = wParam;
-        LPARAM convertedLParam = lParam;
-        
-        // Helper to check if message is a mouse message
-        auto IsMouseMessage = [](UINT msg) -> bool
-        {
-            switch (msg)
-            {
-            case WM_MOUSEMOVE:
-            case WM_LBUTTONDOWN:
-            case WM_LBUTTONUP:
-            case WM_LBUTTONDBLCLK:
-            case WM_RBUTTONDOWN:
-            case WM_RBUTTONUP:
-            case WM_RBUTTONDBLCLK:
-            case WM_MBUTTONDOWN:
-            case WM_MBUTTONUP:
-            case WM_MBUTTONDBLCLK:
-            case WM_XBUTTONDOWN:
-            case WM_XBUTTONUP:
-            case WM_XBUTTONDBLCLK:
-            case WM_MOUSEWHEEL:
-            case WM_MOUSEHWHEEL:
-            case WM_CAPTURECHANGED:
-                return true;
-            default:
-                return false;
-            }
-        };
-
-        bool hasMousePoint = false;
-        POINT ptClient {};
-        if (IsMouseMessage(message) && m_window != nullptr)
-        {
-            // Extract coordinates from lParam
-            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            ptClient = pt;
-            
-            // Convert screen coordinates to client coordinates if needed
-            // WM_MOUSEWHEEL always uses screen coordinates
             if (message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL)
             {
-                // WM_MOUSEWHEEL always provides screen coordinates
-                ScreenToClient(m_window, &ptClient);
+                inputEvent.wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
             }
-            else if (GetCapture() == m_window)
+            if (inputType == InputEventType::KeyDown ||
+                inputType == InputEventType::KeyUp ||
+                inputType == InputEventType::Char ||
+                inputType == InputEventType::SystemChar ||
+                inputType == InputEventType::DeadChar ||
+                inputType == InputEventType::SystemDeadChar ||
+                inputType == InputEventType::UniChar)
             {
-                // Mouse is captured: use GetCursorPos to get reliable screen coordinates, then convert
-                POINT cursorPos;
-                GetCursorPos(&cursorPos);
-                ScreenToClient(m_window, &cursorPos);
-                ptClient = cursorPos;
+                inputEvent.keyCode = static_cast<UINT>(wParam);
+                inputEvent.repeatCount = static_cast<UINT>(lParam & 0xFFFF);
+                inputEvent.scanCode = static_cast<UINT>((lParam >> 16) & 0xFF);
+                inputEvent.isExtendedKey = (lParam & (1 << 24)) != 0;
+                inputEvent.wasDown = (lParam & (1 << 30)) != 0;
+                inputEvent.isKeyUpTransition = (lParam & (1u << 31)) != 0;
+                inputEvent.isSystemKey = (message == WM_SYSKEYDOWN ||
+                    message == WM_SYSKEYUP ||
+                    message == WM_SYSCHAR ||
+                    message == WM_SYSDEADCHAR);
             }
-            // Otherwise: WM_LBUTTONDOWN, WM_MOUSEMOVE (when not captured) already provide client coordinates
-            // No conversion needed
-            
-            // Reconstruct lParam with client coordinates (which match Layout coordinate system)
-            convertedLParam = MAKELPARAM(ptClient.x, ptClient.y);
-            hasMousePoint = true;
-        }
 
-        auto IsMouseDownMessage = [](UINT msg) -> bool
-        {
-            switch (msg)
+            // Route keyboard input only to the focused Wnd (if any).
+            if (!isMouseMessage &&
+                (inputType == InputEventType::KeyDown ||
+                    inputType == InputEventType::KeyUp ||
+                    inputType == InputEventType::Char ||
+                    inputType == InputEventType::SystemChar ||
+                    inputType == InputEventType::DeadChar ||
+                    inputType == InputEventType::SystemDeadChar ||
+                    inputType == InputEventType::UniChar) &&
+                m_focusedWnd != nullptr)
             {
-            case WM_LBUTTONDOWN:
-            case WM_RBUTTONDOWN:
-            case WM_MBUTTONDOWN:
-            case WM_XBUTTONDOWN:
-                return true;
-            default:
+                if (m_focusedWnd->OnInputEvent(inputEvent))
+                {
+                    result = 0;
+                    return true;
+                }
                 return false;
             }
-        };
 
-        if (hasMousePoint && IsMouseDownMessage(message))
-        {
-            Wnd* target = FindTargetWnd(ptClient);
-            if (target != nullptr)
+            if (inputEvent.hasPoint && inputType == InputEventType::MouseDown)
             {
-                target->RequestFocus();
+                Wnd* target = FindTargetWnd(inputEvent.point);
+                if (target != nullptr)
+                {
+                    target->RequestFocus();
+                }
             }
-        }
 
-        if (hasMousePoint && message == WM_RBUTTONUP)
-        {
-            Wnd* target = FindTargetWnd(ptClient);
-            if (target != nullptr)
+            if (inputEvent.hasPoint &&
+                inputType == InputEventType::MouseUp &&
+                inputEvent.button == MouseButton::Right)
             {
-                if (target->OnMessage(message, convertedWParam, convertedLParam))
+                Wnd* target = FindTargetWnd(inputEvent.point);
+                if (target != nullptr && target->OnInputEvent(inputEvent))
                 {
                     result = 0;
                     return true;
                 }
             }
-        }
 
-        // Focus-based routing for non-mouse messages:
-        // Avoid broadcasting custom/timer messages to every top-level Wnd when multiple ImageBrowsers exist.
-        if (!IsMouseMessage(message) && m_focusedWnd != nullptr)
-        {
-            if (m_focusedWnd->OnMessage(message, convertedWParam, convertedLParam))
+            bool handledInput = false;
+            for (auto& pair : m_children)
+            {
+                if (pair.second && pair.second->OnInputEvent(inputEvent))
+                {
+                    handledInput = true;
+                }
+            }
+            if (handledInput)
             {
                 result = 0;
                 return true;
@@ -952,22 +981,31 @@ namespace FD2D
             return false;
         }
 
-        // Forward to children with converted coordinates (client/Layout coordinate system)
-        for (auto& pair : m_children)
+        const CommandEvent commandEvent { message, wParam, lParam };
+        if (m_focusedWnd != nullptr)
         {
-            if (pair.second && pair.second->OnMessage(message, convertedWParam, convertedLParam))
+            if (m_focusedWnd->OnCommandEvent(commandEvent))
             {
-                handled = true;
+                result = 0;
+                return true;
             }
+            return false;
         }
 
-        if (handled)
+        bool handledCommand = false;
+        for (auto& pair : m_children)
+        {
+            if (pair.second && pair.second->OnCommandEvent(commandEvent))
+            {
+                handledCommand = true;
+            }
+        }
+        if (handledCommand)
         {
             result = 0;
             return true;
         }
-        else
-            return false;
+        return false;
     }
 
     void Backplate::SetFocusedWnd(Wnd* wnd)
@@ -1653,7 +1691,10 @@ namespace FD2D
 
     bool Backplate::ClearRectD3D(const D2D1_RECT_F& rect, const D2D1_COLOR_F& color)
     {
-        if (m_rendererId == L"d2d_hwndrt" || !m_d3dContext || !m_rtv)
+        ID3D11RenderTargetView* const clearTarget = (m_activeD3DRenderTarget != nullptr)
+            ? m_activeD3DRenderTarget
+            : m_rtv.Get();
+        if (m_rendererId == L"d2d_hwndrt" || !m_d3dContext || clearTarget == nullptr)
         {
             return false;
         }
@@ -1700,7 +1741,7 @@ namespace FD2D
         }
 
         const float c[4] = { color.r, color.g, color.b, color.a };
-        ctx1->ClearView(m_rtv.Get(), c, &r, 1);
+        ctx1->ClearView(clearTarget, c, &r, 1);
         return true;
     }
 
@@ -1956,6 +1997,7 @@ namespace FD2D
             const float clearColor[4] = { m_clearColor.r, m_clearColor.g, m_clearColor.b, m_clearColor.a };
             m_d3dContext->OMSetRenderTargets(1, &d3dRenderTarget, nullptr);
             m_d3dContext->ClearRenderTargetView(d3dRenderTarget, clearColor);
+            m_activeD3DRenderTarget = d3dRenderTarget;
 
             D3D11_VIEWPORT vp {};
             vp.TopLeftX = 0.0f;
@@ -1978,6 +2020,7 @@ namespace FD2D
             // before letting D2D draw to it.
             ID3D11RenderTargetView* nullRTV[1] = { nullptr };
             m_d3dContext->OMSetRenderTargets(1, nullRTV, nullptr);
+            m_activeD3DRenderTarget = nullptr;
         }
 
         // D2D pass (UI overlays)
@@ -2117,21 +2160,6 @@ namespace FD2D
         }
 
         return true;
-    }
-
-    bool Backplate::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)
-    {
-        bool handled = false;
-
-        for (auto& pair : m_children)
-        {
-            if (pair.second && pair.second->OnMessage(message, wParam, lParam))
-            {
-                handled = true;
-            }
-        }
-
-        return handled;
     }
 
     ID2D1RenderTarget* Backplate::RenderTarget() const

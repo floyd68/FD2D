@@ -1,5 +1,4 @@
 #include "Text.h"
-#include <windowsx.h>
 #include <cmath>
 
 namespace FD2D
@@ -259,19 +258,22 @@ namespace FD2D
         Wnd::OnRender(target);
     }
 
-    bool Text::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)
+    bool Text::OnInputEvent(const InputEvent& event)
     {
-        UNREFERENCED_PARAMETER(wParam);
-        switch (message)
+        switch (event.type)
         {
-        case WM_LBUTTONDOWN:
+        case InputEventType::MouseDown:
         {
+            if (event.button != MouseButton::Left || !event.hasPoint)
+            {
+                break;
+            }
             if (!m_onClick)
             {
                 break;
             }
-            const int x = GET_X_LPARAM(lParam);
-            const int y = GET_Y_LPARAM(lParam);
+            const int x = event.point.x;
+            const int y = event.point.y;
             const D2D1_RECT_F r = LayoutRect();
             if (static_cast<float>(x) >= r.left &&
                 static_cast<float>(x) <= r.right &&
@@ -287,7 +289,7 @@ namespace FD2D
             break;
         }
 
-        return Wnd::OnMessage(message, wParam, lParam);
+        return Wnd::OnInputEvent(event);
     }
 }
 

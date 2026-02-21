@@ -2,7 +2,6 @@
 #include "Backplate.h"
 #include <algorithm>
 #include <float.h>
-#include <windowsx.h>
 #include <cmath>
 
 namespace FD2D
@@ -14,26 +13,19 @@ namespace FD2D
             return static_cast<unsigned long long>(GetTickCount64());
         }
 
-        static bool IsMouseMessage(UINT message)
+        static bool IsMouseInputEventType(InputEventType type)
         {
-            switch (message)
+            switch (type)
             {
-            case WM_MOUSEMOVE:
-            case WM_LBUTTONDOWN:
-            case WM_LBUTTONUP:
-            case WM_LBUTTONDBLCLK:
-            case WM_RBUTTONDOWN:
-            case WM_RBUTTONUP:
-            case WM_RBUTTONDBLCLK:
-            case WM_MBUTTONDOWN:
-            case WM_MBUTTONUP:
-            case WM_MBUTTONDBLCLK:
-            case WM_XBUTTONDOWN:
-            case WM_XBUTTONUP:
-            case WM_XBUTTONDBLCLK:
-            case WM_MOUSEWHEEL:
-            case WM_MOUSEHWHEEL:
-            case WM_CAPTURECHANGED:
+            case InputEventType::MouseMove:
+            case InputEventType::MouseDown:
+            case InputEventType::MouseUp:
+            case InputEventType::MouseDoubleClick:
+            case InputEventType::MouseWheel:
+            case InputEventType::MouseHWheel:
+            case InputEventType::MouseLeave:
+            case InputEventType::CaptureChanged:
+            case InputEventType::SetCursor:
                 return true;
             default:
                 return false;
@@ -419,25 +411,27 @@ namespace FD2D
         target->PopAxisAlignedClip();
     }
 
-    bool ScrollView::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)
+    bool ScrollView::OnInputEvent(const InputEvent& event)
     {
-        switch (message)
+        switch (event.type)
         {
-        case WM_MOUSEWHEEL:
+        case InputEventType::MouseWheel:
         {
+            if (!event.hasPoint)
+            {
+                break;
+            }
             // Only scroll when the cursor is over this viewport.
-            // Backplate normalizes mouse coordinates to client coordinates before forwarding.
-            // So lParam is already in this ScrollView's coordinate space.
-            const int x = GET_X_LPARAM(lParam);
-            const int y = GET_Y_LPARAM(lParam);
+            const int x = event.point.x;
+            const int y = event.point.y;
             const bool inViewport = IsPointInViewport(x, y);
 
             // If cursor is over viewport, handle scrolling
             if (inViewport)
             {
-                const short delta = static_cast<short>(HIWORD(wParam));
+                const short delta = event.wheelDelta;
                 const float ticks = static_cast<float>(delta) / static_cast<float>(WHEEL_DELTA);
-                const bool shift = (GET_KEYSTATE_WPARAM(wParam) & MK_SHIFT) != 0;
+                const bool shift = event.modifiers.shift;
                 const float step = -ticks * m_scrollStep;
                 if (m_enableHScroll && (!m_enableVScroll || shift))
                 {
@@ -453,18 +447,20 @@ namespace FD2D
             // If not handled (not in viewport or no scroll enabled), fall through to forward to content
             break;
         }
-        case WM_MOUSEHWHEEL:
+        case InputEventType::MouseHWheel:
         {
-            // Backplate normalizes mouse coordinates to client coordinates before forwarding.
-            // So lParam is already in this ScrollView's coordinate space.
-            const int x = GET_X_LPARAM(lParam);
-            const int y = GET_Y_LPARAM(lParam);
+            if (!event.hasPoint)
+            {
+                break;
+            }
+            const int x = event.point.x;
+            const int y = event.point.y;
             if (!IsPointInViewport(x, y))
             {
                 break;
             }
 
-            const short delta = static_cast<short>(HIWORD(wParam));
+            const short delta = event.wheelDelta;
             const float ticks = static_cast<float>(delta) / static_cast<float>(WHEEL_DELTA);
             const float step = -ticks * m_scrollStep;
             if (m_enableHScroll)
@@ -479,53 +475,52 @@ namespace FD2D
         }
 
         // Forward mouse events to content using scrolled coordinates so hit-testing matches rendering.
-        if (m_content && IsMouseMessage(message))
+        if (m_content && IsMouseInputEventType(event.type))
         {
-            if (message == WM_CAPTURECHANGED)
+            if (event.type == InputEventType::CaptureChanged)
             {
                 m_forwardCapture = false;
-                return m_content->OnMessage(message, wParam, lParam);
+                return m_content->OnInputEvent(event);
             }
 
             // If we're not in an active drag/capture sequence, ignore events outside the viewport.
             if (!m_forwardCapture)
             {
-                const int x = GET_X_LPARAM(lParam);
-                const int y = GET_Y_LPARAM(lParam);
+                if (!event.hasPoint)
+                {
+                    return false;
+                }
+                const int x = event.point.x;
+                const int y = event.point.y;
                 if (!IsPointInViewport(x, y))
                 {
                     return false;
                 }
             }
 
-            POINT translatedPt = Wnd::ExtractMousePoint(lParam);
-            bool hasOverride = false;
+            InputEvent translated = event;
 
             // For client-coordinate mouse messages, translate by scroll offset.
-            // Keep full 32-bit coordinates via Wnd mouse-point override to avoid lParam 16-bit wrapping.
-            if (message != WM_MOUSEWHEEL && message != WM_MOUSEHWHEEL && message != WM_CAPTURECHANGED)
+            if (translated.hasPoint &&
+                translated.type != InputEventType::MouseWheel &&
+                translated.type != InputEventType::MouseHWheel &&
+                translated.type != InputEventType::CaptureChanged)
             {
-                translatedPt.x = static_cast<int>(std::lround(static_cast<double>(translatedPt.x) + static_cast<double>(m_scrollX)));
-                translatedPt.y = static_cast<int>(std::lround(static_cast<double>(translatedPt.y) + static_cast<double>(m_scrollY)));
-                Wnd::PushMousePointOverride(translatedPt);
-                hasOverride = true;
+                translated.point.x = static_cast<int>(std::lround(static_cast<double>(translated.point.x) + static_cast<double>(m_scrollX)));
+                translated.point.y = static_cast<int>(std::lround(static_cast<double>(translated.point.y) + static_cast<double>(m_scrollY)));
             }
 
-            const bool handled = m_content->OnMessage(message, wParam, lParam);
-            if (hasOverride)
-            {
-                Wnd::PopMousePointOverride();
-            }
+            const bool handled = m_content->OnInputEvent(translated);
 
             // Track capture-like sequences so we keep forwarding move/up even if cursor exits the viewport.
-            if (message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN)
+            if (event.type == InputEventType::MouseDown)
             {
                 if (handled)
                 {
                     m_forwardCapture = true;
                 }
             }
-            if (message == WM_LBUTTONUP || message == WM_RBUTTONUP || message == WM_MBUTTONUP)
+            if (event.type == InputEventType::MouseUp)
             {
                 m_forwardCapture = false;
             }
@@ -533,7 +528,7 @@ namespace FD2D
             return handled;
         }
 
-        return Wnd::OnMessage(message, wParam, lParam);
+        return Wnd::OnInputEvent(event);
     }
 }
 

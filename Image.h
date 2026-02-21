@@ -79,7 +79,6 @@ namespace FD2D
         // Alpha visualization:
         // - When enabled, draws a checkerboard backdrop in the image destination rect so transparent pixels
         //   show a standard checker pattern.
-        // - When disabled, keeps the existing solid backdrop behavior.
         void SetAlphaCheckerboardEnabled(bool enabled);
         bool AlphaCheckerboardEnabled() const { return m_alphaCheckerboardEnabled; }
 
@@ -90,15 +89,9 @@ namespace FD2D
         bool HighQualitySampling() const { return m_highQualitySampling; }
         void ToggleSamplingQuality();
 
-        // Backdrop color behind the image (letterbox + behind transparent pixels).
-        // This is separate from Backplate::ClearColor so containers (e.g., ImageBrowser)
-        // can control their own background and focused background colors.
-        void SetBackdropColor(const D2D1_COLOR_F& color);
-        D2D1_COLOR_F BackdropColor() const { return m_backdropColorOverride; }
-
         void OnRenderD3D(ID3D11DeviceContext* context) override;
         void OnRender(ID2D1RenderTarget* target) override;
-        bool OnMessage(UINT message, WPARAM wParam, LPARAM lParam) override;
+        bool OnInputEvent(const InputEvent& event) override;
 
     private:
         void RequestImageLoad();
@@ -124,17 +117,11 @@ namespace FD2D
 
         Microsoft::WRL::ComPtr<ID2D1Bitmap> m_bitmap {};
 
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_backdropBrush {};
-        D2D1_COLOR_F m_backdropColor { 0.0f, 0.0f, 0.0f, 0.0f };
-        bool m_backdropColorValid { false };
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_checkerLightBrush {};
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_checkerDarkBrush {};
         bool m_alphaCheckerboardEnabled { false };
         bool m_interactionEnabled { true };
         bool m_highQualitySampling { true };
-
-        D2D1_COLOR_F m_backdropColorOverride { 0.09f, 0.09f, 0.10f, 1.0f };
-        bool m_backdropColorOverrideValid { false };
 
         // Pending decoded payload produced on a worker thread.
         // Consumed on the render/UI thread to create D2D bitmaps / upload to D3D resources.
