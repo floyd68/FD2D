@@ -39,7 +39,7 @@ namespace FD2D
 
         Size Measure(Size available) override;
         void Arrange(Rect finalRect) override;
-        bool OnMessage(UINT message, WPARAM wParam, LPARAM lParam) override;
+        bool OnInputEvent(const InputEvent& event) override;
         void OnRender(ID2D1RenderTarget* target) override;
 
         bool IsDragging() const { return m_dragging; }

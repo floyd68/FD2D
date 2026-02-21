@@ -24,6 +24,69 @@ namespace FD2D
         Insert   // drop will insert a new ImageBrowser to the right
     };
 
+    enum class InputEventType
+    {
+        None,
+        MouseMove,
+        MouseDown,
+        MouseUp,
+        MouseDoubleClick,
+        MouseWheel,
+        MouseHWheel,
+        MouseLeave,
+        CaptureChanged,
+        SetCursor,
+        KeyDown,
+        KeyUp,
+        Char,
+        SystemChar,
+        DeadChar,
+        SystemDeadChar,
+        UniChar,
+    };
+
+    enum class MouseButton
+    {
+        None,
+        Left,
+        Right,
+        Middle
+    };
+
+    struct InputModifiers
+    {
+        bool shift { false };
+        bool control { false };
+        bool alt { false };
+        bool leftButton { false };
+        bool rightButton { false };
+        bool middleButton { false };
+    };
+
+    struct InputEvent
+    {
+        InputEventType type { InputEventType::None };
+        MouseButton button { MouseButton::None };
+        POINT point {};
+        bool hasPoint { false };
+        short wheelDelta { 0 };
+        UINT keyCode { 0 };
+        UINT repeatCount { 0 };
+        UINT scanCode { 0 };
+        bool isSystemKey { false };
+        bool wasDown { false };
+        bool isKeyUpTransition { false };
+        bool isExtendedKey { false };
+        InputModifiers modifiers {};
+    };
+
+    struct CommandEvent
+    {
+        UINT id { 0 };
+        WPARAM wParam { 0 };
+        LPARAM lParam { 0 };
+    };
+
     class Wnd : public std::enable_shared_from_this<Wnd>
     {
     public:
@@ -64,7 +127,8 @@ namespace FD2D
         // Default implementation forwards to children.
         virtual void OnRenderD3D(ID3D11DeviceContext* context);
         virtual void OnRender(ID2D1RenderTarget* target);
-        virtual bool OnMessage(UINT message, WPARAM wParam, LPARAM lParam);
+        virtual bool OnInputEvent(const InputEvent& event);
+        virtual bool OnCommandEvent(const CommandEvent& event);
         virtual bool OnFileDrop(const std::wstring& path, const POINT& clientPt);
 
         // File drag hover (OLE drag&drop). Default implementation hit-tests children (topmost first).
@@ -75,12 +139,6 @@ namespace FD2D
 
         void RequestFocus();
         bool HasFocus() const;
-
-        // Mouse-point override for internal routed events (e.g. ScrollView content translation).
-        // When set, ExtractMousePoint() ignores lParam packing limits and returns full 32-bit coords.
-        static POINT ExtractMousePoint(LPARAM lParam);
-        static void PushMousePointOverride(const POINT& pt);
-        static void PopMousePointOverride();
 
     protected:
         Backplate* BackplateRef() const;

@@ -1,5 +1,4 @@
 #include "Button.h"
-#include <windowsx.h>
 
 namespace FD2D
 {
@@ -54,15 +53,17 @@ namespace FD2D
         m_click = std::move(handler);
     }
 
-    bool Button::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)
+    bool Button::OnInputEvent(const InputEvent& event)
     {
-        UNREFERENCED_PARAMETER(wParam);
-
-        switch (message)
+        switch (event.type)
         {
-        case WM_MOUSEMOVE:
+        case InputEventType::MouseMove:
         {
-            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (!event.hasPoint)
+            {
+                return false;
+            }
+            POINT pt = event.point;
             bool prevHover = m_hovered;
             m_hovered = HitTest(pt);
             if (m_hovered != prevHover)
@@ -71,9 +72,13 @@ namespace FD2D
             }
             return m_hovered;
         }
-        case WM_LBUTTONDOWN:
+        case InputEventType::MouseDown:
         {
-            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (event.button != MouseButton::Left || !event.hasPoint)
+            {
+                break;
+            }
+            POINT pt = event.point;
             if (HitTest(pt))
             {
                 m_pressed = true;
@@ -82,12 +87,16 @@ namespace FD2D
             }
             break;
         }
-        case WM_LBUTTONUP:
+        case InputEventType::MouseUp:
         {
+            if (event.button != MouseButton::Left || !event.hasPoint)
+            {
+                break;
+            }
             bool wasPressed = m_pressed;
             m_pressed = false;
 
-            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            POINT pt = event.point;
             if (wasPressed && HitTest(pt))
             {
                 if (m_click)
@@ -107,7 +116,7 @@ namespace FD2D
             break;
         }
 
-        return Wnd::OnMessage(message, wParam, lParam);
+        return Wnd::OnInputEvent(event);
     }
 
     void Button::OnRender(ID2D1RenderTarget* target)

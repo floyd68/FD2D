@@ -21,7 +21,7 @@ namespace FD2D
         void SetColors(const D2D1_COLOR_F& normal, const D2D1_COLOR_F& hot, const D2D1_COLOR_F& pressed);
         void OnClick(ClickHandler handler);
 
-        bool OnMessage(UINT message, WPARAM wParam, LPARAM lParam) override;
+        bool OnInputEvent(const InputEvent& event) override;
         void OnRender(ID2D1RenderTarget* target) override;
 
     private:

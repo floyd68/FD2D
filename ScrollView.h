@@ -47,7 +47,7 @@ namespace FD2D
         Size MinSize() const override;
         void Arrange(Rect finalRect) override;
         void OnRender(ID2D1RenderTarget* target) override;
-        bool OnMessage(UINT message, WPARAM wParam, LPARAM lParam) override;
+        bool OnInputEvent(const InputEvent& event) override;
 
     private:
         void ClampScroll();

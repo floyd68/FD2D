@@ -44,10 +44,6 @@ namespace FD2D
     class Backplate
     {
     public:
-        // Worker thread -> UI thread redraw 요청용 커스텀 메시지
-        static constexpr UINT WM_FD2D_REQUEST_REDRAW = WM_APP + 0x4D2; // 'FD2'
-        // UI thread에서 paint를 "곧바로" 한 번만 유도하기 위한 flush 메시지 (coalesce 용도)
-        static constexpr UINT WM_FD2D_FLUSH_REDRAW = WM_APP + 0x4D3; // 'FD3'
         // Broadcast an application message to all top-level Wnds (bypasses focus-based routing).
         static constexpr UINT WM_FD2D_BROADCAST = WM_APP + 0x4D4; // 'FD4'
 
@@ -76,7 +72,6 @@ namespace FD2D
         void Show(int nCmdShow);
 
         bool AddWnd(const std::shared_ptr<Wnd>& wnd);
-        bool OnMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
         void SetFocusedWnd(Wnd* wnd);
         Wnd* FocusedWnd() const { return m_focusedWnd; }
@@ -185,6 +180,7 @@ namespace FD2D
         Microsoft::WRL::ComPtr<ID3D11Texture2D> m_offscreenTexture {};
         Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_offscreenRTV {};
         Microsoft::WRL::ComPtr<ID2D1Bitmap1> m_offscreenD2DTarget {};      // D2D view of offscreen texture
+        ID3D11RenderTargetView* m_activeD3DRenderTarget { nullptr };       // Current-frame D3D target (swapchain or offscreen)
         
         bool m_useOffscreenBuffer { true };
 
@@ -193,7 +189,6 @@ namespace FD2D
         bool m_classRegistered { false };
         std::wstring m_name {};
         bool m_layoutDirty { true };
-        bool m_flushRedrawQueued { false };
 
         HANDLE m_asyncRedrawEvent { nullptr };
         std::atomic<bool> m_asyncRedrawPending { false };

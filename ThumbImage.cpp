@@ -8,7 +8,6 @@
 #include <cmath>
 #include <vector>
 #include <limits>
-#include <windowsx.h>
 
 namespace FD2D
 {
@@ -510,15 +509,17 @@ namespace FD2D
         Wnd::OnRender(target);
     }
 
-    bool ThumbImage::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)
+    bool ThumbImage::OnInputEvent(const InputEvent& event)
     {
-        UNREFERENCED_PARAMETER(wParam);
-
-        switch (message)
+        switch (event.type)
         {
-        case WM_LBUTTONDOWN:
+        case InputEventType::MouseDown:
         {
-            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (event.button != MouseButton::Left || !event.hasPoint)
+            {
+                break;
+            }
+            POINT pt = event.point;
             const D2D1_RECT_F r = LayoutRect();
             if (static_cast<float>(pt.x) >= r.left &&
                 static_cast<float>(pt.x) <= r.right &&
@@ -537,7 +538,7 @@ namespace FD2D
             break;
         }
 
-        return Wnd::OnMessage(message, wParam, lParam);
+        return Wnd::OnInputEvent(event);
     }
 }
 

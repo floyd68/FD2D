@@ -5,7 +5,6 @@
 #include "Util.h"
 #include "../ImageCore/ImageRequest.h"
 #include <algorithm>
-#include <windowsx.h>
 #include <cmath>
 #include <d3dcompiler.h>
 #include <d2d1_1.h>  // For Direct2D 1.1 interpolation modes
@@ -88,63 +87,7 @@ namespace FD2D
         static Microsoft::WRL::ComPtr<ID3D11SamplerState> g_samplerWrap {};
         static Microsoft::WRL::ComPtr<ID3D11BlendState> g_blend {};
         static Microsoft::WRL::ComPtr<ID3D11RasterizerState> g_rsScissor {};
-        static Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> g_backdropSrv {};
-        static UINT32 g_backdropColor = 0;
         static Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> g_checkerSrv {};
-
-        static UINT32 ColorFToAarrggbb(const D2D1_COLOR_F& c)
-        {
-            const auto ToByte = [](float v) -> UINT32
-            {
-                v = (std::max)(0.0f, (std::min)(1.0f, v));
-                return static_cast<UINT32>(std::floor(v * 255.0f + 0.5f));
-            };
-
-            const UINT32 a = ToByte(c.a);
-            const UINT32 r = ToByte(c.r);
-            const UINT32 g = ToByte(c.g);
-            const UINT32 b = ToByte(c.b);
-            return (a << 24) | (r << 16) | (g << 8) | b;
-        }
-
-        static HRESULT EnsureBackdropSrv(ID3D11Device* device, UINT32 aarrggbb)
-        {
-            if (!device)
-            {
-                return E_INVALIDARG;
-            }
-
-            if (g_backdropSrv && g_backdropColor == aarrggbb)
-            {
-                return S_OK;
-            }
-
-            g_backdropSrv.Reset();
-            g_backdropColor = aarrggbb;
-
-            D3D11_TEXTURE2D_DESC td {};
-            td.Width = 1;
-            td.Height = 1;
-            td.MipLevels = 1;
-            td.ArraySize = 1;
-            td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-            td.SampleDesc.Count = 1;
-            td.Usage = D3D11_USAGE_IMMUTABLE;
-            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-            D3D11_SUBRESOURCE_DATA init {};
-            init.pSysMem = &aarrggbb;
-            init.SysMemPitch = sizeof(aarrggbb);
-
-            Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
-            HRESULT hr = device->CreateTexture2D(&td, &init, &tex);
-            if (FAILED(hr))
-            {
-                return hr;
-            }
-
-            return device->CreateShaderResourceView(tex.Get(), nullptr, &g_backdropSrv);
-        }
 
         struct SrvCacheEntry
         {
@@ -387,9 +330,6 @@ namespace FD2D
                 return hr;
             }
 
-            // Ensure default 1x1 backdrop SRV exists (actual color is updated at draw time from Backplate).
-            (void)EnsureBackdropSrv(device, 0xFF17171A);
-
             // 64x64 checkerboard SRV for alpha visualization (tiled via wrap sampler).
             if (!g_checkerSrv)
             {
@@ -502,26 +442,6 @@ namespace FD2D
         info.format = m_loadedFormat;
         info.sourcePath = m_loadedFilePath;
         return info;
-    }
-
-    void Image::SetBackdropColor(const D2D1_COLOR_F& color)
-    {
-        // Avoid excessive invalidation if unchanged.
-        if (m_backdropColorOverrideValid &&
-            std::abs(m_backdropColorOverride.r - color.r) < 0.0001f &&
-            std::abs(m_backdropColorOverride.g - color.g) < 0.0001f &&
-            std::abs(m_backdropColorOverride.b - color.b) < 0.0001f &&
-            std::abs(m_backdropColorOverride.a - color.a) < 0.0001f)
-        {
-            return;
-        }
-
-        m_backdropColorOverride = color;
-        m_backdropColorOverrideValid = true;
-
-        // Force brush refresh next render (D2D path).
-        m_backdropColorValid = false;
-        Invalidate();
     }
 
     void Image::SetViewTransform(const ViewTransform& vt, bool notify)
@@ -1046,36 +966,8 @@ namespace FD2D
         const bool gpuActive = (m_request.purpose == ImageCore::ImagePurpose::FullResolution &&
             m_backplate && m_backplate->D3DDevice() != nullptr && m_gpuSrv);
 
-        // Ensure a stable backdrop for the main image region so we never "see through" to the window clear
-        // during fades/loads (especially with aspect-fit letterboxing).
-        //
-        // IMPORTANT: When GPU path is active, the main image is rendered in the D3D pass. The D2D pass runs
-        // afterwards, so drawing a backdrop here would cover the GPU image.
-        if (m_request.purpose == ImageCore::ImagePurpose::FullResolution && !gpuActive)
-        {
-            D2D1_COLOR_F bg = m_backdropColorOverrideValid
-                ? m_backdropColorOverride
-                : (BackplateRef() ? BackplateRef()->ClearColor() : D2D1::ColorF(0.09f, 0.09f, 0.10f, 1.0f));
-
-            const bool needsBrush = (!m_backdropBrush) ||
-                (!m_backdropColorValid) ||
-                (std::abs(m_backdropColor.r - bg.r) > 0.0001f) ||
-                (std::abs(m_backdropColor.g - bg.g) > 0.0001f) ||
-                (std::abs(m_backdropColor.b - bg.b) > 0.0001f) ||
-                (std::abs(m_backdropColor.a - bg.a) > 0.0001f);
-
-            if (needsBrush)
-            {
-                m_backdropBrush.Reset();
-                (void)target->CreateSolidColorBrush(bg, &m_backdropBrush);
-                m_backdropColor = bg;
-                m_backdropColorValid = true;
-            }
-            if (m_backdropBrush)
-            {
-                target->FillRectangle(LayoutRect(), m_backdropBrush.Get());
-            }
-        }
+        // Background/letterbox rendering belongs to container panes.
+        // This image control renders only image content.
 
         // Apply pending decoded payload (set by worker thread).
         std::shared_ptr<std::vector<uint8_t>> pendingBlocks {};
@@ -1575,15 +1467,19 @@ namespace FD2D
         }
     }
 
-    bool Image::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)
+    bool Image::OnInputEvent(const InputEvent& event)
     {
         if (!m_interactionEnabled)
         {
-            switch (message)
+            switch (event.type)
             {
-            case WM_LBUTTONDOWN:
+            case InputEventType::MouseDown:
             {
-                POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                if (event.button != MouseButton::Left || !event.hasPoint)
+                {
+                    break;
+                }
+                POINT pt = event.point;
                 const D2D1_RECT_F r = LayoutRect();
                 if (static_cast<float>(pt.x) >= r.left &&
                     static_cast<float>(pt.x) <= r.right &&
@@ -1598,22 +1494,26 @@ namespace FD2D
                 }
                 break;
             }
-            case WM_MOUSEMOVE:
-            case WM_LBUTTONUP:
-            case WM_MOUSEWHEEL:
+            case InputEventType::MouseMove:
+            case InputEventType::MouseUp:
+            case InputEventType::MouseWheel:
                 return false;
             default:
                 break;
             }
         }
 
-        switch (message)
+        switch (event.type)
         {
-        case WM_LBUTTONDOWN:
+        case InputEventType::MouseDown:
         {
+            if (event.button != MouseButton::Left || !event.hasPoint)
+            {
+                break;
+            }
             // Backplate has already converted coordinates to client/Layout coordinate system
             // lParam now contains coordinates in Layout coordinate system (same as client coordinates)
-            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            POINT pt = event.point;
             const D2D1_RECT_F r = LayoutRect();
             
             // Check if mouse is within image bounds (both in Layout coordinate system)
@@ -1651,14 +1551,18 @@ namespace FD2D
             }
             break;
         }
-        case WM_MOUSEMOVE:
+        case InputEventType::MouseMove:
         {
+            if (!event.hasPoint)
+            {
+                break;
+            }
             if ((m_panArmed || m_panning) && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
             {
                 // Backplate has already converted coordinates to client/Layout coordinate system
                 // When mouse is captured, Backplate uses GetCursorPos() and converts to client coordinates
                 // lParam now contains coordinates in Layout coordinate system (same as client coordinates)
-                POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                POINT pt = event.point;
                 
                 // Update pan offset based on mouse movement
                 // Both m_panStartX/Y and pt are in Layout coordinate system (same as client coordinates)
@@ -1694,8 +1598,12 @@ namespace FD2D
             }
             break;
         }
-        case WM_LBUTTONUP:
+        case InputEventType::MouseUp:
         {
+            if (event.button != MouseButton::Left)
+            {
+                break;
+            }
             if ((m_panArmed || m_panning) && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
             {
                 const bool wasPanning = m_panning;
@@ -1718,7 +1626,7 @@ namespace FD2D
             }
             break;
         }
-        case WM_CAPTURECHANGED:
+        case InputEventType::CaptureChanged:
         {
             // If capture is lost while panning, stop panning
             if ((m_panArmed || m_panning) && GetCapture() != BackplateRef()->Window())
@@ -1728,8 +1636,12 @@ namespace FD2D
             }
             break;
         }
-        case WM_MOUSEWHEEL:
+        case InputEventType::MouseWheel:
         {
+            if (!event.hasPoint)
+            {
+                break;
+            }
             // Only handle zoom for main image (FullResolution)
             if (m_request.purpose != ImageCore::ImagePurpose::FullResolution)
             {
@@ -1738,11 +1650,11 @@ namespace FD2D
 
             // Backplate has already converted coordinates to client/Layout coordinate system
             // lParam now contains coordinates in Layout coordinate system (same as client coordinates)
-            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            POINT pt = event.point;
             const D2D1_RECT_F r = LayoutRect();
 #ifdef _DEBUG
             wchar_t dbg[256];
-            swprintf_s(dbg, L"[FD2D][Image][WM_MOUSEWHEEL] pt=(%d,%d) LayoutRect=[%.1f,%.1f,%.1f,%.1f] zoomScale=%.2f\n",
+            swprintf_s(dbg, L"[FD2D][Image][MouseWheel] pt=(%d,%d) LayoutRect=[%.1f,%.1f,%.1f,%.1f] zoomScale=%.2f\n",
                 pt.x, pt.y, r.left, r.top, r.right, r.bottom, m_zoomScale);
             OutputDebugStringW(dbg);
 #endif
@@ -1752,8 +1664,8 @@ namespace FD2D
                 static_cast<float>(pt.y) >= r.top &&
                 static_cast<float>(pt.y) <= r.bottom)
             {
-                const short delta = GET_WHEEL_DELTA_WPARAM(wParam);
-                const bool shiftPressed = (GET_KEYSTATE_WPARAM(wParam) & MK_SHIFT) != 0;
+                const short delta = event.wheelDelta;
+                const bool shiftPressed = event.modifiers.shift;
                 
                 // 비율 곱셈 + 누적 방식: 현재 targetZoomScale에 비율을 곱해서 누적
                 // Shift: 10% 증가/감소, No Shift: 50% 증가/감소
@@ -1762,7 +1674,7 @@ namespace FD2D
                 const float newZoom = m_targetZoomScale * zoomFactor; // 비율 곱셈 + 누적
                 
 #ifdef _DEBUG
-                swprintf_s(dbg, L"[FD2D][Image][WM_MOUSEWHEEL] delta=%d zoomFactor=%.3f target=%.2f -> new=%.2f\n",
+                swprintf_s(dbg, L"[FD2D][Image][MouseWheel] delta=%d zoomFactor=%.3f target=%.2f -> new=%.2f\n",
                     delta, zoomFactor, m_targetZoomScale, newZoom);
                 OutputDebugStringW(dbg);
 #endif
@@ -1789,7 +1701,7 @@ namespace FD2D
             break;
         }
 
-        return Wnd::OnMessage(message, wParam, lParam);
+        return Wnd::OnInputEvent(event);
     }
 
     void Image::OnRenderD3D(ID3D11DeviceContext* context)
@@ -1812,10 +1724,6 @@ namespace FD2D
         }
 
         (void)EnsureD3DQuadResources(device);
-
-        // Keep the 1x1 backdrop SRV in sync with our backdrop color.
-        const D2D1_COLOR_F bg = m_backdropColorOverrideValid ? m_backdropColorOverride : m_backplate->ClearColor();
-        (void)EnsureBackdropSrv(device, ColorFToAarrggbb(bg));
 
         const D2D1_SIZE_U logicalCs = m_backplate->ClientSize();
         D2D1_SIZE_U cs = m_backplate->RenderSurfaceSize();
@@ -1974,12 +1882,8 @@ namespace FD2D
             context->PSSetShaderResources(0, 1, nullSrv);
         };
 
-        // Paint a stable letterbox backdrop for the main image region so window background won't "peek through"
-        // during loading/transitions.
-        if (m_request.purpose == ImageCore::ImagePurpose::FullResolution && g_backdropSrv)
-        {
-            drawSrvRect(g_backdropSrv.Get(), layout, 1.0f, 1.0f, 1.0f, nullptr);
-        }
+        // Background/letterbox rendering belongs to container panes.
+        // This image control renders only image content.
 
         if (!m_gpuSrv || m_gpuWidth == 0 || m_gpuHeight == 0)
         {

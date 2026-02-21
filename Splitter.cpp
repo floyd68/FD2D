@@ -1,6 +1,5 @@
 #include "Splitter.h"
 #include "Backplate.h"
-#include <windowsx.h>
 #include <algorithm>
 #include <cmath>
 
@@ -208,15 +207,17 @@ namespace FD2D
         return ratio;
     }
 
-    bool Splitter::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)
+    bool Splitter::OnInputEvent(const InputEvent& event)
     {
-        UNREFERENCED_PARAMETER(wParam);
-
-        switch (message)
+        switch (event.type)
         {
-        case WM_MOUSEMOVE:
+        case InputEventType::MouseMove:
         {
-            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (!event.hasPoint)
+            {
+                return false;
+            }
+            POINT pt = event.point;
             bool wasHovered = m_hovered;
             m_hovered = HitTest(pt);
 
@@ -253,7 +254,7 @@ namespace FD2D
 
             return m_hovered;
         }
-        case WM_MOUSELEAVE:
+        case InputEventType::MouseLeave:
         {
             m_trackingMouseLeave = false;
             if (m_hovered)
@@ -264,7 +265,7 @@ namespace FD2D
             }
             return false;
         }
-        case WM_SETCURSOR:
+        case InputEventType::SetCursor:
         {
             // Natural cursor when hovering/dragging the splitter.
             // Only set it if the cursor is actually over our hit area.
@@ -287,9 +288,13 @@ namespace FD2D
             }
             break;
         }
-        case WM_LBUTTONDOWN:
+        case InputEventType::MouseDown:
         {
-            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (event.button != MouseButton::Left || !event.hasPoint)
+            {
+                break;
+            }
+            POINT pt = event.point;
             if (HitTest(pt) && BackplateRef())
             {
                 StartDrag(pt);
@@ -298,8 +303,12 @@ namespace FD2D
             }
             break;
         }
-        case WM_LBUTTONUP:
+        case InputEventType::MouseUp:
         {
+            if (event.button != MouseButton::Left)
+            {
+                break;
+            }
             if (m_dragging)
             {
                 EndDrag();
@@ -311,9 +320,13 @@ namespace FD2D
             }
             break;
         }
-        case WM_LBUTTONDBLCLK:
+        case InputEventType::MouseDoubleClick:
         {
-            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (event.button != MouseButton::Left || !event.hasPoint)
+            {
+                break;
+            }
+            POINT pt = event.point;
             if (HitTest(pt))
             {
                 HandleDoubleClick();
@@ -321,7 +334,7 @@ namespace FD2D
             }
             break;
         }
-        case WM_CAPTURECHANGED:
+        case InputEventType::CaptureChanged:
         {
             if (m_dragging)
             {
@@ -333,7 +346,7 @@ namespace FD2D
             break;
         }
 
-        return Wnd::OnMessage(message, wParam, lParam);
+        return Wnd::OnInputEvent(event);
     }
 
     void Splitter::OnRender(ID2D1RenderTarget* target)
