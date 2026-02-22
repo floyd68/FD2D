@@ -1,5 +1,6 @@
 #include "Splitter.h"
 #include "Backplate.h"
+#include "../CommonUtil.h"
 #include <algorithm>
 #include <cmath>
 
@@ -7,24 +8,6 @@ namespace FD2D
 {
     namespace
     {
-        static unsigned long long NowMs()
-        {
-            return static_cast<unsigned long long>(GetTickCount64());
-        }
-
-        static float Clamp01(float v)
-        {
-            if (v < 0.0f)
-            {
-                return 0.0f;
-            }
-            if (v > 1.0f)
-            {
-                return 1.0f;
-            }
-            return v;
-        }
-
         static float Lerp(float a, float b, float t)
         {
             return a + (b - a) * t;
@@ -378,7 +361,7 @@ namespace FD2D
         }
 
         // Hover fade animation (time-based).
-        const unsigned long long now = NowMs();
+        const unsigned long long now = CommonUtil::NowMs();
         if (m_lastHoverAnimMs == 0)
         {
             m_lastHoverAnimMs = now;
@@ -397,7 +380,7 @@ namespace FD2D
         {
             m_hoverT = (std::max)(targetT, m_hoverT - step);
         }
-        m_hoverT = Clamp01(m_hoverT);
+        m_hoverT = CommonUtil::Clamp01(m_hoverT);
 
         // Splitter visuals:
         // - Wide hit-area (rect) for usability
@@ -459,7 +442,7 @@ namespace FD2D
             // Grip dots (appear with hover/drag)
             if (m_brushGrip && (m_hoverT > 0.001f || m_dragging))
             {
-                const float gripT = Clamp01(m_hoverT + (m_dragging ? 0.35f : 0.0f));
+                const float gripT = CommonUtil::Clamp01(m_hoverT + (m_dragging ? 0.35f : 0.0f));
                 const float dotAlpha = 0.25f + 0.55f * gripT;
                 m_brushGrip->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, dotAlpha));
 

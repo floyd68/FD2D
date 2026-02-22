@@ -2,7 +2,7 @@
 #include "Backplate.h"
 #include "Spinner.h"
 #include "Core.h"  // For GetSupportedD2DVersion
-#include "Util.h"
+#include "../CommonUtil.h"
 #include "../ImageCore/ImageRequest.h"
 #include <algorithm>
 #include <cmath>
@@ -456,7 +456,7 @@ namespace FD2D
         m_panning = false;
         m_panArmed = false;
         m_pointerZoomActive = false;
-        m_lastZoomAnimMs = FD2D::Util::NowMs();
+        m_lastZoomAnimMs = CommonUtil::NowMs();
 
         ClampPanToVisible();
 
@@ -618,7 +618,7 @@ namespace FD2D
 
     HRESULT Image::SetSourceFile(const std::wstring& filePath)
     {
-        const std::wstring normalized = FD2D::Util::NormalizePath(filePath);
+        const std::wstring normalized = CommonUtil::NormalizePath(filePath);
 
         // When switching main images, preserve zoom/pan (comparison workflow),
         // but stop any in-flight interaction/animation state.
@@ -638,7 +638,7 @@ namespace FD2D
 
             m_pointerZoomActive = false;
             m_zoomVelocity = 0.0f;
-            m_lastZoomAnimMs = FD2D::Util::NowMs();
+            m_lastZoomAnimMs = CommonUtil::NowMs();
         }
 
         // If this path is already the current requested source, don't cancel/restart.
@@ -900,7 +900,7 @@ namespace FD2D
     {
         m_currentHandle = 0;
 
-        const std::wstring normalizedSource = FD2D::Util::NormalizePath(sourcePath);
+        const std::wstring normalizedSource = CommonUtil::NormalizePath(sourcePath);
 
         // 변환은 OnRender에서 render target을 사용하여 수행
         // 여기서는 저장만 하고 Invalidate로 OnRender 호출 유도
@@ -960,7 +960,7 @@ namespace FD2D
         // Advance smooth zoom animation
         if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
         {
-            AdvanceZoomAnimation(FD2D::Util::NowMs());
+            AdvanceZoomAnimation(CommonUtil::NowMs());
         }
 
         const bool gpuActive = (m_request.purpose == ImageCore::ImagePurpose::FullResolution &&
@@ -1347,7 +1347,7 @@ namespace FD2D
         constexpr float kMinZoom = 0.1f;
         constexpr float kMaxZoom = 50.0f;
         m_targetZoomScale = std::max(kMinZoom, std::min(kMaxZoom, scale));
-        m_lastZoomAnimMs = FD2D::Util::NowMs();
+        m_lastZoomAnimMs = CommonUtil::NowMs();
         // Immediately request animation frame for fast response
         if (BackplateRef() != nullptr)
         {
@@ -1364,7 +1364,7 @@ namespace FD2D
         m_panY = 0.0f;
         m_panning = false;
         m_pointerZoomActive = false;
-        m_lastZoomAnimMs = FD2D::Util::NowMs();
+        m_lastZoomAnimMs = CommonUtil::NowMs();
         // Immediately request animation frame for fast response
         if (BackplateRef() != nullptr)
         {
@@ -1714,7 +1714,7 @@ namespace FD2D
         // Advance smooth zoom animation (for GPU path)
         if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
         {
-            AdvanceZoomAnimation(FD2D::Util::NowMs());
+            AdvanceZoomAnimation(CommonUtil::NowMs());
         }
 
         ID3D11Device* device = m_backplate->D3DDevice();

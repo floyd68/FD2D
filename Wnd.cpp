@@ -1,5 +1,6 @@
 #include "Wnd.h"
 #include "Backplate.h"
+#include "Util.h"
 #include <algorithm>
 
 namespace FD2D
@@ -29,13 +30,6 @@ namespace FD2D
         // Since all LayoutRects are in the same client coordinate system, no conversion is needed
         // Parent Wnd and Child Wnd both receive coordinates in client/Layout coordinate system
 
-        static bool RectContainsPoint(const D2D1_RECT_F& r, const POINT& pt)
-        {
-            return pt.x >= r.left &&
-                pt.x <= r.right &&
-                pt.y >= r.top &&
-                pt.y <= r.bottom;
-        }
     }
 
     Wnd::Wnd()
@@ -347,7 +341,7 @@ namespace FD2D
                     {
                         continue;
                     }
-                    if (!RectContainsPoint(child->LayoutRect(), event.point))
+                    if (!Util::RectContainsPoint(child->LayoutRect(), event.point))
                     {
                         continue;
                     }
@@ -406,7 +400,7 @@ namespace FD2D
                 continue;
             }
 
-            if (!RectContainsPoint(child->LayoutRect(), clientPt))
+            if (!Util::RectContainsPoint(child->LayoutRect(), clientPt))
             {
                 continue;
             }
@@ -431,7 +425,7 @@ namespace FD2D
                 continue;
             }
 
-            if (!RectContainsPoint(child->LayoutRect(), clientPt))
+            if (!Util::RectContainsPoint(child->LayoutRect(), clientPt))
             {
                 continue;
             }

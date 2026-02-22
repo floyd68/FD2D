@@ -1,5 +1,6 @@
 #include "Backplate.h"
 #include "Core.h"
+#include "../CommonUtil.h"
 #include <cmath>
 #include <dxgi1_3.h>
 #include <string>
@@ -18,13 +19,6 @@ namespace FD2D
             || hr == DXGI_ERROR_DEVICE_RESET
             || hr == DXGI_ERROR_DRIVER_INTERNAL_ERROR;
     }
-
-    static unsigned long long NowMs()
-    {
-        return static_cast<unsigned long long>(GetTickCount64());
-    }
-
-    
 
     static InputEventType ToInputEventType(UINT message)
     {
@@ -572,7 +566,7 @@ namespace FD2D
 
     void Backplate::RequestAnimationFrame()
     {
-        m_lastAnimationRequestMs.store(NowMs());
+        m_lastAnimationRequestMs.store(CommonUtil::NowMs());
     }
 
     bool Backplate::HasActiveAnimation(unsigned long long nowMs) const

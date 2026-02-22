@@ -1,32 +1,12 @@
 #include "Spinner.h"
 #include "Backplate.h"
+#include "../CommonUtil.h"
 #include <algorithm>
 #include <cmath>
 #include <windows.h>
 
 namespace FD2D
 {
-    namespace
-    {
-        static unsigned long long NowMs()
-        {
-            return static_cast<unsigned long long>(GetTickCount64());
-        }
-
-        static float Clamp01(float v)
-        {
-            if (v < 0.0f)
-            {
-                return 0.0f;
-            }
-            if (v > 1.0f)
-            {
-                return 1.0f;
-            }
-            return v;
-        }
-    }
-
     Spinner::Spinner()
         : Wnd()
     {
@@ -85,7 +65,7 @@ namespace FD2D
         }
 
         // Smooth fade in/out to avoid abrupt dim-overlay flashes.
-        const unsigned long long now = NowMs();
+        const unsigned long long now = CommonUtil::NowMs();
         if (m_lastAnimMs == 0)
         {
             m_lastAnimMs = now;
@@ -136,7 +116,7 @@ namespace FD2D
 
             if (m_dimBrush)
             {
-                const float a = Clamp01(m_style.dimAlpha) * m_opacity;
+                const float a = CommonUtil::Clamp01(m_style.dimAlpha) * m_opacity;
                 m_dimBrush->SetColor(D2D1::ColorF(0.0f, 0.0f, 0.0f, a));
                 target->FillRectangle(r, m_dimBrush.Get());
             }
@@ -152,7 +132,7 @@ namespace FD2D
         const float outerRadius = baseRadius;
 
         const unsigned int period = (m_style.periodMs > 0) ? m_style.periodMs : 900U;
-        const unsigned long long t = NowMs();
+        const unsigned long long t = CommonUtil::NowMs();
         const float phase = static_cast<float>(t % static_cast<unsigned long long>(period)) / static_cast<float>(period);
         const float baseAngle = phase * 6.28318530718f;
 

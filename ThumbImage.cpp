@@ -2,7 +2,7 @@
 #include "Backplate.h"
 #include "Spinner.h"
 #include "Core.h"
-#include "Util.h"
+#include "../CommonUtil.h"
 
 #include <algorithm>
 #include <cmath>
@@ -72,7 +72,7 @@ namespace FD2D
 
     HRESULT ThumbImage::SetSourceFile(const std::wstring& filePath)
     {
-        const std::wstring normalized = FD2D::Util::NormalizePath(filePath);
+        const std::wstring normalized = CommonUtil::NormalizePath(filePath);
         if (!normalized.empty() && normalized == m_filePath)
         {
             // If a previous decode/create failed for the same path, allow explicit retry.
@@ -127,7 +127,7 @@ namespace FD2D
             return;
         }
         m_selected = selected;
-        m_selectionAnimStartMs = FD2D::Util::NowMs();
+        m_selectionAnimStartMs = CommonUtil::NowMs();
         Invalidate();
         if (BackplateRef() != nullptr)
         {
@@ -222,7 +222,7 @@ namespace FD2D
     {
         m_currentHandle = 0;
 
-        const std::wstring normalizedSource = FD2D::Util::NormalizePath(sourcePath);
+        const std::wstring normalizedSource = CommonUtil::NormalizePath(sourcePath);
 
     if (SUCCEEDED(hr) && image.blocks && !image.blocks->empty())
     {
@@ -439,8 +439,8 @@ namespace FD2D
                 bool selAnimating = false;
                 if (m_selectionAnimStartMs != 0 && m_selectionAnimMs > 0)
                 {
-                    const unsigned long long elapsed = FD2D::Util::NowMs() - m_selectionAnimStartMs;
-                    selT = FD2D::Util::Clamp01(static_cast<float>(elapsed) / static_cast<float>(m_selectionAnimMs));
+                    const unsigned long long elapsed = CommonUtil::NowMs() - m_selectionAnimStartMs;
+                    selT = CommonUtil::Clamp01(static_cast<float>(elapsed) / static_cast<float>(m_selectionAnimMs));
                     selAnimating = selT < 1.0f;
                 }
 
@@ -452,7 +452,7 @@ namespace FD2D
                 if (m_selectionStyle.breatheEnabled && m_selectionStyle.breathePeriodMs > 0)
                 {
                     const float period = static_cast<float>(m_selectionStyle.breathePeriodMs);
-                    const float t = static_cast<float>(FD2D::Util::NowMs() % static_cast<unsigned long long>(m_selectionStyle.breathePeriodMs));
+                    const float t = static_cast<float>(CommonUtil::NowMs() % static_cast<unsigned long long>(m_selectionStyle.breathePeriodMs));
                     const float phase = (t / period) * 6.28318530718f;
                     breathe01 = 0.5f + 0.5f * std::sinf(phase);
                 }

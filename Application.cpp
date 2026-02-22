@@ -1,15 +1,11 @@
 #include "Application.h"
+#include "../CommonUtil.h"
 // Tear down ImageCore before FD2D::Core shutdown and before app CoUninitialize
 #include "../ImageCore/ImageLoader.h"
 #include <vector>
 
 namespace FD2D
 {
-    static unsigned long long NowMs()
-    {
-        return static_cast<unsigned long long>(GetTickCount64());
-    }
-
     Application& Application::Instance()
     {
         static Application instance;
@@ -126,7 +122,7 @@ namespace FD2D
             // If any backplate has an active animation, wake at ~60fps to paint smoothly.
             // Otherwise, keep a safety heartbeat (prevents "stuck forever" if a wakeup is missed).
             DWORD timeoutMs = 1000;
-            const unsigned long long now = NowMs();
+            const unsigned long long now = CommonUtil::NowMs();
             for (const auto& kv : m_backplates)
             {
                 if (kv.second && kv.second->HasActiveAnimation(now))
@@ -171,7 +167,7 @@ namespace FD2D
             // Animation tick timeout (no messages/events, but animations are active).
             if (waitRes == WAIT_TIMEOUT)
             {
-                const unsigned long long t = NowMs();
+                const unsigned long long t = CommonUtil::NowMs();
                 for (const auto& kv : m_backplates)
                 {
                     if (kv.second)
@@ -197,7 +193,7 @@ namespace FD2D
 
             // Important: animations must advance even when the message queue is busy and we never hit WAIT_TIMEOUT.
             // So after draining messages, run a throttled animation tick.
-            const unsigned long long t = NowMs();
+            const unsigned long long t = CommonUtil::NowMs();
             for (const auto& kv : m_backplates)
             {
                 if (kv.second)
