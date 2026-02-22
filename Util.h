@@ -1,11 +1,9 @@
 #pragma once
 
-#include <string>
+#include <d2d1.h>
 
 namespace FD2D::Util
 {
-    unsigned long long NowMs();
-    float Clamp01(float v);
-    std::wstring NormalizePath(const std::wstring& path);
+    bool RectContainsPoint(const D2D1_RECT_F& r, const POINT& pt);
 }
 
