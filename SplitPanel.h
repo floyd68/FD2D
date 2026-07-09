@@ -8,9 +8,9 @@ namespace FD2D
 {
     enum class ConstraintPropagation
     {
-        None,       // 부모에 영향 없음
-        Minimum,    // 최소 크기만 전파 (Measure의 desired에 반영)
-        Strict      // (현재 엔진에서는 Minimum과 동일. 추후 overflow 정책/윈도우 min-size와 연계 가능)
+        None,       // No effect on parent
+        Minimum,    // Propagate minimum size only (reflected in Measure's desired)
+        Strict      // (Currently equivalent to Minimum. Can be linked to overflow policy/window min-size in the future)
     };
 
     class SplitPanel : public Panel

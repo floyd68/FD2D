@@ -43,7 +43,7 @@ namespace FD2D
         m_firstChild = child;
         if (m_firstChild && !m_firstChild->Name().empty())
         {
-            // 이미 추가되어 있지 않으면 추가
+            // Add if not already added
             if (Children().find(m_firstChild->Name()) == Children().end())
             {
                 AddChild(m_firstChild);
@@ -56,7 +56,7 @@ namespace FD2D
         m_secondChild = child;
         if (m_secondChild && !m_secondChild->Name().empty())
         {
-            // 이미 추가되어 있지 않으면 추가
+            // Add if not already added
             if (Children().find(m_secondChild->Name()) == Children().end())
             {
                 AddChild(m_secondChild);
@@ -77,8 +77,8 @@ namespace FD2D
         m_splitRatio = newRatio;
         if (m_splitter)
         {
-            // Splitter의 현재 비율 업데이트 (내부적으로만)
-            // 실제 Arrange에서 반영됨
+            // Update the Splitter's current ratio (internally only)
+            // Actually applied in Arrange
         }
         Invalidate();
     }
@@ -215,10 +215,10 @@ namespace FD2D
             m_splitter->SetRatio(clamped);
         }
         
-        // 레이아웃을 다시 계산하기 위해 Measure/Arrange 호출
+        // Call Measure/Arrange to recalculate layout
         if (BackplateRef() && m_bounds.w > 0.0f && m_bounds.h > 0.0f)
         {
-            // 현재 bounds를 사용하여 레이아웃 재계산
+            // Recalculate layout using current bounds
             Measure({ m_bounds.w, m_bounds.h });
             Arrange(m_bounds);
         }
@@ -285,7 +285,7 @@ namespace FD2D
 
     Size SplitPanel::Measure(Size available)
     {
-        // 자식들의 desired size를 계산
+        // Calculate desired size of children
         Size firstSize {};
         Size secondSize {};
         Size splitterSize {};
@@ -305,7 +305,7 @@ namespace FD2D
 
         if (m_orientation == SplitterOrientation::Horizontal)
         {
-            // 좌우 분할
+            // Left-right split
             float totalWidth = firstSize.w + splitterSize.w + secondSize.w;
             float maxHeight = (std::max)(firstSize.h, (std::max)(secondSize.h, splitterSize.h));
 
@@ -322,7 +322,7 @@ namespace FD2D
         }
         else
         {
-            // 상하 분할
+            // Top-bottom split
             float totalHeight = firstSize.h + splitterSize.h + secondSize.h;
             float maxWidth = (std::max)(firstSize.w, (std::max)(secondSize.w, splitterSize.w));
 
@@ -401,7 +401,7 @@ namespace FD2D
 
         if (m_orientation == SplitterOrientation::Horizontal)
         {
-            // 좌우 분할
+            // Left-right split
             float totalWidth = childArea.w;
             float splitterWidth = m_splitter ? m_splitter->Measure({ childArea.w, childArea.h }).w : 0.0f;
             float availableWidth = totalWidth - splitterWidth;
@@ -443,7 +443,7 @@ namespace FD2D
         }
         else
         {
-            // 상하 분할
+            // Top-bottom split
             float totalHeight = childArea.h;
             float splitterHeight = m_splitter ? m_splitter->Measure({ childArea.w, childArea.h }).h : 0.0f;
             float availableHeight = totalHeight - splitterHeight;

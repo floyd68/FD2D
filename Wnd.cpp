@@ -63,14 +63,14 @@ namespace FD2D
 
     Size Wnd::Measure(Size available)
     {
-        // 기본 Wnd는 자식이 없으면 크기가 0
+        // A base Wnd with no children has size 0
         if (m_childrenOrdered.empty())
         {
             m_desired = { 0.0f, 0.0f };
             return m_desired;
         }
 
-        // 자식이 있으면 자식들의 최대 크기를 사용
+        // If there are children, use the maximum size among them
         Size maxSize {};
         for (auto& child : m_childrenOrdered)
         {

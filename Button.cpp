@@ -14,9 +14,9 @@ namespace FD2D
 
     Size Button::Measure(Size available)
     {
-        // 라벨의 크기를 기반으로 버튼 크기 계산
+        // Calculate button size based on label size
         Size labelSize = m_label.Measure(available);
-        float padding = 20.0f; // 좌우 패딩
+        float padding = 20.0f; // Left/right padding
         m_desired = { labelSize.w + padding + 2 * m_margin, labelSize.h + 10.0f + 2 * m_margin };
         return m_desired;
     }
@@ -30,7 +30,7 @@ namespace FD2D
     {
         Wnd::Arrange(finalRect);
         
-        // 라벨을 버튼 중앙에 배치
+        // Place label at the center of the button
         const auto& rect = LayoutRect();
         D2D1_RECT_F labelRect = rect;
         m_label.SetRect(labelRect);

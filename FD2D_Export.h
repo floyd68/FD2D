@@ -1,8 +1,8 @@
 #pragma once
 
-// FD2D Export/Import 매크로 정의
-// Static 링크: FD2D_STATIC 정의
-// Dynamic 링크: FD2D_STATIC 미정의
+// FD2D Export/Import macro definitions
+// Static link: define FD2D_STATIC
+// Dynamic link: FD2D_STATIC not defined
 
 #ifdef FD2D_STATIC
     #define FD2D_API

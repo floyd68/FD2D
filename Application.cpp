@@ -46,7 +46,7 @@ namespace FD2D
         }
 
         auto backplate = std::make_shared<Backplate>(name);
-        // emplace 대신 insert 사용 (Release 모드 최적화 문제 방지)
+        // Use insert instead of emplace (prevents optimization issues in Release mode)
         m_backplates[name] = backplate;
         return backplate;
     }
@@ -65,7 +65,7 @@ namespace FD2D
             return nullptr;
         }
 
-        // emplace 대신 insert 사용 (Release 모드 최적화 문제 방지)
+        // Use insert instead of emplace (prevents optimization issues in Release mode)
         m_backplates[name] = backplate;
         return backplate;
     }

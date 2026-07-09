@@ -8,8 +8,8 @@ namespace FD2D
 {
     enum class SplitterOrientation
     {
-        Horizontal,  // 좌우 분할 (세로 선)
-        Vertical     // 상하 분할 (가로 선)
+        Horizontal,  // Left-right split (vertical line)
+        Vertical     // Top-bottom split (horizontal line)
     };
 
     class Splitter : public Wnd
@@ -64,7 +64,7 @@ namespace FD2D
         POINT m_dragStart {};
         float m_dragStartRatio { 0.5f };
         float m_currentRatio { 0.5f };
-        Rect m_dragStartParentBounds {};  // 드래그 시작 시점의 부모 bounds
+        Rect m_dragStartParentBounds {};  // Parent bounds at the start of the drag
 
         // Hover fade animation (0 = normal, 1 = hover).
         float m_hoverT { 0.0f };

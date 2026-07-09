@@ -27,6 +27,10 @@ namespace FD2D
     {
         HINSTANCE instance { nullptr };
         const wchar_t* title { L"FD2D Window" };
+        // Initial window position. Use CW_USEDEFAULT to let Windows decide.
+        // When x == CW_USEDEFAULT, y is ignored by the system.
+        int x { CW_USEDEFAULT };
+        int y { 0 };
         UINT width { 960 };
         UINT height { 640 };
         ChromeStyle chrome { ChromeStyle::Standard };

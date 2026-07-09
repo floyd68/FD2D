@@ -76,12 +76,12 @@ namespace FD2D
     {
         if (m_orientation == SplitterOrientation::Horizontal)
         {
-            // 좌우 분할: 세로 선
+            // Left-right split: vertical line
             m_desired = { m_hitAreaThickness, available.h };
         }
         else
         {
-            // 상하 분할: 가로 선
+            // Top-bottom split: horizontal line
             m_desired = { available.w, m_hitAreaThickness };
         }
         return m_desired;
@@ -112,7 +112,7 @@ namespace FD2D
         m_dragging = true;
         m_dragStart = pt;
         m_dragStartRatio = m_currentRatio;
-        // m_dragStartParentBounds는 SetParentBounds로 설정됨
+        // m_dragStartParentBounds is set via SetParentBounds
         Invalidate();
     }
 
@@ -128,7 +128,7 @@ namespace FD2D
 
         if (m_orientation == SplitterOrientation::Horizontal)
         {
-            // 좌우 분할: X 좌표 사용
+            // Left-right split: use X coordinate
             float deltaX = static_cast<float>(pt.x - m_dragStart.x);
             float parentWidth = parentBounds.w;
             
@@ -140,7 +140,7 @@ namespace FD2D
         }
         else
         {
-            // 상하 분할: Y 좌표 사용
+            // Top-bottom split: use Y coordinate
             float deltaY = static_cast<float>(pt.y - m_dragStart.y);
             float parentHeight = parentBounds.h;
             
@@ -151,7 +151,7 @@ namespace FD2D
             }
         }
 
-        // 0.0 ~ 1.0 범위로 제한
+        // Clamp to the range 0.0 ~ 1.0
         newRatio = (std::max)(0.0f, (std::min)(1.0f, newRatio));
 
         if (newRatio != m_currentRatio)
@@ -176,7 +176,7 @@ namespace FD2D
 
     void Splitter::HandleDoubleClick()
     {
-        // 더블클릭 시 균등 분할
+        // Reset to equal split on double-click
         m_currentRatio = 0.5f;
         if (m_splitChanged)
         {
@@ -341,7 +341,7 @@ namespace FD2D
 
         const auto& rect = LayoutRect();
 
-        // 브러시 생성
+        // Create brushes
         if (!m_brushNormal)
         {
             target->CreateSolidColorBrush(D2D1::ColorF(0.3f, 0.3f, 0.3f, 0.5f), &m_brushNormal);
@@ -426,14 +426,14 @@ namespace FD2D
 
             if (m_orientation == SplitterOrientation::Horizontal)
             {
-                // 좌우 분할: 세로 선
+                // Left-right split: vertical line
                 float centerX = (rect.left + rect.right) * 0.5f;
                 D2D1_RECT_F lineRect { centerX - lineThickness * 0.5f, rect.top, centerX + lineThickness * 0.5f, rect.bottom };
                 target->FillRectangle(&lineRect, brush.Get());
             }
             else
             {
-                // 상하 분할: 가로 선
+                // Top-bottom split: horizontal line
                 float centerY = (rect.top + rect.bottom) * 0.5f;
                 D2D1_RECT_F lineRect { rect.left, centerY - lineThickness * 0.5f, rect.right, centerY + lineThickness * 0.5f };
                 target->FillRectangle(&lineRect, brush.Get());

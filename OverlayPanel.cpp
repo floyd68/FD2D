@@ -14,7 +14,7 @@ namespace FD2D
 
     Size OverlayPanel::Measure(Size available)
     {
-        // OverlayPanel은 자식들의 최대 크기를 사용하되, available size를 초과하지 않음
+        // OverlayPanel uses the maximum size of its children, but does not exceed the available size
         Size maxSize {};
         for (auto& child : ChildrenInOrder())
         {
@@ -26,7 +26,7 @@ namespace FD2D
             }
         }
 
-        // available size를 초과하지 않도록 제한
+        // Clamp to not exceed the available size
         if (available.w > 0.0f && maxSize.w > available.w)
         {
             maxSize.w = available.w;

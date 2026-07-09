@@ -21,9 +21,14 @@ target_sources(FD2D PRIVATE
     Wnd.cpp
 )
 
-target_include_directories(FD2D PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/../ImageCore
+target_include_directories(FD2D
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../ImageCore
+    PRIVATE
+        # Required by Backplate.cpp which includes ../AppLog.h for startup timing.
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../external/spdlog/include
 )
 
 target_compile_definitions(FD2D PRIVATE
@@ -33,5 +38,5 @@ target_compile_definitions(FD2D PRIVATE
 )
 
 if(MSVC)
-    target_compile_options(FD2D PRIVATE /permissive-)
+    target_compile_options(FD2D PRIVATE /permissive- /utf-8)
 endif()

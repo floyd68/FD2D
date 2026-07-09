@@ -1,6 +1,7 @@
 #include "Backplate.h"
 #include "Core.h"
 #include "../CommonUtil.h"
+#include "../AppLog.h"
 #include <cmath>
 #include <dxgi1_3.h>
 #include <string>
@@ -626,8 +627,8 @@ namespace FD2D
             {
                 SetWindowLongPtr(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
                 self->m_window = hWnd;
-                // WM_NCCREATE 시점에는 창이 완전히 생성되지 않았으므로 렌더 타겟 생성을 지연
-                // WM_CREATE 또는 첫 WM_SIZE에서 생성됨
+                // At WM_NCCREATE the window is not fully created yet, so defer render target creation
+                // Created in WM_CREATE or on the first WM_SIZE
             }
         }
 
@@ -762,7 +763,7 @@ namespace FD2D
 
         case WM_CREATE:
         {
-            // 창이 완전히 생성된 후 렌더 타겟 생성
+            // Create render target after the window is fully created
             EnsureRenderTarget();
             result = 0;
             return true;
@@ -1059,7 +1060,7 @@ namespace FD2D
         if (RegisterClassExW(&wcex) == 0)
         {
             DWORD error = GetLastError();
-            // 클래스가 이미 등록되어 있으면 성공으로 간주
+            // If the class is already registered, treat it as success
             if (error == ERROR_ALREADY_EXISTS)
             {
                 m_classRegistered = true;
@@ -1135,8 +1136,8 @@ namespace FD2D
             opts.className,
             opts.title,
             style,
-            CW_USEDEFAULT,
-            0,
+            opts.x,
+            opts.y,
             static_cast<int>(opts.width),
             static_cast<int>(opts.height),
             nullptr,
@@ -1667,9 +1668,11 @@ namespace FD2D
         // Let the normal layout pass handle child measure/arrange once (avoids duplicate work per WM_SIZE).
         m_layoutDirty = true;
 
-        if (m_window != nullptr)
+        // Skip rendering if the window is not yet visible — the first visible render
+        // will pick up the new size via m_layoutDirty. This avoids a DXGI Present()
+        // VSync stall (~16 ms per frame) that SetWindowPlacement triggers before Show().
+        if (m_window != nullptr && IsWindowVisible(m_window))
         {
-            // Direct rendering for resize.
             Render();
         }
     }
@@ -1677,7 +1680,14 @@ namespace FD2D
     void Backplate::SetClearColor(const D2D1_COLOR_F& color)
     {
         m_clearColor = color;
-        if (m_window != nullptr)
+        // Only trigger an immediate render if the window is already visible.
+        // Before Show() is called, Render() would be the very first D3D/D2D
+        // rendering operation and triggers GPU driver cold-start (shader
+        // compilation, pipeline state caching) — typically 150–200 ms.
+        // Once the window is visible, the next WM_PAINT will pick up the
+        // new clear color anyway, so an immediate Render() is only needed
+        // to prevent a momentary flash when the user changes the color live.
+        if (m_window != nullptr && IsWindowVisible(m_window))
         {
             Render();
         }
@@ -2141,16 +2151,22 @@ namespace FD2D
             return false;
         }
 
+        FIC2_TIMER_START(t_addwnd);
+
         m_children.emplace(wnd->Name(), wnd);
         wnd->OnAttached(*this);
+        FIC2_LOG_STEP(t_addwnd, "[AddWnd] OnAttached");
+
         wnd->Measure({ static_cast<float>(m_size.width), static_cast<float>(m_size.height) });
         wnd->Arrange({ 0.0f, 0.0f, static_cast<float>(m_size.width), static_cast<float>(m_size.height) });
+        FIC2_LOG_STEP(t_addwnd, "[AddWnd] Measure + Arrange");
 
         m_layoutDirty = true;
 
         if (m_window != nullptr)
         {
             Render();
+            FIC2_LOG_STEP(t_addwnd, "[AddWnd] Render (first frame)");
         }
 
         return true;

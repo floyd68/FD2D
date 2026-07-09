@@ -603,14 +603,14 @@ namespace FD2D
 
     Size Image::Measure(Size available)
     {
-        // FullResolution은 윈도우 크기에 맞게 항상 available size 사용 (Aspect Ratio는 OnRender에서 처리)
+        // FullResolution always uses available size to match window size (Aspect Ratio is handled in OnRender)
         if (available.w > 0.0f && available.h > 0.0f)
         {
             m_desired = available;
         }
         else
         {
-            // 기본 크기
+            // Default size
             m_desired = { 800.0f, 600.0f };
         }
         return m_desired;
@@ -739,7 +739,7 @@ namespace FD2D
         m_forceCpuDecode.store(false);
         m_loading.store(false);
 
-        // Request 업데이트
+        // Update request
         m_request.source = normalized;
         
         return S_OK;
@@ -902,8 +902,8 @@ namespace FD2D
 
         const std::wstring normalizedSource = CommonUtil::NormalizePath(sourcePath);
 
-        // 변환은 OnRender에서 render target을 사용하여 수행
-        // 여기서는 저장만 하고 Invalidate로 OnRender 호출 유도
+        // Conversion is performed in OnRender using the render target
+        // Here we only store the data and trigger OnRender via Invalidate
         if (SUCCEEDED(hr) && image.blocks && !image.blocks->empty())
         {
             {
@@ -918,7 +918,7 @@ namespace FD2D
                 m_failedHr = S_OK;
             }
             
-            // worker thread에서 UI thread로 명확히 redraw 요청
+            // Explicitly request redraw from worker thread to UI thread
             if (m_backplate)
             {
                 // Wake UI thread without PostMessage; the UI loop waits on this event.
@@ -1410,7 +1410,7 @@ namespace FD2D
 
         // Critically Damped Spring Animation
         // This ensures smooth, natural motion without overshoot
-        const float stiffness = m_zoomStiffness; // 반응성 (higher = faster response, configurable via INI)
+        const float stiffness = m_zoomStiffness; // Responsiveness (higher = faster response, configurable via INI)
         const float damping = 2.0f * std::sqrt(stiffness); // Critically damped (no overshoot)
 
         const float diff = m_targetZoomScale - m_zoomScale;
@@ -1667,11 +1667,11 @@ namespace FD2D
                 const short delta = event.wheelDelta;
                 const bool shiftPressed = event.modifiers.shift;
                 
-                // 비율 곱셈 + 누적 방식: 현재 targetZoomScale에 비율을 곱해서 누적
-                // Shift: 10% 증가/감소, No Shift: 50% 증가/감소
+                // Ratio multiplication + accumulation: multiply the current targetZoomScale by the ratio and accumulate
+                // Shift: 10% increase/decrease, No Shift: 50% increase/decrease
                 const float zoomStep = shiftPressed ? 0.1f : 0.5f;
                 const float zoomFactor = (delta > 0) ? (1.0f + zoomStep) : (1.0f / (1.0f + zoomStep));
-                const float newZoom = m_targetZoomScale * zoomFactor; // 비율 곱셈 + 누적
+                const float newZoom = m_targetZoomScale * zoomFactor; // Ratio multiplication + accumulation
                 
 #ifdef _DEBUG
                 swprintf_s(dbg, L"[FD2D][Image][MouseWheel] delta=%d zoomFactor=%.3f target=%.2f -> new=%.2f\n",
