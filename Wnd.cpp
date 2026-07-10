@@ -5,32 +5,9 @@
 
 namespace FD2D
 {
-    namespace
-    {
-        static bool IsMouseInputEventType(InputEventType type)
-        {
-            switch (type)
-            {
-            case InputEventType::MouseMove:
-            case InputEventType::MouseDown:
-            case InputEventType::MouseUp:
-            case InputEventType::MouseDoubleClick:
-            case InputEventType::MouseWheel:
-            case InputEventType::MouseHWheel:
-            case InputEventType::MouseLeave:
-            case InputEventType::CaptureChanged:
-            case InputEventType::SetCursor:
-                return true;
-            default:
-                return false;
-            }
-        }
-
-        // Note: LayoutRect() returns coordinates in client coordinate system (Backplate client area)
-        // Since all LayoutRects are in the same client coordinate system, no conversion is needed
-        // Parent Wnd and Child Wnd both receive coordinates in client/Layout coordinate system
-
-    }
+    // Note: LayoutRect() returns coordinates in client coordinate system (Backplate client area)
+    // Since all LayoutRects are in the same client coordinate system, no conversion is needed
+    // Parent Wnd and Child Wnd both receive coordinates in client/Layout coordinate system
 
     Wnd::Wnd()
     {
@@ -324,7 +301,7 @@ namespace FD2D
         // Mouse input should behave like hit-testing: topmost child first, stop at first handled.
         // Note: Coordinates are already in client/Layout coordinate system (converted by Backplate)
         // All LayoutRects are in the same client coordinate system, so no conversion needed
-        if (IsMouseInputEventType(event.type))
+        if (Util::IsMouseInputEventType(event.type))
         {
             // For wheel input, route based on cursor position so the pane under the mouse receives it
             // even if another control currently owns focus.
@@ -474,13 +451,18 @@ namespace FD2D
     {
         if (m_backplate != nullptr)
         {
-            if (m_backplate->IsInSizeMove())
+            // Use InvalidateRect (post WM_PAINT) if we are inside a resize or
+            // already inside Render(). Calling Render() re-entrantly would set
+            // m_renderRequested=true and cause the do-while render loop to spin
+            // once per Invalidate() call, leading to multi-second stalls when
+            // many components (e.g. thumbnail spinners) call Invalidate() during
+            // a single frame.
+            if (m_backplate->IsInSizeMove() || m_backplate->IsRendering())
             {
                 InvalidateRect(m_backplate->Window(), nullptr, FALSE);
             }
             else
             {
-                // Direct rendering instead of message-loop based invalidation
                 m_backplate->Render();
             }
         }

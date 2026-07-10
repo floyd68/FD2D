@@ -1,4 +1,4 @@
-#include "Backplate.h"
+﻿#include "Backplate.h"
 #include "Core.h"
 #include "../CommonUtil.h"
 #include "../AppLog.h"
@@ -220,44 +220,9 @@ namespace FD2D
             return dataObject->QueryGetData(&fmt) == S_OK;
         }
 
-        static std::wstring GetFirstPathFromDataObject(IDataObject* dataObject)
-        {
-            if (dataObject == nullptr)
-            {
-                return {};
-            }
-
-            FORMATETC fmt {};
-            fmt.cfFormat = CF_HDROP;
-            fmt.ptd = nullptr;
-            fmt.dwAspect = DVASPECT_CONTENT;
-            fmt.lindex = -1;
-            fmt.tymed = TYMED_HGLOBAL;
-
-            STGMEDIUM stg {};
-            if (FAILED(dataObject->GetData(&fmt, &stg)))
-            {
-                return {};
-            }
-
-            std::wstring out;
-
-            const HDROP hDrop = reinterpret_cast<HDROP>(stg.hGlobal);
-            if (hDrop != nullptr)
-            {
-                wchar_t buf[MAX_PATH] {};
-                const UINT cch = DragQueryFileW(hDrop, 0, buf, static_cast<UINT>(std::size(buf)));
-                if (cch > 0)
-                {
-                    out = buf;
-                }
-            }
-
-            ReleaseStgMedium(&stg);
-            return out;
-        }
-
-        static std::vector<std::wstring> GetAllPathsFromDataObject(IDataObject* dataObject)
+        // Extracts file paths from a CF_HDROP data object.
+        // When firstOnly is true, only the first path is queried.
+        static std::vector<std::wstring> ExtractHDropPaths(IDataObject* dataObject, bool firstOnly)
         {
             std::vector<std::wstring> out;
             if (dataObject == nullptr)
@@ -282,7 +247,9 @@ namespace FD2D
             if (hDrop != nullptr)
             {
                 wchar_t buf[MAX_PATH] {};
-                const UINT fileCount = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+                const UINT fileCount = firstOnly
+                    ? 1U
+                    : DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
                 out.reserve(fileCount);
                 for (UINT i = 0; i < fileCount; ++i)
                 {
@@ -297,6 +264,17 @@ namespace FD2D
 
             ReleaseStgMedium(&stg);
             return out;
+        }
+
+        static std::wstring GetFirstPathFromDataObject(IDataObject* dataObject)
+        {
+            const auto paths = ExtractHDropPaths(dataObject, true /*firstOnly*/);
+            return paths.empty() ? std::wstring {} : paths.front();
+        }
+
+        static std::vector<std::wstring> GetAllPathsFromDataObject(IDataObject* dataObject)
+        {
+            return ExtractHDropPaths(dataObject, false /*firstOnly*/);
         }
     }
 
@@ -561,7 +539,13 @@ namespace FD2D
         else
         {
             // Trigger a prompt repaint (once per coalesced burst).
+            FIC2_TIMER_START(t_redraw);
             RedrawWindow(m_window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+            const auto redrawMs = FIC2_ELAPSED_MS(t_redraw);
+            if (redrawMs > 50)
+            {
+                FIC2_LOG_INFO("[UI stall] ProcessAsyncRedraw: RedrawWindow(UPDATENOW) took {}ms", redrawMs);
+            }
         }
     }
 
@@ -605,8 +589,21 @@ namespace FD2D
         }
         m_lastAnimationTickMs.store(nowMs);
 
-        // Direct rendering: bypass message loop for smoother 60fps animation
+        // Direct rendering: bypass message loop for smoother 60fps animation.
+        // Log frames that take > 100ms (rate-limited to one log per 100ms to avoid flooding).
+        FIC2_TIMER_START(t_frame);
         Render();
+        const auto frameMs = FIC2_ELAPSED_MS(t_frame);
+        if (frameMs > 100)
+        {
+            static std::chrono::steady_clock::time_point s_lastSlowFrameLog {};
+            const auto nowTp = std::chrono::steady_clock::now();
+            if (nowTp - s_lastSlowFrameLog >= std::chrono::milliseconds(100))
+            {
+                FIC2_LOG_INFO("[UI stall] ProcessAnimationTick: Render took {}ms", frameMs);
+                s_lastSlowFrameLog = nowTp;
+            }
+        }
     }
 
     Wnd* Backplate::FindTargetWnd(const POINT& ptClient)
@@ -1777,8 +1774,11 @@ namespace FD2D
         m_isRendering = true;
 
         // Render loop: continue until no more render requests
+        int renderLoopIterations = 0;
+        const auto t_renderLoop = std::chrono::steady_clock::now();
         do
         {
+            ++renderLoopIterations;
             m_renderRequested = false;
             m_renderSurfaceSize = m_size;
             m_logicalToRenderScale = D2D1::SizeF(1.0f, 1.0f);
@@ -1819,7 +1819,15 @@ namespace FD2D
             {
                 Layout();
             }
+            const auto t_ensure = std::chrono::steady_clock::now();
             HRESULT hrEnsure = EnsureRenderTarget();
+            {
+                const auto ensureMs = FIC2_ELAPSED_MS(t_ensure);
+                if (ensureMs > 30)
+                {
+                    FIC2_LOG_INFO("[Render] EnsureRenderTarget took {}ms", ensureMs);
+                }
+            }
             if (FAILED(hrEnsure))
             {
                 // If D3D path failed, try automatic fallback to D2D-only once.
@@ -2012,11 +2020,19 @@ namespace FD2D
             vp.MaxDepth = 1.0f;
             m_d3dContext->RSSetViewports(1, &vp);
 
+            const auto t_d3dPass = std::chrono::steady_clock::now();
             for (auto& pair : m_children)
             {
                 if (pair.second)
                 {
                     pair.second->OnRenderD3D(m_d3dContext.Get());
+                }
+            }
+            {
+                const auto d3dPassMs = FIC2_ELAPSED_MS(t_d3dPass);
+                if (d3dPassMs > 30)
+                {
+                    FIC2_LOG_INFO("[Render] D3D OnRenderD3D pass took {}ms", d3dPassMs);
                 }
             }
 
@@ -2062,7 +2078,15 @@ namespace FD2D
             }
         }
 
+        const auto t_endDraw = std::chrono::steady_clock::now();
         HRESULT hr = m_d2dContext->EndDraw();
+        {
+            const auto endDrawMs = FIC2_ELAPSED_MS(t_endDraw);
+            if (endDrawMs > 30)
+            {
+                FIC2_LOG_INFO("[Render] D2D EndDraw (primary) took {}ms", endDrawMs);
+            }
+        }
         
         // Copy offscreen to swap chain backbuffer if double-buffering
         if (SUCCEEDED(hr) && useOffscreenThisFrame && m_offscreenD2DTarget && m_d2dTargetBitmap)
@@ -2081,7 +2105,15 @@ namespace FD2D
                 D2D1_INTERPOLATION_MODE_LINEAR,
                 D2D1_COMPOSITE_MODE_SOURCE_COPY);
             
+            const auto t_endDraw2 = std::chrono::steady_clock::now();
             hr = m_d2dContext->EndDraw();
+            {
+                const auto endDraw2Ms = FIC2_ELAPSED_MS(t_endDraw2);
+                if (endDraw2Ms > 30)
+                {
+                    FIC2_LOG_INFO("[Render] D2D EndDraw (offscreen copy) took {}ms", endDraw2Ms);
+                }
+            }
         }
         if (FAILED(hr))
         {
@@ -2104,11 +2136,23 @@ namespace FD2D
 
         if (m_swapChain)
         {
+            const auto t_present = std::chrono::steady_clock::now();
             (void)m_swapChain->Present(1, 0);
+            const auto presentMs = FIC2_ELAPSED_MS(t_present);
+            if (presentMs > 30)
+            {
+                FIC2_LOG_INFO("[Render] SwapChain::Present(1,0) took {}ms", presentMs);
+            }
         }
         } // end else (D3D11 path)
 
         } while (m_renderRequested); // Render again if requested during this frame
+
+        if (renderLoopIterations > 1)
+        {
+            const auto loopMs = FIC2_ELAPSED_MS(t_renderLoop);
+            FIC2_LOG_INFO("[Render] do-while loop ran {} iterations in {}ms", renderLoopIterations, loopMs);
+        }
 
         m_isRendering = false;
     }

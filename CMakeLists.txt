@@ -2,6 +2,7 @@ add_library(FD2D STATIC)
 
 target_sources(FD2D PRIVATE
     Application.cpp
+    AsyncImagePipeline.cpp
     Backplate.cpp
     Button.cpp
     Core.cpp

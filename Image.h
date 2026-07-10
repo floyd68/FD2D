@@ -1,16 +1,15 @@
 #pragma once
 
 #include "Wnd.h"
+#include "AsyncImagePipeline.h"
 #include "../ImageCore/ImageRequest.h"
 #include "../ImageCore/ImageLoader.h"
 #include <wrl/client.h>
 #include <d3d11_1.h>
 #include <d2d1_1.h>  // For Direct2D 1.1+ interpolation modes
 #include <functional>
-#include <mutex>
 #include <atomic>
 #include <memory>
-#include <vector>
 
 namespace FD2D
 {
@@ -34,6 +33,9 @@ namespace FD2D
             float zoomVelocity { 0.0f };
             float panX { 0.0f };
             float panY { 0.0f };
+            // 0 = 0°, 1 = 90°CW, 2 = 180°, 3 = 270°CW.
+            // Resets to 0 when a different source file is loaded.
+            int rotationQuarters { 0 };
         };
         using ViewChangedHandler = std::function<void(const ViewTransform&)>;
 
@@ -71,10 +73,16 @@ namespace FD2D
         void SetInteractionEnabled(bool enabled);
         bool InteractionEnabled() const { return m_interactionEnabled; }
 
-        // View transform (zoom/pan) for sync scenarios (compare mode).
+        // View transform (zoom/pan/rotation) for sync scenarios (compare mode).
         ViewTransform GetViewTransform() const;
         void SetViewTransform(const ViewTransform& vt, bool notify = true);
         void SetOnViewChanged(ViewChangedHandler handler);
+
+        // Rotate the current image 90° clockwise / counter-clockwise.
+        // Fires the view-changed callback so synced panes update automatically.
+        // Rotation resets to 0 when a different source file is loaded.
+        void RotateCW();
+        void RotateCCW();
 
         // Alpha visualization:
         // - When enabled, draws a checkerboard backdrop in the image destination rect so transparent pixels
@@ -95,10 +103,6 @@ namespace FD2D
 
     private:
         void RequestImageLoad();
-        void OnImageLoaded(
-            const std::wstring& sourcePath,
-            HRESULT hr,
-            ImageCore::DecodedImage image);
         bool TryGetBitmapSize(D2D1_SIZE_F& outSize) const;
         bool TryComputeAspectFitBaseRect(const D2D1_RECT_F& layoutRect, const D2D1_SIZE_F& bitmapSize, D2D1_RECT_F& outRect) const;
         void ClampPanToVisible();
@@ -107,13 +111,10 @@ namespace FD2D
         // The source path currently represented by m_bitmap (can lag behind m_filePath while loading the next image).
         std::wstring m_loadedFilePath {};
         ImageCore::ImageRequest m_request {};
-        ImageCore::ImageHandle m_currentHandle { 0 };
-        std::atomic<bool> m_loading { false };
-        std::atomic<unsigned long long> m_requestToken { 0 };
-        std::atomic<unsigned long long> m_inflightToken { 0 };
         std::atomic<bool> m_forceCpuDecode { false };
-        std::wstring m_failedFilePath {};
-        HRESULT m_failedHr { S_OK };
+
+        // Shared async load pipeline (tokens, pending payload, failure state).
+        AsyncImagePipeline m_pipeline { &m_backplate };
 
         Microsoft::WRL::ComPtr<ID2D1Bitmap> m_bitmap {};
 
@@ -122,16 +123,6 @@ namespace FD2D
         bool m_alphaCheckerboardEnabled { false };
         bool m_interactionEnabled { true };
         bool m_highQualitySampling { true };
-
-        // Pending decoded payload produced on a worker thread.
-        // Consumed on the render/UI thread to create D2D bitmaps / upload to D3D resources.
-        mutable std::mutex m_pendingMutex;
-        std::shared_ptr<std::vector<uint8_t>> m_pendingBlocks {};
-        uint32_t m_pendingW { 0 };
-        uint32_t m_pendingH { 0 };
-        uint32_t m_pendingRowPitch { 0 };
-        DXGI_FORMAT m_pendingFormat { DXGI_FORMAT_UNKNOWN };
-        std::wstring m_pendingSourcePath {};
 
         ClickHandler m_onClick {};
         bool m_loadingSpinnerEnabled { true };
@@ -175,6 +166,9 @@ namespace FD2D
 
         ViewChangedHandler m_onViewChanged {};
         bool m_suppressViewNotify { false };
+
+        // Rotation state (quarters: 0/1/2/3 = 0°/90°CW/180°/270°CW).
+        int m_rotationQuarters { 0 };
     };
 }
 

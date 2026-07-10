@@ -1,10 +1,13 @@
-#include "Image.h"
+﻿#include "Image.h"
 #include "Backplate.h"
 #include "Spinner.h"
 #include "Core.h"  // For GetSupportedD2DVersion
+#include "Util.h"
 #include "../CommonUtil.h"
+#include "../AppLog.h"
 #include "../ImageCore/ImageRequest.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <d3dcompiler.h>
 #include <d2d1_1.h>  // For Direct2D 1.1 interpolation modes
@@ -31,6 +34,21 @@ namespace FD2D
                 swprintf_s(buf, L"[Image] %s failed: 0x%08X\n", stage, static_cast<unsigned>(hr));
             }
             OutputDebugStringW(buf);
+        }
+
+        // Rotates a vector (dx,dy) by `quarters` * 90 degrees clockwise, around the origin.
+        // Must match the corner-rotation convention used for rendering (see rotPt in OnRenderD3D
+        // and the D2D1::Matrix3x2F::Rotation() call in OnRender), so that panning computed in
+        // "content" space visually ends up in the right place once the render rotation is applied.
+        static void RotateVectorByQuarters(float dx, float dy, int quarters, float& outX, float& outY)
+        {
+            switch (((quarters % 4) + 4) % 4)
+            {
+            case 1: outX = -dy; outY = dx;  break; // 90° CW
+            case 2: outX = -dx; outY = -dy; break; // 180°
+            case 3: outX = dy;  outY = -dx; break; // 270° CW
+            default: outX = dx; outY = dy;  break; // 0°
+            }
         }
 
         static bool IsCompressedDxgiFormat(DXGI_FORMAT fmt)
@@ -62,11 +80,6 @@ namespace FD2D
             default:
                 return false;
             }
-        }
-
-        static bool IsCpuBgra8DxgiFormat(DXGI_FORMAT fmt)
-        {
-            return fmt == DXGI_FORMAT_B8G8R8A8_UNORM || fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
         }
 
         struct QuadVertex
@@ -176,6 +189,10 @@ namespace FD2D
             {
                 return S_OK;
             }
+
+            // Runtime HLSL compilation happens only once. Log it so we can spot it in stall analysis.
+            FIC2_LOG_INFO("[D3D] EnsureD3DQuadResources: first call -- compiling shaders + creating GPU resources.");
+            const auto t_ensure = std::chrono::steady_clock::now();
 
             // Minimal shaders (HLSL) compiled at runtime (debug-friendly). For production you’d precompile.
             const char* vsSrc =
@@ -382,6 +399,8 @@ namespace FD2D
                 }
             }
 
+            const auto ensureMs = FIC2_ELAPSED_MS(t_ensure);
+            FIC2_LOG_INFO("[D3D] EnsureD3DQuadResources: done in {}ms", ensureMs);
             return S_OK;
         }
     }
@@ -417,10 +436,7 @@ namespace FD2D
 
     Image::~Image()
     {
-        if (m_currentHandle != 0)
-        {
-            ImageCore::ImageLoader::Instance().Cancel(m_currentHandle);
-        }
+        // m_pipeline's destructor cancels any in-flight request.
     }
 
     Image::ViewTransform Image::GetViewTransform() const
@@ -431,6 +447,7 @@ namespace FD2D
         vt.zoomVelocity = m_zoomVelocity;
         vt.panX = m_panX;
         vt.panY = m_panY;
+        vt.rotationQuarters = m_rotationQuarters;
         return vt;
     }
 
@@ -451,6 +468,7 @@ namespace FD2D
         m_zoomVelocity = vt.zoomVelocity;
         m_panX = vt.panX;
         m_panY = vt.panY;
+        m_rotationQuarters = ((vt.rotationQuarters % 4) + 4) % 4;
 
         // Stop any in-progress interaction state.
         m_panning = false;
@@ -479,6 +497,20 @@ namespace FD2D
     void Image::SetOnViewChanged(ViewChangedHandler handler)
     {
         m_onViewChanged = std::move(handler);
+    }
+
+    void Image::RotateCW()
+    {
+        auto vt = GetViewTransform();
+        vt.rotationQuarters = (vt.rotationQuarters + 1) % 4;
+        SetViewTransform(vt, true /*notify → sync*/);
+    }
+
+    void Image::RotateCCW()
+    {
+        auto vt = GetViewTransform();
+        vt.rotationQuarters = (vt.rotationQuarters + 3) % 4;
+        SetViewTransform(vt, true /*notify → sync*/);
     }
 
     bool Image::TryGetBitmapSize(D2D1_SIZE_F& outSize) const
@@ -514,26 +546,7 @@ namespace FD2D
             return false;
         }
 
-        const float bitmapAspect = bitmapSize.width / bitmapSize.height;
-        const float layoutAspect = layoutWidth / layoutHeight;
-
-        D2D1_RECT_F destRect = layoutRect;
-        if (bitmapAspect > layoutAspect)
-        {
-            const float scaledHeight = layoutWidth / bitmapAspect;
-            const float yOffset = (layoutHeight - scaledHeight) * 0.5f;
-            destRect.top = layoutRect.top + yOffset;
-            destRect.bottom = destRect.top + scaledHeight;
-        }
-        else
-        {
-            const float scaledWidth = layoutHeight * bitmapAspect;
-            const float xOffset = (layoutWidth - scaledWidth) * 0.5f;
-            destRect.left = layoutRect.left + xOffset;
-            destRect.right = destRect.left + scaledWidth;
-        }
-
-        outRect = destRect;
+        outRect = Util::ComputeAspectFitRect(layoutRect, bitmapSize);
         return true;
     }
 
@@ -621,7 +634,7 @@ namespace FD2D
         const std::wstring normalized = CommonUtil::NormalizePath(filePath);
 
         // When switching main images, preserve zoom/pan (comparison workflow),
-        // but stop any in-flight interaction/animation state.
+        // but reset rotation and stop any in-flight interaction/animation state.
         if (!normalized.empty() && normalized != m_filePath && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
         {
             if (m_panning)
@@ -636,6 +649,7 @@ namespace FD2D
                 }
             }
 
+            m_rotationQuarters = 0;
             m_pointerZoomActive = false;
             m_zoomVelocity = 0.0f;
             m_lastZoomAnimMs = CommonUtil::NowMs();
@@ -648,17 +662,9 @@ namespace FD2D
         if (!normalized.empty() && normalized == m_filePath)
         {
             // If this file previously failed, allow an explicit retry by clearing failure state.
+            if (!m_pipeline.ClearFailureIfMatches(normalized, true /*requireFailedHr*/))
             {
-                std::lock_guard<std::mutex> lock(m_pendingMutex);
-                if (m_failedFilePath == normalized && FAILED(m_failedHr))
-                {
-                    m_failedFilePath.clear();
-                    m_failedHr = S_OK;
-                }
-                else
-                {
-                    return S_FALSE;
-                }
+                return S_FALSE;
             }
         }
 
@@ -674,33 +680,21 @@ namespace FD2D
             }
         }
 
-        if (m_currentHandle != 0)
-        {
-            ImageCore::ImageLoader::Instance().Cancel(m_currentHandle);
-            m_currentHandle = 0;
-        }
+        m_pipeline.CancelInflight();
 
         // Important: ImageLoader::Cancel() does not guarantee the worker callback runs.
-        // If we don't clear m_loading here, we can get stuck in an "infinite spinner" state where
-        // OnRender refuses to start the next request because it believes a request is still in-flight.
-        m_loading.store(false);
+        // If we don't clear the loading flag here, we can get stuck in an "infinite spinner" state
+        // where OnRender refuses to start the next request because it believes one is still in-flight.
+        m_pipeline.SetLoading(false);
 
         // Drop any pending (UI-thread) apply from the previous selection.
-        {
-            std::lock_guard<std::mutex> lock(m_pendingMutex);
-            m_pendingBlocks.reset();
-            m_pendingW = 0;
-            m_pendingH = 0;
-            m_pendingRowPitch = 0;
-            m_pendingFormat = DXGI_FORMAT_UNKNOWN;
-            m_pendingSourcePath.clear();
-        }
+        m_pipeline.ClearPending();
         m_loadedW = 0;
         m_loadedH = 0;
         m_loadedFormat = DXGI_FORMAT_UNKNOWN;
 
         // Selection changed: clear any in-flight token so we can start a new request on next render.
-        m_inflightToken.store(0);
+        m_pipeline.ResetInflightToken();
 
         // A) Fast reselect path: if SRV is cached, swap immediately (no disk/decode/upload).
         if (m_request.purpose == ImageCore::ImagePurpose::FullResolution && m_backplate)
@@ -722,7 +716,7 @@ namespace FD2D
                 // Cancel CPU path bitmaps for main image
                 m_bitmap.Reset();
 
-                m_loading.store(false);
+                m_pipeline.SetLoading(false);
                 m_request.source = normalized;
                 Invalidate();
                 return S_OK;
@@ -731,13 +725,9 @@ namespace FD2D
 
         m_filePath = normalized;
         // Clear any previous failure state on explicit user selection (allow retry).
-        {
-            std::lock_guard<std::mutex> lock(m_pendingMutex);
-            m_failedFilePath.clear();
-            m_failedHr = S_OK;
-        }
+        m_pipeline.ClearFailure();
         m_forceCpuDecode.store(false);
-        m_loading.store(false);
+        m_pipeline.SetLoading(false);
 
         // Update request
         m_request.source = normalized;
@@ -747,26 +737,13 @@ namespace FD2D
 
     void Image::ClearSource()
     {
-        if (m_currentHandle != 0)
-        {
-            ImageCore::ImageLoader::Instance().Cancel(m_currentHandle);
-            m_currentHandle = 0;
-        }
+        m_pipeline.CancelInflight();
 
-        m_loading.store(false);
-        m_inflightToken.store(0);
+        m_pipeline.SetLoading(false);
+        m_pipeline.ResetInflightToken();
 
-        {
-            std::lock_guard<std::mutex> lock(m_pendingMutex);
-            m_pendingBlocks.reset();
-            m_pendingW = 0;
-            m_pendingH = 0;
-            m_pendingRowPitch = 0;
-            m_pendingFormat = DXGI_FORMAT_UNKNOWN;
-            m_pendingSourcePath.clear();
-            m_failedFilePath.clear();
-            m_failedHr = S_OK;
-        }
+        m_pipeline.ClearPending();
+        m_pipeline.ClearFailure();
 
         m_filePath.clear();
         m_loadedFilePath.clear();
@@ -824,18 +801,15 @@ namespace FD2D
 
     void Image::RequestImageLoad()
     {
-        if (m_filePath.empty() || m_loading.load())
+        if (m_filePath.empty() || m_pipeline.IsLoading())
         {
             return;
         }
 
         // If the last attempt failed for this file, don't spin/retry forever.
+        if (m_pipeline.IsFailedFor(m_filePath))
         {
-            std::lock_guard<std::mutex> lock(m_pendingMutex);
-            if (!m_failedFilePath.empty() && m_failedFilePath == m_filePath)
-            {
-                return;
-            }
+            return;
         }
 
         // Already displaying the requested source (no need to load again).
@@ -854,7 +828,7 @@ namespace FD2D
             }
         }
 
-        m_loading.store(true);
+        m_pipeline.SetLoading(true);
         m_request.source = m_filePath;
         // D2D-only renderer: force CPU-displayable DDS output (avoid UI-thread BCn decompress).
         if (m_forceCpuDecode.load() || m_backplate == nullptr || m_backplate->D3DDevice() == nullptr)
@@ -866,83 +840,8 @@ namespace FD2D
             m_request.allowGpuCompressedDDS = true;
         }
 
-        const unsigned long long token = m_requestToken.fetch_add(1ULL) + 1ULL;
-        m_inflightToken.store(token);
-        const std::wstring requestedPath = m_filePath; // already normalized
-
-        // (debug request tracing removed)
-
-        m_currentHandle = ImageCore::ImageLoader::Instance().RequestDecoded(
-            m_request,
-            [this, token, requestedPath](HRESULT hr, ImageCore::DecodedImage image)
-            {
-                // NOTE: This callback runs on a worker thread.
-                // Do NOT read m_filePath here (UI thread writes it). Use token gating instead.
-                const unsigned long long current = m_inflightToken.load();
-                if (token != current)
-                {
-                    // If there is no current in-flight request, ensure we don't get stuck "loading".
-                    if (current == 0)
-                    {
-                        m_loading.store(false);
-                    }
-                    return;
-                }
-
-                OnImageLoaded(requestedPath, hr, std::move(image));
-            });
-    }
-
-    void Image::OnImageLoaded(
-        const std::wstring& sourcePath,
-        HRESULT hr,
-        ImageCore::DecodedImage image)
-    {
-        m_currentHandle = 0;
-
-        const std::wstring normalizedSource = CommonUtil::NormalizePath(sourcePath);
-
-        // Conversion is performed in OnRender using the render target
-        // Here we only store the data and trigger OnRender via Invalidate
-        if (SUCCEEDED(hr) && image.blocks && !image.blocks->empty())
-        {
-            {
-                std::lock_guard<std::mutex> lock(m_pendingMutex);
-                m_pendingBlocks = std::move(image.blocks);
-                m_pendingW = image.width;
-                m_pendingH = image.height;
-                m_pendingRowPitch = image.rowPitchBytes;
-                m_pendingFormat = image.dxgiFormat;
-                m_pendingSourcePath = normalizedSource;
-                m_failedFilePath.clear();
-                m_failedHr = S_OK;
-            }
-            
-            // Explicitly request redraw from worker thread to UI thread
-            if (m_backplate)
-            {
-                // Wake UI thread without PostMessage; the UI loop waits on this event.
-                m_backplate->RequestAsyncRedraw();
-            }
-        }
-        else
-        {
-            // Mark as failed so we don't spin forever.
-            // Keep displaying the previous image (if any).
-            {
-                std::lock_guard<std::mutex> lock(m_pendingMutex);
-                m_failedFilePath = normalizedSource;
-                m_failedHr = hr;
-            }
-            // Failure completes the in-flight request (stop spinner).
-            m_loading.store(false);
-            m_inflightToken.store(0);
-
-            if (m_backplate)
-            {
-                m_backplate->RequestAsyncRedraw();
-            }
-        }
+        // m_filePath is already normalized.
+        m_pipeline.Dispatch(m_request, m_filePath);
     }
 
     void Image::OnRender(ID2D1RenderTarget* target)
@@ -970,27 +869,13 @@ namespace FD2D
         // This image control renders only image content.
 
         // Apply pending decoded payload (set by worker thread).
-        std::shared_ptr<std::vector<uint8_t>> pendingBlocks {};
-        uint32_t pendingW = 0;
-        uint32_t pendingH = 0;
-        uint32_t pendingRowPitch = 0;
-        DXGI_FORMAT pendingFormat = DXGI_FORMAT_UNKNOWN;
-        std::wstring pendingSourcePath;
-        {
-            std::lock_guard<std::mutex> lock(m_pendingMutex);
-            pendingBlocks = std::move(m_pendingBlocks);
-            pendingW = m_pendingW;
-            pendingH = m_pendingH;
-            pendingRowPitch = m_pendingRowPitch;
-            pendingFormat = m_pendingFormat;
-            m_pendingBlocks.reset();
-            m_pendingW = 0;
-            m_pendingH = 0;
-            m_pendingRowPitch = 0;
-            m_pendingFormat = DXGI_FORMAT_UNKNOWN;
-            pendingSourcePath = m_pendingSourcePath;
-            m_pendingSourcePath.clear();
-        }
+        const AsyncImagePipeline::Payload pending = m_pipeline.TakePending();
+        const std::shared_ptr<std::vector<uint8_t>>& pendingBlocks = pending.blocks;
+        const uint32_t pendingW = pending.width;
+        const uint32_t pendingH = pending.height;
+        const uint32_t pendingRowPitch = pending.rowPitch;
+        const DXGI_FORMAT pendingFormat = pending.format;
+        const std::wstring& pendingSourcePath = pending.sourcePath;
 
         if (pendingBlocks)
         {
@@ -1024,7 +909,14 @@ namespace FD2D
                         init.SysMemSlicePitch = static_cast<UINT>(pendingBlocks->size());
 
                         Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
+                        const auto t_tex = std::chrono::steady_clock::now();
                         HRESULT hrTex = dev->CreateTexture2D(&td, &init, &tex);
+                        const auto texMs = FIC2_ELAPSED_MS(t_tex);
+                        if (texMs > 30)
+                        {
+                            FIC2_LOG_INFO("[D3D] CreateTexture2D {}x{} fmt={} took {}ms",
+                                pendingW, pendingH, static_cast<int>(pendingFormat), texMs);
+                        }
                         if (SUCCEEDED(hrTex) && tex)
                         {
                             Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
@@ -1060,7 +952,7 @@ namespace FD2D
                         {
                             // We cannot display BCn blocks via D2D. Force CPU decode for this selection.
                             m_forceCpuDecode.store(true);
-                            m_loading.store(false);
+                            m_pipeline.SetLoading(false);
                             RequestImageLoad();
                             usedGpu = true;
                         }
@@ -1069,7 +961,7 @@ namespace FD2D
                     {
                         // No GPU device (or GPU path disabled). Request a CPU-decompressed decode.
                         m_forceCpuDecode.store(true);
-                        m_loading.store(false);
+                        m_pipeline.SetLoading(false);
                         RequestImageLoad();
                         usedGpu = true;
                     }
@@ -1077,51 +969,36 @@ namespace FD2D
 
                 if (!usedGpu)
                 {
-                    HRESULT hrBmp = E_FAIL;
-                    if (IsCpuBgra8DxgiFormat(pendingFormat) && pendingW > 0 && pendingH > 0 && pendingRowPitch > 0)
+                    Microsoft::WRL::ComPtr<ID2D1Bitmap> d2dBitmap;
+                    const HRESULT hrBmp = AsyncImagePipeline::CreateD2DBitmap(
+                        target, pending, D2D1_ALPHA_MODE_PREMULTIPLIED, d2dBitmap);
+                    if (SUCCEEDED(hrBmp) && d2dBitmap)
                     {
-                        D2D1_BITMAP_PROPERTIES props {};
-                        props.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                        props.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
-                        props.dpiX = 96.0f;
-                        props.dpiY = 96.0f;
-
-                        Microsoft::WRL::ComPtr<ID2D1Bitmap> d2dBitmap;
-                        const D2D1_SIZE_U size = D2D1::SizeU(pendingW, pendingH);
-                        hrBmp = target->CreateBitmap(size, pendingBlocks->data(), pendingRowPitch, &props, &d2dBitmap);
-                        if (SUCCEEDED(hrBmp) && d2dBitmap)
-                        {
-                            m_bitmap = d2dBitmap;
-                            m_loadedFilePath = pendingSourcePath;
-                            m_loadedW = pendingW;
-                            m_loadedH = pendingH;
-                            m_loadedFormat = pendingFormat;
-                            // Ensure the D3D pass won't keep drawing a stale GPU SRV under CPU-decoded images.
-                            m_gpuSrv.Reset();
-                            m_gpuWidth = 0;
-                            m_gpuHeight = 0;
-                            applied = true;
-                        }
+                        m_bitmap = d2dBitmap;
+                        m_loadedFilePath = pendingSourcePath;
+                        m_loadedW = pendingW;
+                        m_loadedH = pendingH;
+                        m_loadedFormat = pendingFormat;
+                        // Ensure the D3D pass won't keep drawing a stale GPU SRV under CPU-decoded images.
+                        m_gpuSrv.Reset();
+                        m_gpuWidth = 0;
+                        m_gpuHeight = 0;
+                        applied = true;
                     }
-
-                    if (FAILED(hrBmp) && !applied)
+                    else
                     {
                         LogImageHr(L"D2D CreateBitmap", pendingSourcePath, hrBmp);
-                        {
-                            std::lock_guard<std::mutex> lock(m_pendingMutex);
-                            m_failedFilePath = pendingSourcePath;
-                            m_failedHr = hrBmp;
-                        }
+                        m_pipeline.RecordFailure(pendingSourcePath, hrBmp);
                         // Conversion failure completes the in-flight request (stop spinner).
-                        m_loading.store(false);
+                        m_pipeline.SetLoading(false);
                     }
                 }
 
                 // Success (GPU or CPU bitmap): mark request complete now that the result is applied on the UI thread.
                 if (applied)
                 {
-                    m_loading.store(false);
-                    m_inflightToken.store(0);
+                    m_pipeline.SetLoading(false);
+                    m_pipeline.ResetInflightToken();
                 }
             }
             else if (!pendingSourcePath.empty())
@@ -1132,20 +1009,17 @@ namespace FD2D
 
         // Request loading if we are not already loading the latest requested source.
         // Note: we keep drawing the previous bitmap while the next image loads to avoid "black flash".
-        if (!m_loading.load() && !m_filePath.empty())
+        if (!m_pipeline.IsLoading() && !m_filePath.empty())
         {
             // If the current file is marked failed, do not retry automatically (avoids infinite loops).
+            if (m_pipeline.IsFailedFor(m_filePath))
             {
-                std::lock_guard<std::mutex> lock(m_pendingMutex);
-                if (!m_failedFilePath.empty() && m_failedFilePath == m_filePath)
+                if (m_loadingSpinner)
                 {
-                    if (m_loadingSpinner)
-                    {
-                        m_loadingSpinner->SetActive(false);
-                    }
-                    Wnd::OnRender(target);
-                    return;
+                    m_loadingSpinner->SetActive(false);
                 }
+                Wnd::OnRender(target);
+                return;
             }
 
             const bool cpuLoaded = (m_bitmap && m_loadedFilePath == m_filePath);
@@ -1162,56 +1036,17 @@ namespace FD2D
         {
             const float layoutWidth = layoutRect.right - layoutRect.left;
             const float layoutHeight = layoutRect.bottom - layoutRect.top;
-
             if (!(layoutWidth > 0.0f && layoutHeight > 0.0f && bitmapSize.width > 0.0f && bitmapSize.height > 0.0f))
             {
                 return layoutRect;
             }
 
-            const float bitmapAspect = bitmapSize.width / bitmapSize.height;
-            const float layoutAspect = layoutWidth / layoutHeight;
+            D2D1_RECT_F destRect = Util::ComputeAspectFitRect(layoutRect, bitmapSize, m_rotationQuarters);
 
-            D2D1_RECT_F destRect = layoutRect;
-
-            if (bitmapAspect > layoutAspect)
+            // Apply zoom scale and pan offset (for main image only).
+            if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
             {
-                // bitmap is wider: fit by width
-                const float scaledHeight = layoutWidth / bitmapAspect;
-                const float yOffset = (layoutHeight - scaledHeight) * 0.5f;
-                destRect.top = layoutRect.top + yOffset;
-                destRect.bottom = destRect.top + scaledHeight;
-            }
-            else
-            {
-                // bitmap is taller: fit by height
-                const float scaledWidth = layoutHeight * bitmapAspect;
-                const float xOffset = (layoutWidth - scaledWidth) * 0.5f;
-                destRect.left = layoutRect.left + xOffset;
-                destRect.right = destRect.left + scaledWidth;
-            }
-
-            // Apply zoom scale and pan offset (for main image only)
-            if (m_request.purpose == ImageCore::ImagePurpose::FullResolution && m_zoomScale != 1.0f)
-            {
-                const float centerX = (destRect.left + destRect.right) * 0.5f;
-                const float centerY = (destRect.top + destRect.bottom) * 0.5f;
-                const float width = destRect.right - destRect.left;
-                const float height = destRect.bottom - destRect.top;
-                const float scaledWidth = width * m_zoomScale;
-                const float scaledHeight = height * m_zoomScale;
-                destRect.left = centerX - scaledWidth * 0.5f + m_panX;
-                destRect.right = destRect.left + scaledWidth;
-                destRect.top = centerY - scaledHeight * 0.5f + m_panY;
-                destRect.bottom = destRect.top + scaledHeight;
-            }
-            else if (m_request.purpose == ImageCore::ImagePurpose::FullResolution && 
-                     (std::abs(m_panX) > 0.001f || std::abs(m_panY) > 0.001f))
-            {
-                // Apply pan even when not zoomed (though this shouldn't normally happen)
-                destRect.left += m_panX;
-                destRect.right += m_panX;
-                destRect.top += m_panY;
-                destRect.bottom += m_panY;
+                destRect = Util::ApplyZoomPanToRect(destRect, m_zoomScale, m_panX, m_panY);
             }
 
             return destRect;
@@ -1277,17 +1112,28 @@ namespace FD2D
             const D2D1_RECT_F sourceRect = D2D1::RectF(0.0f, 0.0f, bitmapSize.width, bitmapSize.height);
             const D2D1_RECT_F destRect = computeAspectFitDestRect(layoutRect, bitmapSize);
 
+            // Apply rotation transform around the center of the layout rect.
+            if (m_rotationQuarters != 0)
+            {
+                const float cx = (layoutRect.left + layoutRect.right) * 0.5f;
+                const float cy = (layoutRect.top + layoutRect.bottom) * 0.5f;
+                target->SetTransform(D2D1::Matrix3x2F::Rotation(
+                    static_cast<float>(m_rotationQuarters) * 90.0f,
+                    D2D1::Point2F(cx, cy)));
+            }
+
             drawCheckerboard(destRect);
 
             D2D1_BITMAP_INTERPOLATION_MODE interpMode = D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
-            
+
             // Get current Direct2D version to select the best available option
             FD2D::D2DVersion d2dVersion = FD2D::Core::GetSupportedD2DVersion();
-            
+
+            bool drawn = false;
             if (m_request.purpose == ImageCore::ImagePurpose::FullResolution)
             {
-            if (m_highQualitySampling)
-            {
+                if (m_highQualitySampling)
+                {
                     if (d2dVersion >= FD2D::D2DVersion::D2D1_1)
                     {
                         Microsoft::WRL::ComPtr<ID2D1DeviceContext> dc;
@@ -1299,28 +1145,40 @@ namespace FD2D
                                 opacity,
                                 D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
                                 sourceRect);
-                            return;
+                            drawn = true;
                         }
                     }
-                    interpMode = D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
-            }
-            else
-            {
-                // Pixel-perfect sampling for compare workflows.
-                if (d2dVersion >= FD2D::D2DVersion::D2D1_1)
-                {
-                    interpMode = D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR;
+                    if (!drawn)
+                    {
+                        interpMode = D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
+                    }
                 }
-                // Direct2D 1.0 fallback: use LINEAR (already set as default)
-            }
+                else
+                {
+                    // Pixel-perfect sampling for compare workflows.
+                    if (d2dVersion >= FD2D::D2DVersion::D2D1_1)
+                    {
+                        interpMode = D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR;
+                    }
+                    // Direct2D 1.0 fallback: use LINEAR (already set as default)
+                }
             }
 
-            target->DrawBitmap(
-                bmp,
-                destRect,
-                opacity,
-                interpMode,
-                sourceRect);
+            if (!drawn)
+            {
+                target->DrawBitmap(
+                    bmp,
+                    destRect,
+                    opacity,
+                    interpMode,
+                    sourceRect);
+            }
+
+            // Restore identity transform after rotation-aware drawing.
+            if (m_rotationQuarters != 0)
+            {
+                target->SetTransform(D2D1::Matrix3x2F::Identity());
+            }
         };
 
         if (m_bitmap)
@@ -1331,7 +1189,7 @@ namespace FD2D
 
         // Loading spinner overlay (only while an actual request is in-flight).
         // This avoids "infinite spinner" states on decode failure; we keep showing the previous image instead.
-        const bool shouldShowSpinner = m_loadingSpinnerEnabled && m_loading.load();
+        const bool shouldShowSpinner = m_loadingSpinnerEnabled && m_pipeline.IsLoading();
         if (m_loadingSpinner)
         {
             m_loadingSpinner->SetActive(shouldShowSpinner);
@@ -1452,14 +1310,16 @@ namespace FD2D
         }
         else
         {
-            // Continue animation
+            // Continue animation: request the next tick.
+            // Do NOT call Invalidate() here — AdvanceZoomAnimation is only called
+            // from within OnRender(), so a re-render is already scheduled via the
+            // animation tick. Calling Invalidate() from OnRender() would cause
+            // Render() re-entrancy and a do-while loop spin-storm.
             if (BackplateRef() != nullptr)
             {
                 BackplateRef()->RequestAnimationFrame();
             }
         }
-
-        Invalidate();
 
         if (!m_suppressViewNotify && m_onViewChanged && m_request.purpose == ImageCore::ImagePurpose::FullResolution)
         {
@@ -1564,16 +1424,17 @@ namespace FD2D
                 // lParam now contains coordinates in Layout coordinate system (same as client coordinates)
                 POINT pt = event.point;
                 
-                // Update pan offset based on mouse movement
-                // Both m_panStartX/Y and pt are in Layout coordinate system (same as client coordinates)
-                const float deltaX = static_cast<float>(pt.x) - m_panStartX;
-                const float deltaY = static_cast<float>(pt.y) - m_panStartY;
+                // Update pan offset based on mouse movement.
+                // Both m_panStartX/Y and pt are in Layout coordinate system (same as client coordinates).
+                const float screenDeltaX = static_cast<float>(pt.x) - m_panStartX;
+                const float screenDeltaY = static_cast<float>(pt.y) - m_panStartY;
 
                 // Start panning after a small threshold so simple clicks still work.
+                // Use the raw on-screen delta here; magnitude-based, rotation-independent.
                 if (!m_panning)
                 {
                     constexpr float kStartThresholdPx = 3.0f;
-                    if (std::abs(deltaX) >= kStartThresholdPx || std::abs(deltaY) >= kStartThresholdPx)
+                    if (std::abs(screenDeltaX) >= kStartThresholdPx || std::abs(screenDeltaY) >= kStartThresholdPx)
                     {
                         m_panning = true;
                     }
@@ -1581,6 +1442,18 @@ namespace FD2D
 
                 if (m_panning)
                 {
+                    // m_panX/m_panY live in pre-rotation "content" space (the render/draw code applies
+                    // rotation to the whole panned rect afterwards). Rotate the on-screen mouse delta by
+                    // the inverse of the current rotation so the image visually follows the mouse in every
+                    // rotation state (fixes reversed/rotated panning at 90°/180°/270°).
+                    float deltaX = screenDeltaX;
+                    float deltaY = screenDeltaY;
+                    if (m_rotationQuarters != 0)
+                    {
+                        const int inverseQuarters = (4 - m_rotationQuarters) % 4;
+                        RotateVectorByQuarters(screenDeltaX, screenDeltaY, inverseQuarters, deltaX, deltaY);
+                    }
+
                     m_panX = m_panStartOffsetX + deltaX;
                     m_panY = m_panStartOffsetY + deltaY;
                     ClampPanToVisible();
@@ -1797,46 +1670,46 @@ namespace FD2D
                 return;
             }
 
-            // Apply zoom scale and pan offset for GPU path
-            D2D1_RECT_F zoomedRect = rectPx;
-            const float panRenderX = m_panX * logicalToRender.width;
-            const float panRenderY = m_panY * logicalToRender.height;
-            if (m_zoomScale != 1.0f)
-            {
-                const float centerX = (rectPx.left + rectPx.right) * 0.5f;
-                const float centerY = (rectPx.top + rectPx.bottom) * 0.5f;
-                const float width = rectPx.right - rectPx.left;
-                const float height = rectPx.bottom - rectPx.top;
-                const float scaledWidth = width * m_zoomScale;
-                const float scaledHeight = height * m_zoomScale;
-                zoomedRect.left = centerX - scaledWidth * 0.5f + panRenderX;
-                zoomedRect.right = zoomedRect.left + scaledWidth;
-                zoomedRect.top = centerY - scaledHeight * 0.5f + panRenderY;
-                zoomedRect.bottom = zoomedRect.top + scaledHeight;
-            }
-            else if (std::abs(m_panX) > 0.001f || std::abs(m_panY) > 0.001f)
-            {
-                // Apply pan even when not zoomed (though this shouldn't normally happen)
-                zoomedRect.left += panRenderX;
-                zoomedRect.right += panRenderX;
-                zoomedRect.top += panRenderY;
-                zoomedRect.bottom += panRenderY;
-            }
+            // Apply zoom scale and pan offset for GPU path (pan scaled to render pixels).
+            const D2D1_RECT_F zoomedRect = Util::ApplyZoomPanToRect(
+                rectPx,
+                m_zoomScale,
+                m_panX * logicalToRender.width,
+                m_panY * logicalToRender.height);
 
-            const float l = toNdcX(zoomedRect.left);
-            const float r = toNdcX(zoomedRect.right);
-            const float t = toNdcY(zoomedRect.top);
-            const float b = toNdcY(zoomedRect.bottom);
+            // Rotate the four quad corners around the layout center (pixel space),
+            // then convert each corner to NDC independently.
+            const float cxPx = (layout.left + layout.right) * 0.5f;
+            const float cyPx = (layout.top + layout.bottom) * 0.5f;
+
+            const auto rotPt = [cxPx, cyPx, q = m_rotationQuarters](float px, float py, float& rx, float& ry)
+            {
+                const float dx = px - cxPx;
+                const float dy = py - cyPx;
+                switch (q)
+                {
+                case 1: rx = cxPx - dy; ry = cyPx + dx; break; // 90° CW
+                case 2: rx = cxPx - dx; ry = cyPx - dy; break; // 180°
+                case 3: rx = cxPx + dy; ry = cyPx - dx; break; // 270° CW
+                default: rx = px;       ry = py;        break;  // 0°
+                }
+            };
+
+            float tlx, tly, trx, trry, blx, bly, brx, bry;
+            rotPt(zoomedRect.left,  zoomedRect.top,    tlx, tly);
+            rotPt(zoomedRect.right, zoomedRect.top,    trx, trry);
+            rotPt(zoomedRect.left,  zoomedRect.bottom, blx, bly);
+            rotPt(zoomedRect.right, zoomedRect.bottom, brx, bry);
 
             // Update vertex buffer
             D3D11_MAPPED_SUBRESOURCE mapped {};
             if (SUCCEEDED(context->Map(g_vb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
             {
                 auto* v = reinterpret_cast<QuadVertex*>(mapped.pData);
-                v[0] = { l, t, 0.0f, 0.0f };
-                v[1] = { r, t, uMax, 0.0f };
-                v[2] = { l, b, 0.0f, vMax };
-                v[3] = { r, b, uMax, vMax };
+                v[0] = { toNdcX(tlx), toNdcY(tly),  0.0f, 0.0f  };
+                v[1] = { toNdcX(trx), toNdcY(trry), uMax, 0.0f  };
+                v[2] = { toNdcX(blx), toNdcY(bly),  0.0f, vMax  };
+                v[3] = { toNdcX(brx), toNdcY(bry),  uMax, vMax  };
                 context->Unmap(g_vb.Get(), 0);
             }
 
@@ -1895,39 +1768,17 @@ namespace FD2D
         // image has transparency.
         //
         // NOTE: m_pending* is written by a worker thread; guard access to avoid data races.
-        bool hasPendingCpuForCurrent = false;
-        {
-            std::lock_guard<std::mutex> lock(m_pendingMutex);
-            hasPendingCpuForCurrent = (m_pendingBlocks
-                && IsCpuBgra8DxgiFormat(m_pendingFormat)
-                && m_pendingSourcePath == m_filePath);
-        }
+        const bool hasPendingCpuForCurrent = m_pipeline.HasPendingCpuBgra8For(m_filePath);
         if (hasPendingCpuForCurrent)
         {
             return;
         }
 
-        // Aspect-fit dest rect in pixels
-        const float bmpW = static_cast<float>(m_gpuWidth);
-        const float bmpH = static_cast<float>(m_gpuHeight);
-        const float bmpAspect = bmpW / bmpH;
-        const float layoutAspect = layoutW / layoutH;
-
-        D2D1_RECT_F dest = layout;
-        if (bmpAspect > layoutAspect)
-        {
-            const float scaledH = layoutW / bmpAspect;
-            const float yOff = (layoutH - scaledH) * 0.5f;
-            dest.top = layout.top + yOff;
-            dest.bottom = dest.top + scaledH;
-        }
-        else
-        {
-            const float scaledW = layoutH * bmpAspect;
-            const float xOff = (layoutW - scaledW) * 0.5f;
-            dest.left = layout.left + xOff;
-            dest.right = dest.left + scaledW;
-        }
+        // Aspect-fit dest rect in pixels (rotation-aware).
+        const D2D1_RECT_F dest = Util::ComputeAspectFitRect(
+            layout,
+            D2D1::SizeF(static_cast<float>(m_gpuWidth), static_cast<float>(m_gpuHeight)),
+            m_rotationQuarters);
 
         // Checkerboard for alpha visualization (behind the image, in the image dest rect only).
         if (m_alphaCheckerboardEnabled && g_checkerSrv && g_samplerWrap)

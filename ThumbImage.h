@@ -1,18 +1,16 @@
 #pragma once
 
 #include "Wnd.h"
+#include "AsyncImagePipeline.h"
 #include "../ImageCore/ImageRequest.h"
 #include "../ImageCore/ImageLoader.h"
 #include "SelectionStyle.h"
 
 #include <wrl/client.h>
 
-#include <atomic>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
-#include <vector>
 
 namespace FD2D
 {
@@ -50,31 +48,15 @@ namespace FD2D
 
     private:
         void RequestImageLoad();
-        void OnImageLoaded(
-            const std::wstring& sourcePath,
-            HRESULT hr,
-            ImageCore::DecodedImage image);
 
         std::wstring m_filePath {};
         std::wstring m_loadedFilePath {};
         ImageCore::ImageRequest m_request {};
-        ImageCore::ImageHandle m_currentHandle { 0 };
-        std::atomic<bool> m_loading { false };
-        std::atomic<unsigned long long> m_requestToken { 0 };
-        std::atomic<unsigned long long> m_inflightToken { 0 };
-        std::wstring m_failedFilePath {};
-        HRESULT m_failedHr { S_OK };
+
+        // Shared async load pipeline (tokens, pending payload, failure state).
+        AsyncImagePipeline m_pipeline { &m_backplate };
 
         Microsoft::WRL::ComPtr<ID2D1Bitmap> m_bitmap {};
-
-        mutable std::mutex m_pendingMutex;
-        // Pending decoded image produced on the worker thread.
-        std::shared_ptr<std::vector<uint8_t>> m_pendingBlocks {};
-        uint32_t m_pendingW { 0 };
-        uint32_t m_pendingH { 0 };
-        uint32_t m_pendingRowPitch { 0 };
-        DXGI_FORMAT m_pendingFormat { DXGI_FORMAT_UNKNOWN };
-        std::wstring m_pendingSourcePath {};
 
         bool m_selected { false };
         SelectionStyle m_selectionStyle {};

@@ -1,5 +1,6 @@
 #include "ScrollView.h"
 #include "Backplate.h"
+#include "Util.h"
 #include "../CommonUtil.h"
 #include <algorithm>
 #include <float.h>
@@ -7,36 +8,9 @@
 
 namespace FD2D
 {
-    namespace
-    {
-        static bool IsMouseInputEventType(InputEventType type)
-        {
-            switch (type)
-            {
-            case InputEventType::MouseMove:
-            case InputEventType::MouseDown:
-            case InputEventType::MouseUp:
-            case InputEventType::MouseDoubleClick:
-            case InputEventType::MouseWheel:
-            case InputEventType::MouseHWheel:
-            case InputEventType::MouseLeave:
-            case InputEventType::CaptureChanged:
-            case InputEventType::SetCursor:
-                return true;
-            default:
-                return false;
-            }
-        }
-
-    }
-
     bool ScrollView::IsPointInViewport(int x, int y) const
     {
-        const D2D1_RECT_F r = LayoutRect();
-        return static_cast<float>(x) >= r.left &&
-            static_cast<float>(x) <= r.right &&
-            static_cast<float>(y) >= r.top &&
-            static_cast<float>(y) <= r.bottom;
+        return Util::RectContainsPoint(LayoutRect(), POINT { x, y });
     }
 
     ScrollView::ScrollView()
@@ -471,7 +445,7 @@ namespace FD2D
         }
 
         // Forward mouse events to content using scrolled coordinates so hit-testing matches rendering.
-        if (m_content && IsMouseInputEventType(event.type))
+        if (m_content && Util::IsMouseInputEventType(event.type))
         {
             if (event.type == InputEventType::CaptureChanged)
             {
