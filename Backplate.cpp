@@ -448,8 +448,23 @@ namespace FD2D
 
     bool Backplate::HandleFileDragOver(const std::wstring& path, const POINT& ptClient)
     {
-        // Clear any prior visuals.
-        HandleFileDragLeave();
+        // OLE calls DragOver on every mouse-move during a drag (many times/sec).
+        // Clearing stale visuals and setting the new one each call Invalidate(),
+        // which normally renders+presents immediately -- so without batching, a
+        // single DragOver could present one frame with the overlay cleared and
+        // another with it set, visible as a flicker on every drag move. Defer all
+        // Invalidate() calls triggered below into a single Render() at the end.
+        BeginDeferredRender();
+
+        // Clear any prior visuals from children that are no longer the drag target
+        // (the loop below only reaches the first child that claims the point).
+        for (auto& pair : m_children)
+        {
+            if (pair.second)
+            {
+                pair.second->OnFileDragLeave();
+            }
+        }
 
         FileDragVisual visual = FileDragVisual::None;
         bool handled = false;
@@ -462,6 +477,8 @@ namespace FD2D
             }
         }
 
+        EndDeferredRender();
+
         if (m_window != nullptr)
         {
             Render();
@@ -472,6 +489,7 @@ namespace FD2D
 
     void Backplate::HandleFileDragLeave()
     {
+        BeginDeferredRender();
         for (auto& pair : m_children)
         {
             if (pair.second)
@@ -479,6 +497,7 @@ namespace FD2D
                 pair.second->OnFileDragLeave();
             }
         }
+        EndDeferredRender();
 
         if (m_window != nullptr)
         {
@@ -579,8 +598,20 @@ namespace FD2D
         // - Default: ~60fps for smooth interactions.
         // - While async redraw bursts are pending (thumbnail decode completions) or during live resize:
         //   back off to ~30fps to reduce UI-thread render pressure.
+        const bool asyncPending = m_asyncRedrawPending.load();
         const unsigned long long minTickIntervalMs =
-            (m_inSizeMove || m_asyncRedrawPending.load()) ? 33ULL : 16ULL;
+            (m_inSizeMove || asyncPending) ? 33ULL : 16ULL;
+
+        // Diagnostic: log only when the cadence actually changes (not every tick), so we
+        // get crisp "throttle engaged/lifted" markers to correlate with the [FPS] summary.
+        if (minTickIntervalMs != m_lastLoggedTickIntervalMs)
+        {
+            FIC2_LOG_INFO(
+                "[FPS] animation tick cadence -> {}ms ({}fps target)  inSizeMove={} asyncRedrawPending={}",
+                minTickIntervalMs, minTickIntervalMs > 0 ? (1000ULL / minTickIntervalMs) : 0ULL,
+                m_inSizeMove, asyncPending);
+            m_lastLoggedTickIntervalMs = minTickIntervalMs;
+        }
 
         const unsigned long long lastTick = m_lastAnimationTickMs.load();
         if (lastTick != 0 && (nowMs - lastTick) < minTickIntervalMs)
@@ -592,6 +623,7 @@ namespace FD2D
         // Direct rendering: bypass message loop for smoother 60fps animation.
         // Log frames that take > 100ms (rate-limited to one log per 100ms to avoid flooding).
         FIC2_TIMER_START(t_frame);
+        NoteRenderTrigger(RenderTrigger::Tick);
         Render();
         const auto frameMs = FIC2_ELAPSED_MS(t_frame);
         if (frameMs > 100)
@@ -785,6 +817,7 @@ namespace FD2D
         {
             PAINTSTRUCT ps {};
             BeginPaint(m_window, &ps);
+            NoteRenderTrigger(RenderTrigger::Paint);
             Render();
             EndPaint(m_window, &ps);
             result = 0;
@@ -1773,6 +1806,12 @@ namespace FD2D
 
         m_isRendering = true;
 
+        // Diagnostic: snapshot+reset what triggered this call and whether an async
+        // decode-completion redraw was already pending, for the [FPS] summary below.
+        const RenderTrigger renderTrigger = m_pendingRenderTrigger;
+        m_pendingRenderTrigger = RenderTrigger::Other;
+        const bool asyncPendingAtStart = m_asyncRedrawPending.load();
+
         // Render loop: continue until no more render requests
         int renderLoopIterations = 0;
         const auto t_renderLoop = std::chrono::steady_clock::now();
@@ -2152,6 +2191,61 @@ namespace FD2D
         {
             const auto loopMs = FIC2_ELAPSED_MS(t_renderLoop);
             FIC2_LOG_INFO("[Render] do-while loop ran {} iterations in {}ms", renderLoopIterations, loopMs);
+        }
+
+        // Diagnostic: roll this frame into a once-per-second [FPS] summary so a sluggish
+        // period (e.g. right after startup while thumbnails are still loading) shows up
+        // as objective fps/frame-time numbers, broken down by what triggered each frame
+        // and whether an async decode-completion redraw was pending at the time.
+        {
+            const double frameMs = static_cast<double>(FIC2_ELAPSED_MS(t_renderLoop));
+            const unsigned long long nowMs = CommonUtil::NowMs();
+            if (m_fpsWindowStartMs == 0)
+            {
+                m_fpsWindowStartMs = nowMs;
+            }
+            ++m_fpsWindowFrames;
+            m_fpsWindowTotalMs += frameMs;
+            if (frameMs > m_fpsWindowMaxMs)
+            {
+                m_fpsWindowMaxMs = frameMs;
+            }
+            if (asyncPendingAtStart)
+            {
+                ++m_fpsWindowAsyncPendingFrames;
+            }
+            switch (renderTrigger)
+            {
+            case RenderTrigger::Tick:       ++m_fpsWindowTickFrames;       break;
+            case RenderTrigger::Invalidate: ++m_fpsWindowInvalidateFrames; break;
+            case RenderTrigger::Paint:      ++m_fpsWindowPaintFrames;      break;
+            default:                        ++m_fpsWindowOtherFrames;     break;
+            }
+
+            const unsigned long long windowElapsedMs = nowMs - m_fpsWindowStartMs;
+            if (windowElapsedMs >= 1000)
+            {
+                const double avgMs = m_fpsWindowTotalMs / (std::max)(1, m_fpsWindowFrames);
+                const double fps = static_cast<double>(m_fpsWindowFrames) * 1000.0 /
+                    static_cast<double>((std::max)(windowElapsedMs, 1ULL));
+                FIC2_LOG_INFO(
+                    "[FPS] {:.1f} fps  frames={} avg={:.1f}ms max={:.1f}ms  "
+                    "trigger(tick={} invalidate={} paint={} other={})  asyncPending={}/{}",
+                    fps, m_fpsWindowFrames, avgMs, m_fpsWindowMaxMs,
+                    m_fpsWindowTickFrames, m_fpsWindowInvalidateFrames,
+                    m_fpsWindowPaintFrames, m_fpsWindowOtherFrames,
+                    m_fpsWindowAsyncPendingFrames, m_fpsWindowFrames);
+
+                m_fpsWindowStartMs = nowMs;
+                m_fpsWindowFrames = 0;
+                m_fpsWindowTickFrames = 0;
+                m_fpsWindowInvalidateFrames = 0;
+                m_fpsWindowPaintFrames = 0;
+                m_fpsWindowOtherFrames = 0;
+                m_fpsWindowAsyncPendingFrames = 0;
+                m_fpsWindowTotalMs = 0.0;
+                m_fpsWindowMaxMs = 0.0;
+            }
         }
 
         m_isRendering = false;

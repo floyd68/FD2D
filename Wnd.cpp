@@ -451,18 +451,21 @@ namespace FD2D
     {
         if (m_backplate != nullptr)
         {
-            // Use InvalidateRect (post WM_PAINT) if we are inside a resize or
-            // already inside Render(). Calling Render() re-entrantly would set
+            // Use InvalidateRect (post WM_PAINT) if we are inside a resize, already
+            // inside Render(), or a caller is batching several state changes into one
+            // render (IsDeferringRender(), e.g. drag-hover overlay updates during a
+            // single OLE DragOver). Calling Render() re-entrantly would set
             // m_renderRequested=true and cause the do-while render loop to spin
             // once per Invalidate() call, leading to multi-second stalls when
             // many components (e.g. thumbnail spinners) call Invalidate() during
             // a single frame.
-            if (m_backplate->IsInSizeMove() || m_backplate->IsRendering())
+            if (m_backplate->IsInSizeMove() || m_backplate->IsRendering() || m_backplate->IsDeferringRender())
             {
                 InvalidateRect(m_backplate->Window(), nullptr, FALSE);
             }
             else
             {
+                m_backplate->NoteRenderTrigger(Backplate::RenderTrigger::Invalidate);
                 m_backplate->Render();
             }
         }

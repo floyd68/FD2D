@@ -127,6 +127,24 @@ namespace FD2D
         bool IsRendering() const { return m_isRendering; }
         bool IsInSizeMove() const { return m_inSizeMove; }
 
+        // Batches multiple state changes (e.g. drag-hover overlay updates across
+        // several children during a single OLE DragOver callback) into one Render()
+        // call. While deferring, Wnd::Invalidate() marks the window dirty via
+        // InvalidateRect() instead of rendering immediately, so callers doing a
+        // "clear old state, then set new state" sequence don't present an
+        // intermediate frame in between (which would look like flicker). Nestable;
+        // remember to call EndDeferredRender() once per BeginDeferredRender().
+        void BeginDeferredRender() { ++m_deferRenderDepth; }
+        void EndDeferredRender() { if (m_deferRenderDepth > 0) --m_deferRenderDepth; }
+        bool IsDeferringRender() const { return m_deferRenderDepth > 0; }
+
+        // Diagnostic-only: what caused the *next* Render() call. Lets the periodic
+        // [FPS] summary log (see Render()) break frame counts/timing down by cause
+        // (animation tick vs on-demand Invalidate/pan vs WM_PAINT) so slow periods can
+        // be attributed to a specific trigger instead of just an aggregate frame time.
+        enum class RenderTrigger { Other, Tick, Invalidate, Paint };
+        void NoteRenderTrigger(RenderTrigger trigger) { m_pendingRenderTrigger = trigger; }
+
         // Per-rect clear for the D3D swapchain backend (used for per-ImageBrowser background).
         // Returns false if not supported/available (e.g., D2D-only backend).
         bool ClearRectD3D(const D2D1_RECT_F& rect, const D2D1_COLOR_F& color);
@@ -199,6 +217,10 @@ namespace FD2D
 
         std::atomic<unsigned long long> m_lastAnimationRequestMs { 0 };
         std::atomic<unsigned long long> m_lastAnimationTickMs { 0 };
+        // Diagnostic-only: last animation-tick cadence we logged, so ProcessAnimationTick
+        // can log a one-line transition ("throttled to ~30fps" / "back to ~60fps") instead
+        // of logging every single tick.
+        unsigned long long m_lastLoggedTickIntervalMs { 0 };
 
         Wnd* m_focusedWnd { nullptr };
 
@@ -222,6 +244,21 @@ namespace FD2D
         // Prevent recursive rendering (e.g., when layout changes during OnRender)
         bool m_isRendering { false };
         bool m_renderRequested { false };
+        int m_deferRenderDepth { 0 };
+
+        // Diagnostic-only frame-time/FPS aggregation (see Render()). Logged once per
+        // second via FIC2_LOG_INFO; the bookkeeping itself is a handful of arithmetic
+        // ops per frame, so it stays cheap even when logging is disabled.
+        RenderTrigger m_pendingRenderTrigger { RenderTrigger::Other };
+        unsigned long long m_fpsWindowStartMs { 0 };
+        int m_fpsWindowFrames { 0 };
+        int m_fpsWindowTickFrames { 0 };
+        int m_fpsWindowInvalidateFrames { 0 };
+        int m_fpsWindowPaintFrames { 0 };
+        int m_fpsWindowOtherFrames { 0 };
+        int m_fpsWindowAsyncPendingFrames { 0 };
+        double m_fpsWindowTotalMs { 0.0 };
+        double m_fpsWindowMaxMs { 0.0 };
     };
 }
 
