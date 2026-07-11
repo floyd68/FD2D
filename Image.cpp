@@ -4,7 +4,7 @@
 #include "Core.h"  // For GetSupportedD2DVersion
 #include "Util.h"
 #include "../CommonUtil.h"
-#include "../AppLog.h"
+#include "FD2DLog.h"
 #include "../ImageCore/ImageRequest.h"
 #include <algorithm>
 #include <chrono>
@@ -191,7 +191,7 @@ namespace FD2D
             }
 
             // Runtime HLSL compilation happens only once. Log it so we can spot it in stall analysis.
-            FIC2_LOG_INFO("[D3D] EnsureD3DQuadResources: first call -- compiling shaders + creating GPU resources.");
+            FD2D_LOG_INFO("[D3D] EnsureD3DQuadResources: first call -- compiling shaders + creating GPU resources.");
             const auto t_ensure = std::chrono::steady_clock::now();
 
             // Minimal shaders (HLSL) compiled at runtime (debug-friendly). For production you’d precompile.
@@ -399,8 +399,8 @@ namespace FD2D
                 }
             }
 
-            const auto ensureMs = FIC2_ELAPSED_MS(t_ensure);
-            FIC2_LOG_INFO("[D3D] EnsureD3DQuadResources: done in {}ms", ensureMs);
+            const auto ensureMs = FD2D_ELAPSED_MS(t_ensure);
+            FD2D_LOG_INFO("[D3D] EnsureD3DQuadResources: done in {}ms", ensureMs);
             return S_OK;
         }
     }
@@ -911,10 +911,10 @@ namespace FD2D
                         Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
                         const auto t_tex = std::chrono::steady_clock::now();
                         HRESULT hrTex = dev->CreateTexture2D(&td, &init, &tex);
-                        const auto texMs = FIC2_ELAPSED_MS(t_tex);
+                        const auto texMs = FD2D_ELAPSED_MS(t_tex);
                         if (texMs > 30)
                         {
-                            FIC2_LOG_INFO("[D3D] CreateTexture2D {}x{} fmt={} took {}ms",
+                            FD2D_LOG_INFO("[D3D] CreateTexture2D {}x{} fmt={} took {}ms",
                                 pendingW, pendingH, static_cast<int>(pendingFormat), texMs);
                         }
                         if (SUCCEEDED(hrTex) && tex)

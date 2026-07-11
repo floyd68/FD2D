@@ -247,7 +247,7 @@ namespace FD2D
         int m_deferRenderDepth { 0 };
 
         // Diagnostic-only frame-time/FPS aggregation (see Render()). Logged once per
-        // second via FIC2_LOG_INFO; the bookkeeping itself is a handful of arithmetic
+        // second via FD2D_LOG_INFO; the bookkeeping itself is a handful of arithmetic
         // ops per frame, so it stays cheap even when logging is disabled.
         RenderTrigger m_pendingRenderTrigger { RenderTrigger::Other };
         unsigned long long m_fpsWindowStartMs { 0 };

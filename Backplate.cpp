@@ -1,8 +1,9 @@
 ﻿#include "Backplate.h"
 #include "Core.h"
 #include "../CommonUtil.h"
-#include "../AppLog.h"
+#include "FD2DLog.h"
 #include <cmath>
+#include <cstdio>
 #include <dxgi1_3.h>
 #include <string>
 #include <algorithm>
@@ -558,12 +559,12 @@ namespace FD2D
         else
         {
             // Trigger a prompt repaint (once per coalesced burst).
-            FIC2_TIMER_START(t_redraw);
+            FD2D_TIMER_START(t_redraw);
             RedrawWindow(m_window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
-            const auto redrawMs = FIC2_ELAPSED_MS(t_redraw);
+            const auto redrawMs = FD2D_ELAPSED_MS(t_redraw);
             if (redrawMs > 50)
             {
-                FIC2_LOG_INFO("[UI stall] ProcessAsyncRedraw: RedrawWindow(UPDATENOW) took {}ms", redrawMs);
+                FD2D_LOG_INFO("[UI stall] ProcessAsyncRedraw: RedrawWindow(UPDATENOW) took {}ms", redrawMs);
             }
         }
     }
@@ -606,7 +607,7 @@ namespace FD2D
         // get crisp "throttle engaged/lifted" markers to correlate with the [FPS] summary.
         if (minTickIntervalMs != m_lastLoggedTickIntervalMs)
         {
-            FIC2_LOG_INFO(
+            FD2D_LOG_INFO(
                 "[FPS] animation tick cadence -> {}ms ({}fps target)  inSizeMove={} asyncRedrawPending={}",
                 minTickIntervalMs, minTickIntervalMs > 0 ? (1000ULL / minTickIntervalMs) : 0ULL,
                 m_inSizeMove, asyncPending);
@@ -622,17 +623,17 @@ namespace FD2D
 
         // Direct rendering: bypass message loop for smoother 60fps animation.
         // Log frames that take > 100ms (rate-limited to one log per 100ms to avoid flooding).
-        FIC2_TIMER_START(t_frame);
+        FD2D_TIMER_START(t_frame);
         NoteRenderTrigger(RenderTrigger::Tick);
         Render();
-        const auto frameMs = FIC2_ELAPSED_MS(t_frame);
+        const auto frameMs = FD2D_ELAPSED_MS(t_frame);
         if (frameMs > 100)
         {
             static std::chrono::steady_clock::time_point s_lastSlowFrameLog {};
             const auto nowTp = std::chrono::steady_clock::now();
             if (nowTp - s_lastSlowFrameLog >= std::chrono::milliseconds(100))
             {
-                FIC2_LOG_INFO("[UI stall] ProcessAnimationTick: Render took {}ms", frameMs);
+                FD2D_LOG_INFO("[UI stall] ProcessAnimationTick: Render took {}ms", frameMs);
                 s_lastSlowFrameLog = nowTp;
             }
         }
@@ -1861,10 +1862,10 @@ namespace FD2D
             const auto t_ensure = std::chrono::steady_clock::now();
             HRESULT hrEnsure = EnsureRenderTarget();
             {
-                const auto ensureMs = FIC2_ELAPSED_MS(t_ensure);
+                const auto ensureMs = FD2D_ELAPSED_MS(t_ensure);
                 if (ensureMs > 30)
                 {
-                    FIC2_LOG_INFO("[Render] EnsureRenderTarget took {}ms", ensureMs);
+                    FD2D_LOG_INFO("[Render] EnsureRenderTarget took {}ms", ensureMs);
                 }
             }
             if (FAILED(hrEnsure))
@@ -2068,10 +2069,10 @@ namespace FD2D
                 }
             }
             {
-                const auto d3dPassMs = FIC2_ELAPSED_MS(t_d3dPass);
+                const auto d3dPassMs = FD2D_ELAPSED_MS(t_d3dPass);
                 if (d3dPassMs > 30)
                 {
-                    FIC2_LOG_INFO("[Render] D3D OnRenderD3D pass took {}ms", d3dPassMs);
+                    FD2D_LOG_INFO("[Render] D3D OnRenderD3D pass took {}ms", d3dPassMs);
                 }
             }
 
@@ -2120,10 +2121,10 @@ namespace FD2D
         const auto t_endDraw = std::chrono::steady_clock::now();
         HRESULT hr = m_d2dContext->EndDraw();
         {
-            const auto endDrawMs = FIC2_ELAPSED_MS(t_endDraw);
+            const auto endDrawMs = FD2D_ELAPSED_MS(t_endDraw);
             if (endDrawMs > 30)
             {
-                FIC2_LOG_INFO("[Render] D2D EndDraw (primary) took {}ms", endDrawMs);
+                FD2D_LOG_INFO("[Render] D2D EndDraw (primary) took {}ms", endDrawMs);
             }
         }
         
@@ -2147,10 +2148,10 @@ namespace FD2D
             const auto t_endDraw2 = std::chrono::steady_clock::now();
             hr = m_d2dContext->EndDraw();
             {
-                const auto endDraw2Ms = FIC2_ELAPSED_MS(t_endDraw2);
+                const auto endDraw2Ms = FD2D_ELAPSED_MS(t_endDraw2);
                 if (endDraw2Ms > 30)
                 {
-                    FIC2_LOG_INFO("[Render] D2D EndDraw (offscreen copy) took {}ms", endDraw2Ms);
+                    FD2D_LOG_INFO("[Render] D2D EndDraw (offscreen copy) took {}ms", endDraw2Ms);
                 }
             }
         }
@@ -2177,10 +2178,10 @@ namespace FD2D
         {
             const auto t_present = std::chrono::steady_clock::now();
             (void)m_swapChain->Present(1, 0);
-            const auto presentMs = FIC2_ELAPSED_MS(t_present);
+            const auto presentMs = FD2D_ELAPSED_MS(t_present);
             if (presentMs > 30)
             {
-                FIC2_LOG_INFO("[Render] SwapChain::Present(1,0) took {}ms", presentMs);
+                FD2D_LOG_INFO("[Render] SwapChain::Present(1,0) took {}ms", presentMs);
             }
         }
         } // end else (D3D11 path)
@@ -2189,8 +2190,8 @@ namespace FD2D
 
         if (renderLoopIterations > 1)
         {
-            const auto loopMs = FIC2_ELAPSED_MS(t_renderLoop);
-            FIC2_LOG_INFO("[Render] do-while loop ran {} iterations in {}ms", renderLoopIterations, loopMs);
+            const auto loopMs = FD2D_ELAPSED_MS(t_renderLoop);
+            FD2D_LOG_INFO("[Render] do-while loop ran {} iterations in {}ms", renderLoopIterations, loopMs);
         }
 
         // Diagnostic: roll this frame into a once-per-second [FPS] summary so a sluggish
@@ -2198,7 +2199,7 @@ namespace FD2D
         // as objective fps/frame-time numbers, broken down by what triggered each frame
         // and whether an async decode-completion redraw was pending at the time.
         {
-            const double frameMs = static_cast<double>(FIC2_ELAPSED_MS(t_renderLoop));
+            const double frameMs = static_cast<double>(FD2D_ELAPSED_MS(t_renderLoop));
             const unsigned long long nowMs = CommonUtil::NowMs();
             if (m_fpsWindowStartMs == 0)
             {
@@ -2228,10 +2229,17 @@ namespace FD2D
                 const double avgMs = m_fpsWindowTotalMs / (std::max)(1, m_fpsWindowFrames);
                 const double fps = static_cast<double>(m_fpsWindowFrames) * 1000.0 /
                     static_cast<double>((std::max)(windowElapsedMs, 1ULL));
-                FIC2_LOG_INFO(
-                    "[FPS] {:.1f} fps  frames={} avg={:.1f}ms max={:.1f}ms  "
+                // FD2D_LOG_INFO's formatter only substitutes bare "{}" placeholders (no
+                // fmt-style ":.1f" precision specifiers - see FD2DLog.h), so pre-format the
+                // three floating point values to one decimal place here.
+                char fpsBuf[32], avgBuf[32], maxBuf[32];
+                std::snprintf(fpsBuf, sizeof(fpsBuf), "%.1f", fps);
+                std::snprintf(avgBuf, sizeof(avgBuf), "%.1f", avgMs);
+                std::snprintf(maxBuf, sizeof(maxBuf), "%.1f", m_fpsWindowMaxMs);
+                FD2D_LOG_INFO(
+                    "[FPS] {} fps  frames={} avg={}ms max={}ms  "
                     "trigger(tick={} invalidate={} paint={} other={})  asyncPending={}/{}",
-                    fps, m_fpsWindowFrames, avgMs, m_fpsWindowMaxMs,
+                    fpsBuf, m_fpsWindowFrames, avgBuf, maxBuf,
                     m_fpsWindowTickFrames, m_fpsWindowInvalidateFrames,
                     m_fpsWindowPaintFrames, m_fpsWindowOtherFrames,
                     m_fpsWindowAsyncPendingFrames, m_fpsWindowFrames);
@@ -2289,22 +2297,22 @@ namespace FD2D
             return false;
         }
 
-        FIC2_TIMER_START(t_addwnd);
+        FD2D_TIMER_START(t_addwnd);
 
         m_children.emplace(wnd->Name(), wnd);
         wnd->OnAttached(*this);
-        FIC2_LOG_STEP(t_addwnd, "[AddWnd] OnAttached");
+        FD2D_LOG_STEP(t_addwnd, "[AddWnd] OnAttached");
 
         wnd->Measure({ static_cast<float>(m_size.width), static_cast<float>(m_size.height) });
         wnd->Arrange({ 0.0f, 0.0f, static_cast<float>(m_size.width), static_cast<float>(m_size.height) });
-        FIC2_LOG_STEP(t_addwnd, "[AddWnd] Measure + Arrange");
+        FD2D_LOG_STEP(t_addwnd, "[AddWnd] Measure + Arrange");
 
         m_layoutDirty = true;
 
         if (m_window != nullptr)
         {
             Render();
-            FIC2_LOG_STEP(t_addwnd, "[AddWnd] Render (first frame)");
+            FD2D_LOG_STEP(t_addwnd, "[AddWnd] Render (first frame)");
         }
 
         return true;

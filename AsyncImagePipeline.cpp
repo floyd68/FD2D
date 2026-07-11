@@ -1,7 +1,7 @@
 #include "AsyncImagePipeline.h"
 #include "Backplate.h"
 #include "../CommonUtil.h"
-#include "../AppLog.h"
+#include "FD2DLog.h"
 
 #include <chrono>
 
@@ -189,10 +189,10 @@ namespace FD2D
             payload.rowPitch,
             &props,
             &bitmap);
-        const auto bmpMs = FIC2_ELAPSED_MS(t_bmp);
+        const auto bmpMs = FD2D_ELAPSED_MS(t_bmp);
         if (bmpMs > 30)
         {
-            FIC2_LOG_INFO("[D2D] CreateBitmap {}x{} took {}ms", payload.width, payload.height, bmpMs);
+            FD2D_LOG_INFO("[D2D] CreateBitmap {}x{} took {}ms", payload.width, payload.height, bmpMs);
         }
 
         if (FAILED(hr) || !bitmap)
