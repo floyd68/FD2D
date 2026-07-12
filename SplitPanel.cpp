@@ -67,19 +67,18 @@ namespace FD2D
     void SplitPanel::SetSplitRatio(float ratio)
     {
         const float newRatio = (std::max)(0.0f, (std::min)(1.0f, ratio));
-        
-        // Only invalidate if ratio actually changed (prevents unnecessary re-renders)
-        if (std::abs(m_splitRatio - newRatio) < 0.001f)
+
+        // Only invalidate if the requested ratio actually changed (prevents
+        // unnecessary re-renders). Compared against m_requestedSplitRatio (the
+        // user's intent), not the effective/clamped m_splitRatio, since those
+        // two can legitimately differ once pane extent constraints kick in.
+        if (std::abs(m_requestedSplitRatio - newRatio) < 0.001f)
         {
             return;
         }
-        
-        m_splitRatio = newRatio;
-        if (m_splitter)
-        {
-            // Update the Splitter's current ratio (internally only)
-            // Actually applied in Arrange
-        }
+
+        m_requestedSplitRatio = newRatio;
+        m_splitRatio = newRatio; // tentative; Arrange() re-clamps from m_requestedSplitRatio
         Invalidate();
     }
 
@@ -210,6 +209,11 @@ namespace FD2D
 
         float clamped = ClampRatioForPaneConstraints(childArea, splitterExtent, ratio);
         m_splitRatio = clamped;
+        // The user just dragged the splitter to this position, so it becomes
+        // the new sticky "requested" ratio too - future resizes should grow
+        // or shrink relative to *this* position, not silently revert to
+        // whatever ratio was passed to the last SetSplitRatio() call.
+        m_requestedSplitRatio = clamped;
         if (m_splitter)
         {
             m_splitter->SetRatio(clamped);
@@ -406,7 +410,11 @@ namespace FD2D
             float splitterWidth = m_splitter ? m_splitter->Measure({ childArea.w, childArea.h }).w : 0.0f;
             float availableWidth = totalWidth - splitterWidth;
 
-            m_splitRatio = ClampRatioForPaneConstraints(childArea, splitterWidth, m_splitRatio);
+            // Re-derive the effective ratio from the *requested* ratio every
+            // time (not from last frame's already-clamped m_splitRatio) so the
+            // result only depends on the current size, not the resize history
+            // (see m_requestedSplitRatio's doc comment in SplitPanel.h).
+            m_splitRatio = ClampRatioForPaneConstraints(childArea, splitterWidth, m_requestedSplitRatio);
             if (m_splitter)
             {
                 m_splitter->SetRatio(m_splitRatio);
@@ -448,7 +456,9 @@ namespace FD2D
             float splitterHeight = m_splitter ? m_splitter->Measure({ childArea.w, childArea.h }).h : 0.0f;
             float availableHeight = totalHeight - splitterHeight;
 
-            m_splitRatio = ClampRatioForPaneConstraints(childArea, splitterHeight, m_splitRatio);
+            // See the Horizontal branch above: always clamp from the
+            // requested ratio, not the previous effective one.
+            m_splitRatio = ClampRatioForPaneConstraints(childArea, splitterHeight, m_requestedSplitRatio);
             if (m_splitter)
             {
                 m_splitter->SetRatio(m_splitRatio);

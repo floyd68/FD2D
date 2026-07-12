@@ -49,7 +49,25 @@ namespace FD2D
         float ClampRatioForPaneConstraints(const Rect& childArea, float splitterExtent, float ratio) const;
 
         SplitterOrientation m_orientation { SplitterOrientation::Horizontal };
+        // m_splitRatio is the *effective* ratio actually used for the most recent
+        // Arrange pass (after clamping to the pane min/max extents below).
+        // m_requestedSplitRatio is the ratio the user actually asked for (via
+        // SetSplitRatio(), or by dragging the Splitter) - i.e. what the split
+        // *would* be if the current window size allowed it. Arrange() always
+        // re-derives m_splitRatio from m_requestedSplitRatio + the *current*
+        // bounds, rather than re-clamping the previous effective m_splitRatio.
+        // Without this distinction, once a resize clamped m_splitRatio down (e.g.
+        // a short window forcing the second pane to its min extent), a later
+        // resize back to a larger size would find the already-clamped value
+        // still technically "in range" for the new size and leave it alone
+        // instead of growing back toward what the user actually asked for -
+        // making the second pane's effective size (and how many of its child
+        // rows fit) depend on the *history* of window resizes rather than only
+        // the current window size, which showed up as control rows at the
+        // bottom of NifCompareControlPanel appearing/disappearing seemingly at
+        // random as the window was resized up and down through the same sizes.
         float m_splitRatio { 0.5f };
+        float m_requestedSplitRatio { 0.5f };
         float m_firstPaneMinExtent { 0.0f };  // 0 = no limit
         float m_firstPaneMaxExtent { 0.0f };  // 0 = no limit
         float m_secondPaneMinExtent { 0.0f }; // 0 = no limit
