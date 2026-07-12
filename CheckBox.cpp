@@ -5,15 +5,25 @@ namespace FD2D
     CheckBox::CheckBox()
         : Wnd()
     {
+        // Center-align vertically (to match BoxRect()'s centering below) so the
+        // label tracks the checkbox glyph regardless of row height, instead of
+        // sitting flush against the top of a rect that's only as tall as the
+        // label itself (which left zero slack and let the descenders of e.g.
+        // "Sync Views"/"Sync Lighting" get clipped by D2D1_DRAW_TEXT_OPTIONS_CLIP).
+        m_label.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     }
 
     CheckBox::CheckBox(const std::wstring& name)
         : Wnd(name)
     {
+        m_label.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     }
 
     Size CheckBox::Measure(Size available)
     {
+        // labelSize.h now comes from Text::EnsureNaturalSize()'s real DWrite
+        // glyph metrics (already padded by its own +1px rounding margin), so
+        // no extra hand-tuned slack is needed here.
         Size labelSize = m_label.Measure(available);
         m_desired = { kBoxSize + kLabelGap + labelSize.w + 2.0f * m_margin,
             (std::max)(kBoxSize, labelSize.h) + 2.0f * m_margin };

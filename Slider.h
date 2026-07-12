@@ -58,6 +58,11 @@ namespace FD2D
 
         static constexpr float kTrackHeight = 4.0f;
         static constexpr float kThumbRadius = 7.0f;
-        static constexpr float kLabelHeight = 16.0f;
+
+        // Label row height, derived from m_label's own (now DWrite-metrics-
+        // accurate) Measure() result rather than a hardcoded guess - see
+        // Text::Measure/EnsureNaturalSize. Refreshed in Measure()/Arrange();
+        // TrackRect()/OnInputEvent() (const) just read the cached value.
+        float m_labelHeight { 0.0f };
     };
 }

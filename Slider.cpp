@@ -17,7 +17,8 @@ namespace FD2D
     Size Slider::Measure(Size available)
     {
         UNREFERENCED_PARAMETER(available);
-        float h = kLabelHeight + kThumbRadius * 2.0f + 2.0f * m_margin;
+        m_labelHeight = m_label.Measure({ 0.0f, 0.0f }).h;
+        float h = m_labelHeight + kThumbRadius * 2.0f + 2.0f * m_margin;
         m_desired = { 120.0f + 2.0f * m_margin, h };
         return m_desired;
     }
@@ -25,9 +26,10 @@ namespace FD2D
     void Slider::Arrange(Rect finalRect)
     {
         Wnd::Arrange(finalRect);
+        m_labelHeight = m_label.Measure({ 0.0f, 0.0f }).h;
         const auto& rect = LayoutRect();
         D2D1_RECT_F labelRect = rect;
-        labelRect.bottom = labelRect.top + kLabelHeight;
+        labelRect.bottom = labelRect.top + m_labelHeight;
         m_label.SetRect(labelRect);
     }
 
@@ -97,7 +99,7 @@ namespace FD2D
     D2D1_RECT_F Slider::TrackRect() const
     {
         const auto& rect = LayoutRect();
-        float top = rect.top + kLabelHeight + (rect.bottom - rect.top - kLabelHeight) * 0.5f - kTrackHeight * 0.5f;
+        float top = rect.top + m_labelHeight + (rect.bottom - rect.top - m_labelHeight) * 0.5f - kTrackHeight * 0.5f;
         float left = rect.left + kThumbRadius;
         float right = rect.right - kThumbRadius;
         return D2D1::RectF(left, top, (std::max)(left, right), top + kTrackHeight);
@@ -163,7 +165,7 @@ namespace FD2D
             }
             D2D1_RECT_F track = TrackRect();
             bool onTrack = event.point.x >= track.left - kThumbRadius && event.point.x <= track.right + kThumbRadius &&
-                event.point.y >= LayoutRect().top + kLabelHeight && event.point.y <= LayoutRect().bottom;
+                event.point.y >= LayoutRect().top + m_labelHeight && event.point.y <= LayoutRect().bottom;
             if (HitTestThumb(event.point) || onTrack)
             {
                 m_dragging = true;
@@ -232,7 +234,7 @@ namespace FD2D
 
             D2D1_RECT_F rect = LayoutRect();
             D2D1_RECT_F valueRect = rect;
-            valueRect.bottom = valueRect.top + kLabelHeight;
+            valueRect.bottom = valueRect.top + m_labelHeight;
             m_brush->SetColor(D2D1::ColorF(D2D1::ColorF::LightGray));
             // Draw the numeric value right-aligned using DrawText via a throwaway layout would need DWrite factory;
             // keep this lightweight by drawing through Text when possible (handled by owner setting label text).

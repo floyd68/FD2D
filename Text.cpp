@@ -21,6 +21,7 @@ namespace FD2D
         }
         m_text = text;
         m_textLayoutDirty = true;
+        m_naturalSizeDirty = true;
     }
 
     void Text::SetColor(const D2D1_COLOR_F& color)
@@ -46,6 +47,7 @@ namespace FD2D
         m_ellipsisSign.Reset();
         m_textLayout.Reset();
         m_textLayoutDirty = true;
+        m_naturalSizeDirty = true;
     }
 
     void Text::SetFixedWidth(float width)
@@ -106,6 +108,53 @@ namespace FD2D
         m_onClick = std::move(handler);
     }
 
+    void Text::EnsureFormat()
+    {
+        if (m_format)
+        {
+            return;
+        }
+
+        IDWriteFactory* factory = Core::DWriteFactory();
+        if (factory == nullptr)
+        {
+            return;
+        }
+
+        factory->CreateTextFormat(
+            m_family.c_str(),
+            nullptr,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            m_size,
+            L"",
+            &m_format);
+
+        if (m_format)
+        {
+            (void)m_format->SetTextAlignment(m_textAlignment);
+            (void)m_format->SetParagraphAlignment(m_paragraphAlignment);
+
+            if (m_ellipsisTrimmingEnabled)
+            {
+                if (!m_ellipsisSign)
+                {
+                    (void)factory->CreateEllipsisTrimmingSign(m_format.Get(), &m_ellipsisSign);
+                }
+
+                DWRITE_TRIMMING trimming {};
+                trimming.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
+                trimming.delimiter = 0;
+                trimming.delimiterCount = 0;
+                (void)m_format->SetTrimming(&trimming, m_ellipsisSign.Get());
+                (void)m_format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+            }
+
+            m_textLayoutDirty = true;
+        }
+    }
+
     void Text::EnsureResources(ID2D1RenderTarget* target)
     {
         if (target == nullptr)
@@ -118,45 +167,67 @@ namespace FD2D
             target->CreateSolidColorBrush(m_color, &m_brush);
         }
 
-        if (!m_format)
+        EnsureFormat();
+    }
+
+    void Text::EnsureNaturalSize()
+    {
+        if (!m_naturalSizeDirty)
         {
-            IDWriteFactory* factory = Core::DWriteFactory();
-            if (factory != nullptr)
-            {
-                factory->CreateTextFormat(
-                    m_family.c_str(),
-                    nullptr,
-                    DWRITE_FONT_WEIGHT_NORMAL,
-                    DWRITE_FONT_STYLE_NORMAL,
-                    DWRITE_FONT_STRETCH_NORMAL,
-                    m_size,
-                    L"",
-                    &m_format);
-
-                if (m_format)
-                {
-                    (void)m_format->SetTextAlignment(m_textAlignment);
-                    (void)m_format->SetParagraphAlignment(m_paragraphAlignment);
-
-                    if (m_ellipsisTrimmingEnabled)
-                    {
-                        if (!m_ellipsisSign)
-                        {
-                            (void)factory->CreateEllipsisTrimmingSign(m_format.Get(), &m_ellipsisSign);
-                        }
-
-                        DWRITE_TRIMMING trimming {};
-                        trimming.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
-                        trimming.delimiter = 0;
-                        trimming.delimiterCount = 0;
-                        (void)m_format->SetTrimming(&trimming, m_ellipsisSign.Get());
-                        (void)m_format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-                    }
-
-                    m_textLayoutDirty = true;
-                }
-            }
+            return;
         }
+
+        EnsureFormat();
+
+        if (!m_format || m_text.empty())
+        {
+            m_naturalSize = { 0.0f, m_size * 1.2f };
+            m_naturalSizeDirty = false;
+            return;
+        }
+
+        // Measure against an effectively unbounded box (no target/rendered
+        // layout required) so metrics.width/height reflect the text's true
+        // intrinsic size - real glyph advances and the font's actual
+        // ascent+descent+lineGap - rather than the old "charCount * size *
+        // 0.6" / "size * 1.2" guesses, which were consistently short enough
+        // to hard-clip descenders (e.g. the "g" in "Brightness") once a
+        // control sized its label rect directly off Measure()'s result.
+        constexpr float kUnbounded = 100000.0f;
+        Microsoft::WRL::ComPtr<IDWriteTextLayout> naturalLayout;
+        IDWriteFactory* factory = Core::DWriteFactory();
+        if (factory != nullptr)
+        {
+            (void)factory->CreateTextLayout(
+                m_text.c_str(),
+                static_cast<UINT32>(m_text.length()),
+                m_format.Get(),
+                kUnbounded,
+                kUnbounded,
+                &naturalLayout);
+        }
+
+        DWRITE_TEXT_METRICS metrics {};
+        if (naturalLayout && SUCCEEDED(naturalLayout->GetMetrics(&metrics)) && metrics.width > 0.0f)
+        {
+            // +1px safety margin: GetMetrics() reports ideal (sub-pixel) glyph
+            // extents, while the rect a caller later hands to
+            // DrawText*(..., D2D1_DRAW_TEXT_OPTIONS_CLIP) goes through
+            // pixel snapping/rounding - without a little slack, that rounding
+            // can still shave a pixel off a descender on some sizes/DPIs.
+            m_naturalSize = { metrics.width, metrics.height + 1.0f };
+        }
+        else
+        {
+            // DWrite unavailable/failed - fall back to the old heuristic
+            // rather than reporting a bogus zero size.
+            m_naturalSize = {
+                static_cast<float>(m_text.length()) * m_size * 0.6f,
+                m_size * 1.2f
+            };
+        }
+
+        m_naturalSizeDirty = false;
     }
 
     Size Text::Measure(Size available)
@@ -164,31 +235,20 @@ namespace FD2D
         if (m_text.empty())
         {
             const float w = (m_fixedWidth > 0.0f) ? m_fixedWidth : 0.0f;
-            m_desired = { w, m_size };
+            m_desired = { w, m_size * 1.2f };
             return m_desired;
         }
 
-        const float lineH = m_size * 1.2f;
+        EnsureNaturalSize();
+        const float lineH = m_naturalSize.h;
 
-        if (m_fixedWidth > 0.0f)
-        {
-            float w = m_fixedWidth;
-            if (available.w > 0.0f)
-            {
-                w = (std::min)(w, available.w);
-            }
-            m_desired = { w, lineH };
-            return m_desired;
-        }
-
-        // Fallback: approximate width based on font size.
-        float estimatedWidth = static_cast<float>(m_text.length()) * m_size * 0.6f;
+        float w = (m_fixedWidth > 0.0f) ? m_fixedWidth : m_naturalSize.w;
         if (available.w > 0.0f)
         {
-            estimatedWidth = (std::min)(estimatedWidth, available.w);
+            w = (std::min)(w, available.w);
         }
 
-        m_desired = { estimatedWidth, lineH };
+        m_desired = { w, lineH };
         return m_desired;
     }
 

@@ -30,6 +30,8 @@ namespace FD2D
 
     private:
         void EnsureResources(ID2D1RenderTarget* target);
+        void EnsureFormat();
+        void EnsureNaturalSize();
 
         std::wstring m_text { L"Text" };
         std::wstring m_family { L"Segoe UI" };
@@ -48,6 +50,13 @@ namespace FD2D
         float m_layoutWidth { 0.0f };
         float m_layoutHeight { 0.0f };
         bool m_textLayoutDirty { true };
+
+        // Cached result of measuring m_text/m_family/m_size at effectively
+        // unbounded width, i.e. its true intrinsic size (see EnsureNaturalSize
+        // in Text.cpp for why Measure() needs this instead of the old
+        // "fontSize * 1.2" / "charCount * fontSize * 0.6" heuristics).
+        Size m_naturalSize { 0.0f, 0.0f };
+        bool m_naturalSizeDirty { true };
     };
 }
 
