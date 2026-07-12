@@ -6,7 +6,9 @@
 #include <dxgi1_2.h>
 #include <d3d11_1.h>
 #include <wrl/client.h>
+#include <cstdint>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 #include <string>
 #include <atomic>
@@ -17,6 +19,26 @@
 
 namespace FD2D
 {
+    // Thread-safe redraw handle for worker threads. Does not retain a raw Backplate*.
+    // After Backplate destruction the token becomes a no-op.
+    class AsyncRedrawToken
+    {
+    public:
+        void RequestAsyncRedraw() const;
+
+    private:
+        friend class Backplate;
+
+        struct ControlBlock
+        {
+            mutable std::mutex mutex;
+            Backplate* backplate { nullptr };
+        };
+
+        explicit AsyncRedrawToken(std::weak_ptr<ControlBlock> control);
+        std::weak_ptr<ControlBlock> m_control {};
+    };
+
     enum class ChromeStyle
     {
         Standard,
@@ -95,6 +117,12 @@ namespace FD2D
         void RequestAsyncRedraw();
         void ProcessAsyncRedraw();
 
+        // Prefer this over capturing raw Backplate* from worker threads.
+        std::shared_ptr<AsyncRedrawToken> GetAsyncRedrawToken() const;
+
+        // Monotonic graphics resource generations (device / target / renderer backend).
+        GraphicsGeneration GetGraphicsGeneration() const { return m_graphicsGeneration; }
+
         // Animation scheduling (spinner / cross-fade): avoids busy WM_PAINT loops.
         void RequestAnimationFrame();
         bool HasActiveAnimation(unsigned long long nowMs) const;
@@ -160,10 +188,20 @@ namespace FD2D
         HRESULT FallbackToD2DOnly(HRESULT causeHr);
         void DiscardD2DTargets();
         void DiscardDeviceResources();
+        void InvalidateGraphics(
+            GraphicsInvalidationReason reason,
+            bool bumpDevice,
+            bool bumpTarget,
+            bool bumpRenderer);
+        void NotifyGraphicsInvalidated(GraphicsInvalidationReason reason);
+        void ScheduleNextFrame();
+        bool HandleDeviceLostHr(HRESULT hr, const char* where);
+        void LogDeviceRemovedReason(HRESULT triggerHr, const char* where) const;
         void Layout();
         void InvokeBeforeDestroyOnce();
         void SchedulePlacementAutosave();
         void FlushPlacementAutosave();
+        void DetachAsyncRedrawControl();
 
         class DropTarget;
 
@@ -214,6 +252,8 @@ namespace FD2D
 
         HANDLE m_asyncRedrawEvent { nullptr };
         std::atomic<bool> m_asyncRedrawPending { false };
+        std::shared_ptr<AsyncRedrawToken::ControlBlock> m_asyncRedrawControl {};
+        GraphicsGeneration m_graphicsGeneration {};
 
         std::atomic<unsigned long long> m_lastAnimationRequestMs { 0 };
         std::atomic<unsigned long long> m_lastAnimationTickMs { 0 };

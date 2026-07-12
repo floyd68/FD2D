@@ -11,8 +11,7 @@
 #include "ComboBox.h"
 #include "Slider.h"
 #include "Image.h"
-#include "MainImage.h"
-#include "ThumbImage.h"
+#include "TextureImage.h"
 #include "Panel.h"
 #include "StackPanel.h"
 #include "DockPanel.h"
@@ -22,4 +21,3 @@
 #include "SplitPanel.h"
 #include "ScrollView.h"
 #include "Spinner.h"
-

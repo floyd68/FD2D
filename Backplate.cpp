@@ -123,16 +123,22 @@ namespace FD2D
     Backplate::Backplate()
     {
         m_asyncRedrawEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        m_asyncRedrawControl = std::make_shared<AsyncRedrawToken::ControlBlock>();
+        m_asyncRedrawControl->backplate = this;
     }
 
     Backplate::Backplate(const std::wstring& name)
         : m_name(name)
     {
         m_asyncRedrawEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        m_asyncRedrawControl = std::make_shared<AsyncRedrawToken::ControlBlock>();
+        m_asyncRedrawControl->backplate = this;
     }
 
     Backplate::~Backplate()
     {
+        NotifyGraphicsInvalidated(GraphicsInvalidationReason::Shutdown);
+        DetachAsyncRedrawControl();
         UnregisterDropTarget();
 
         if (m_window != nullptr && m_placeAutosaveTimerId != 0)
@@ -146,6 +152,126 @@ namespace FD2D
             CloseHandle(m_asyncRedrawEvent);
             m_asyncRedrawEvent = nullptr;
         }
+    }
+
+    AsyncRedrawToken::AsyncRedrawToken(std::weak_ptr<ControlBlock> control)
+        : m_control(std::move(control))
+    {
+    }
+
+    void AsyncRedrawToken::RequestAsyncRedraw() const
+    {
+        auto control = m_control.lock();
+        if (!control)
+        {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(control->mutex);
+        if (control->backplate)
+        {
+            control->backplate->RequestAsyncRedraw();
+        }
+    }
+
+    void Backplate::DetachAsyncRedrawControl()
+    {
+        if (!m_asyncRedrawControl)
+        {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(m_asyncRedrawControl->mutex);
+        m_asyncRedrawControl->backplate = nullptr;
+    }
+
+    std::shared_ptr<AsyncRedrawToken> Backplate::GetAsyncRedrawToken() const
+    {
+        if (!m_asyncRedrawControl)
+        {
+            return nullptr;
+        }
+        return std::shared_ptr<AsyncRedrawToken>(new AsyncRedrawToken(m_asyncRedrawControl));
+    }
+
+    void Backplate::InvalidateGraphics(
+        GraphicsInvalidationReason reason,
+        bool bumpDevice,
+        bool bumpTarget,
+        bool bumpRenderer)
+    {
+        if (bumpDevice)
+        {
+            ++m_graphicsGeneration.device;
+        }
+        if (bumpTarget)
+        {
+            ++m_graphicsGeneration.target;
+        }
+        if (bumpRenderer)
+        {
+            ++m_graphicsGeneration.renderer;
+        }
+        NotifyGraphicsInvalidated(reason);
+    }
+
+    void Backplate::NotifyGraphicsInvalidated(GraphicsInvalidationReason reason)
+    {
+        const GraphicsGeneration generation = m_graphicsGeneration;
+        for (auto& pair : m_children)
+        {
+            if (pair.second)
+            {
+                pair.second->OnGraphicsInvalidated(reason, generation);
+            }
+        }
+    }
+
+    void Backplate::ScheduleNextFrame()
+    {
+        if (m_window != nullptr)
+        {
+            InvalidateRect(m_window, nullptr, FALSE);
+        }
+    }
+
+    void Backplate::LogDeviceRemovedReason(HRESULT triggerHr, const char* where) const
+    {
+        char triggerBuf[16];
+        std::snprintf(triggerBuf, sizeof(triggerBuf), "0x%08X", static_cast<unsigned>(triggerHr));
+
+        if (m_d3dDevice)
+        {
+            const HRESULT reasonHr = m_d3dDevice->GetDeviceRemovedReason();
+            char reasonBuf[16];
+            std::snprintf(reasonBuf, sizeof(reasonBuf), "0x%08X", static_cast<unsigned>(reasonHr));
+            FD2D_LOG_INFO(
+                "[Graphics] device lost at {}: hr={} GetDeviceRemovedReason={}",
+                where ? where : "?",
+                triggerBuf,
+                reasonBuf);
+        }
+        else
+        {
+            FD2D_LOG_INFO(
+                "[Graphics] device lost at {}: hr={} (no D3D device)",
+                where ? where : "?",
+                triggerBuf);
+        }
+    }
+
+    bool Backplate::HandleDeviceLostHr(HRESULT hr, const char* where)
+    {
+        if (!IsDeviceRemovedHr(hr))
+        {
+            return false;
+        }
+
+        LogDeviceRemovedReason(hr, where);
+        DiscardDeviceResources();
+        InvalidateGraphics(GraphicsInvalidationReason::DeviceLost, true, true, false);
+        ScheduleNextFrame();
+        return true;
     }
 
     void Backplate::SetOnBeforeDestroy(std::function<void(HWND)> handler)
@@ -1261,7 +1387,12 @@ namespace FD2D
     {
         if (!m_hwndRenderTarget)
         {
-            return CreateRenderTargetD2D();
+            HRESULT hr = CreateRenderTargetD2D();
+            if (SUCCEEDED(hr))
+            {
+                InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, true, true, false);
+            }
+            return hr;
         }
         return S_OK;
     }
@@ -1320,7 +1451,10 @@ namespace FD2D
         UNREFERENCED_PARAMETER(causeHr);
 
         m_rendererId = L"d2d_hwndrt";
-        HRESULT hr = EnsureRenderTargetD2D();
+        DiscardDeviceResources();
+        InvalidateGraphics(GraphicsInvalidationReason::RendererFallback, true, true, true);
+
+        HRESULT hr = CreateRenderTargetD2D();
         UpdateTitleBarInfo();
         return hr;
     }
@@ -1370,6 +1504,7 @@ namespace FD2D
     HRESULT Backplate::CreateRenderTarget()
     {
         DiscardDeviceResources();
+        InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, true, true, false);
 
         if (m_window == nullptr)
         {
@@ -1631,7 +1766,11 @@ namespace FD2D
                 m_rtv.Reset();
 
                 const HRESULT hrResize = m_swapChain->ResizeBuffers(0, m_size.width, m_size.height, DXGI_FORMAT_UNKNOWN, 0);
-                if (SUCCEEDED(hrResize))
+                if (HandleDeviceLostHr(hrResize, "ResizeBuffers(inSizeMove)"))
+                {
+                    // Device discarded; recover on the next frame.
+                }
+                else if (SUCCEEDED(hrResize))
                 {
                     Microsoft::WRL::ComPtr<ID3D11Texture2D> backBufferTex;
                     if (SUCCEEDED(m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBufferTex))))
@@ -1648,6 +1787,12 @@ namespace FD2D
                             m_d2dContext->SetTarget(m_d2dTargetBitmap.Get());
                         }
                     }
+                }
+                else
+                {
+                    char hrBuf[16];
+                    std::snprintf(hrBuf, sizeof(hrBuf), "0x%08X", static_cast<unsigned>(hrResize));
+                    FD2D_LOG_INFO("[Graphics] ResizeBuffers(inSizeMove) failed hr={}", hrBuf);
                 }
             }
 
@@ -1676,22 +1821,39 @@ namespace FD2D
             m_offscreenD2DTarget.Reset();
             m_offscreenResizePending = false;
 
-            // Resize swap chain buffers
-            (void)m_swapChain->ResizeBuffers(0, m_size.width, m_size.height, DXGI_FORMAT_UNKNOWN, 0);
-
-            Microsoft::WRL::ComPtr<ID3D11Texture2D> backBufferTex;
-            if (SUCCEEDED(m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBufferTex))))
+            // Resize swap chain buffers (same device resources — do NOT bump content generations)
+            const HRESULT hrResize = m_swapChain->ResizeBuffers(0, m_size.width, m_size.height, DXGI_FORMAT_UNKNOWN, 0);
+            if (HandleDeviceLostHr(hrResize, "ResizeBuffers"))
             {
-                (void)m_d3dDevice->CreateRenderTargetView(backBufferTex.Get(), nullptr, &m_rtv);
-            }
-
-            Microsoft::WRL::ComPtr<IDXGISurface> backBuffer;
-            if (SUCCEEDED(m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer))))
-            {
-                const D2D1_BITMAP_PROPERTIES1 bp = MakeSwapChainBitmapProps();
-                if (SUCCEEDED(m_d2dContext->CreateBitmapFromDxgiSurface(backBuffer.Get(), &bp, &m_d2dTargetBitmap)))
+                m_layoutDirty = true;
+                if (m_window != nullptr && IsWindowVisible(m_window))
                 {
-                    m_d2dContext->SetTarget(m_d2dTargetBitmap.Get());
+                    // HandleDeviceLostHr already scheduled a frame.
+                }
+                return;
+            }
+            else if (FAILED(hrResize))
+            {
+                char hrBuf[16];
+                std::snprintf(hrBuf, sizeof(hrBuf), "0x%08X", static_cast<unsigned>(hrResize));
+                FD2D_LOG_INFO("[Graphics] ResizeBuffers failed hr={}", hrBuf);
+            }
+            else
+            {
+                Microsoft::WRL::ComPtr<ID3D11Texture2D> backBufferTex;
+                if (SUCCEEDED(m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBufferTex))))
+                {
+                    (void)m_d3dDevice->CreateRenderTargetView(backBufferTex.Get(), nullptr, &m_rtv);
+                }
+
+                Microsoft::WRL::ComPtr<IDXGISurface> backBuffer;
+                if (SUCCEEDED(m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer))))
+                {
+                    const D2D1_BITMAP_PROPERTIES1 bp = MakeSwapChainBitmapProps();
+                    if (SUCCEEDED(m_d2dContext->CreateBitmapFromDxgiSurface(backBuffer.Get(), &bp, &m_d2dTargetBitmap)))
+                    {
+                        m_d2dContext->SetTarget(m_d2dTargetBitmap.Get());
+                    }
                 }
             }
         }
@@ -1805,7 +1967,20 @@ namespace FD2D
             return;
         }
 
-        m_isRendering = true;
+        // Always clear m_isRendering, including early returns (e.g. D2DERR_RECREATE_TARGET).
+        struct RenderingGuard
+        {
+            Backplate& self;
+            explicit RenderingGuard(Backplate& s)
+                : self(s)
+            {
+                self.m_isRendering = true;
+            }
+            ~RenderingGuard()
+            {
+                self.m_isRendering = false;
+            }
+        } renderingGuard(*this);
 
         // Diagnostic: snapshot+reset what triggered this call and whether an async
         // decode-completion redraw was already pending, for the [FPS] summary below.
@@ -1877,7 +2052,6 @@ namespace FD2D
                 }
                 else
                 {
-                    m_isRendering = false;
                     return;
                 }
             }
@@ -1944,6 +2118,8 @@ namespace FD2D
             {
                 m_hwndRenderTarget.Reset();
                 m_offscreenRT.Reset();
+                InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, false, true, false);
+                ScheduleNextFrame();
                 return;
             }
 
@@ -1971,6 +2147,9 @@ namespace FD2D
                     {
                         m_hwndRenderTarget.Reset();
                         m_offscreenRT.Reset();
+                        InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, false, true, false);
+                        ScheduleNextFrame();
+                        return;
                     }
                 }
             }
@@ -2176,9 +2355,9 @@ namespace FD2D
             DiscardD2DTargets();
 
             // Device lost -> full recreate next frame. Otherwise, just recreate targets.
-            if (IsDeviceRemovedHr(hr))
+            if (HandleDeviceLostHr(hr, "D2D EndDraw"))
             {
-                DiscardDeviceResources();
+                return;
             }
         }
 
@@ -2191,11 +2370,22 @@ namespace FD2D
         if (m_swapChain)
         {
             const auto t_present = std::chrono::steady_clock::now();
-            (void)m_swapChain->Present(1, 0);
+            const HRESULT hrPresent = m_swapChain->Present(1, 0);
             const auto presentMs = FD2D_ELAPSED_MS(t_present);
             if (presentMs > 30)
             {
                 FD2D_LOG_INFO("[Render] SwapChain::Present(1,0) took {}ms", presentMs);
+            }
+
+            if (HandleDeviceLostHr(hrPresent, "SwapChain::Present"))
+            {
+                return;
+            }
+            else if (FAILED(hrPresent))
+            {
+                char hrBuf[16];
+                std::snprintf(hrBuf, sizeof(hrBuf), "0x%08X", static_cast<unsigned>(hrPresent));
+                FD2D_LOG_INFO("[Graphics] SwapChain::Present failed hr={}", hrBuf);
             }
         }
         } // end else (D3D11 path)
@@ -2269,8 +2459,6 @@ namespace FD2D
                 m_fpsWindowMaxMs = 0.0;
             }
         }
-
-        m_isRendering = false;
     }
 
     void Backplate::Layout()

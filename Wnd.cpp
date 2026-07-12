@@ -329,6 +329,17 @@ namespace FD2D
         m_backplate = nullptr;
     }
 
+    void Wnd::OnGraphicsInvalidated(GraphicsInvalidationReason reason, const GraphicsGeneration& generation)
+    {
+        for (auto& child : m_childrenOrdered)
+        {
+            if (child)
+            {
+                child->OnGraphicsInvalidated(reason, generation);
+            }
+        }
+    }
+
     void Wnd::OnRender(ID2D1RenderTarget* target)
     {
         UNREFERENCED_PARAMETER(target);

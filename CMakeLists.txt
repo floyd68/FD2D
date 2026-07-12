@@ -2,7 +2,6 @@ add_library(FD2D STATIC)
 
 target_sources(FD2D PRIVATE
     Application.cpp
-    AsyncImagePipeline.cpp
     Backplate.cpp
     Button.cpp
     CheckBox.cpp
@@ -21,7 +20,6 @@ target_sources(FD2D PRIVATE
     Splitter.cpp
     StackPanel.cpp
     Text.cpp
-    ThumbImage.cpp
     Util.cpp
     Wnd.cpp
 )
@@ -29,12 +27,8 @@ target_sources(FD2D PRIVATE
 target_include_directories(FD2D
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
-        # ImageCore is a real dependency (Image.h/ThumbImage.h/AsyncImagePipeline.h
-        # include ../ImageCore/ImageRequest.h etc.) - any consumer must check out
-        # ImageCore as a sibling directory named "ImageCore" next to FD2D.
-        ${CMAKE_CURRENT_SOURCE_DIR}/../ImageCore
     PRIVATE
-        # Required by Backplate.cpp/Image.cpp/ThumbImage.cpp/etc. which include
+        # Required by Backplate.cpp/Application.cpp/etc. which include
         # ../CommonUtil.h (a small header-only utility, not a build dependency -
         # any consumer must vendor a copy one level above FD2D; see nifskope's
         # liteviewer/third_party/CommonUtil.h for an example). Logging no longer

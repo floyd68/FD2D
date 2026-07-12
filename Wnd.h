@@ -8,6 +8,7 @@
 #include <d2d1.h>
 #include <dwrite.h>
 #include <d3d11_1.h>
+#include <cstdint>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -16,6 +17,22 @@
 namespace FD2D
 {
     class Backplate;
+
+    struct GraphicsGeneration
+    {
+        uint64_t device { 0 };
+        uint64_t target { 0 };
+        uint64_t renderer { 0 };
+    };
+
+    enum class GraphicsInvalidationReason
+    {
+        TargetRecreated,
+        DeviceLost,
+        RendererFallback,
+        Resize, // optional; prefer NOT bumping content generation on simple swapchain resize
+        Shutdown
+    };
 
     enum class FileDragVisual
     {
@@ -138,6 +155,9 @@ namespace FD2D
 
         virtual void OnAttached(Backplate& backplate);
         virtual void OnDetached();
+        // Graphics device/target/renderer recreation. Default forwards to children.
+        // App controls should drop stale GPU handles here and recreate on the next render.
+        virtual void OnGraphicsInvalidated(GraphicsInvalidationReason reason, const GraphicsGeneration& generation);
         // Optional D3D render pass (executed before D2D UI pass).
         // Default implementation forwards to children.
         virtual void OnRenderD3D(ID3D11DeviceContext* context);

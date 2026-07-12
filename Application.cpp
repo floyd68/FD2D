@@ -1,7 +1,5 @@
 #include "Application.h"
 #include "../CommonUtil.h"
-// Tear down ImageCore before FD2D::Core shutdown and before app CoUninitialize
-#include "../ImageCore/ImageLoader.h"
 #include <vector>
 
 namespace FD2D
@@ -33,7 +31,6 @@ namespace FD2D
     void Application::Shutdown()
     {
         m_backplates.clear();
-        ImageCore::ImageLoader::Instance().Shutdown();
         Core::Shutdown();
         m_initialized = false;
     }

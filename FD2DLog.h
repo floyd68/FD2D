@@ -4,7 +4,7 @@
 //
 // FD2D previously included "../AppLog.h" (a FICture2-app-level, spdlog-backed
 // logger living at the FICture2 repo root) directly from Backplate.cpp,
-// Image.cpp and AsyncImagePipeline.cpp. That made FD2D uncompilable unless it
+// Image.cpp. That made FD2D uncompilable unless it
 // was checked out as a subdirectory of the exact FICture2 repository layout
 // (needing "../AppLog.h" and "../external/spdlog/include" to exist one level
 // above FD2D) - a problem for any other project (e.g. nifskope's
