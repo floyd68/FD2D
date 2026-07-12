@@ -1,6 +1,6 @@
 ﻿#include "Backplate.h"
 #include "Core.h"
-#include "../CommonUtil.h"
+#include "Util.h"
 #include "FD2DLog.h"
 #include <cmath>
 #include <cstdio>
@@ -697,7 +697,7 @@ namespace FD2D
 
     void Backplate::RequestAnimationFrame()
     {
-        m_lastAnimationRequestMs.store(CommonUtil::NowMs());
+        m_lastAnimationRequestMs.store(Util::NowMs());
     }
 
     bool Backplate::HasActiveAnimation(unsigned long long nowMs) const
@@ -723,7 +723,7 @@ namespace FD2D
 
         // Adaptive animation cadence:
         // - Default: ~60fps for smooth interactions.
-        // - While async redraw bursts are pending (thumbnail decode completions) or during live resize:
+        // - While async redraw bursts are pending or during live resize:
         //   back off to ~30fps to reduce UI-thread render pressure.
         const bool asyncPending = m_asyncRedrawPending.load();
         const unsigned long long minTickIntervalMs =
@@ -2399,12 +2399,12 @@ namespace FD2D
         }
 
         // Diagnostic: roll this frame into a once-per-second [FPS] summary so a sluggish
-        // period (e.g. right after startup while thumbnails are still loading) shows up
+        // period (e.g. right after startup while async work is still completing) shows up
         // as objective fps/frame-time numbers, broken down by what triggered each frame
         // and whether an async decode-completion redraw was pending at the time.
         {
             const double frameMs = static_cast<double>(FD2D_ELAPSED_MS(t_renderLoop));
-            const unsigned long long nowMs = CommonUtil::NowMs();
+            const unsigned long long nowMs = Util::NowMs();
             if (m_fpsWindowStartMs == 0)
             {
                 m_fpsWindowStartMs = nowMs;

@@ -4,6 +4,24 @@
 
 namespace FD2D::Util
 {
+    unsigned long long NowMs()
+    {
+        return static_cast<unsigned long long>(GetTickCount64());
+    }
+
+    float Clamp01(float v)
+    {
+        if (v < 0.0f)
+        {
+            return 0.0f;
+        }
+        if (v > 1.0f)
+        {
+            return 1.0f;
+        }
+        return v;
+    }
+
     bool RectContainsPoint(const D2D1_RECT_F& r, const POINT& pt)
     {
         return pt.x >= r.left &&

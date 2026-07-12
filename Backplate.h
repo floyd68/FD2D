@@ -173,7 +173,7 @@ namespace FD2D
         enum class RenderTrigger { Other, Tick, Invalidate, Paint };
         void NoteRenderTrigger(RenderTrigger trigger) { m_pendingRenderTrigger = trigger; }
 
-        // Per-rect clear for the D3D swapchain backend (used for per-ImageBrowser background).
+        // Per-rect clear for the D3D swapchain backend (e.g. per-pane backgrounds).
         // Returns false if not supported/available (e.g., D2D-only backend).
         bool ClearRectD3D(const D2D1_RECT_F& rect, const D2D1_COLOR_F& color);
 

@@ -564,7 +564,7 @@ namespace FD2D
             // single OLE DragOver). Calling Render() re-entrantly would set
             // m_renderRequested=true and cause the do-while render loop to spin
             // once per Invalidate() call, leading to multi-second stalls when
-            // many components (e.g. thumbnail spinners) call Invalidate() during
+            // many components (e.g. loading spinners) call Invalidate() during
             // a single frame.
             if (m_backplate->IsInSizeMove() || m_backplate->IsRendering() || m_backplate->IsDeferringRender())
             {

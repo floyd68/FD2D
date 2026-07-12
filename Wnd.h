@@ -37,8 +37,8 @@ namespace FD2D
     enum class FileDragVisual
     {
         None,
-        Replace, // drop will replace current view
-        Insert   // drop will insert a new ImageBrowser to the right
+        Replace, // drop will replace the current drop target
+        Insert   // drop will insert alongside the current drop target
     };
 
     enum class InputEventType

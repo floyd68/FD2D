@@ -1,7 +1,6 @@
 #include "ScrollView.h"
 #include "Backplate.h"
 #include "Util.h"
-#include "../CommonUtil.h"
 #include <algorithm>
 #include <float.h>
 #include <cmath>
@@ -349,7 +348,7 @@ namespace FD2D
             return;
         }
 
-        AdvanceSmoothScroll(CommonUtil::NowMs());
+        AdvanceSmoothScroll(Util::NowMs());
 
         // Clip to viewport + apply translation
         const D2D1_RECT_F clip = LayoutRect();

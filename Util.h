@@ -1,6 +1,8 @@
 #pragma once
 
 #include <d2d1.h>
+#include <windows.h>
+#include <cstdint>
 
 namespace FD2D
 {
@@ -9,6 +11,9 @@ namespace FD2D
 
 namespace FD2D::Util
 {
+    unsigned long long NowMs();
+    float Clamp01(float v);
+
     bool RectContainsPoint(const D2D1_RECT_F& r, const POINT& pt);
 
     // True for any mouse-related input event (move, buttons, wheel, capture, cursor).

@@ -11,7 +11,6 @@ Copyright (c) 2024 EunSuk, Lee (이은석, floyd)
 - Win32 (`HWND`, message loop)
 - Direct2D (2D rendering)
 - DirectWrite (text layout/rendering)
-- WIC (image decode primitives)
 - Optional D3D11 path (GPU texture/SRV rendering for specific controls)
 
 FD2D is intentionally “small framework” style: a few core concepts (window/backplate, controls, layout) that you can extend
@@ -67,7 +66,7 @@ Include the umbrella header:
 3) Build a tree of `Wnd` controls
 4) Run the message loop
 
-The sample app in `FICture2` shows end-to-end usage, including thumbnail lists and split panes.
+Host applications can wire FD2D into their own apps; see each consumer's documentation for end-to-end examples (split panes, image views, etc.).
 
 ## Notes
 

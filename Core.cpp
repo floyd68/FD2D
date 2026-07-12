@@ -68,7 +68,7 @@ namespace FD2D
         }
 
         s_instance = context.instance;
-        // COM lifetime is owned by the application (FICture2).
+        // COM lifetime is owned by the host application.
         // FD2D assumes COM is already initialized on the calling thread.
         
         // D2D1CreateFactory returns the highest available version at runtime

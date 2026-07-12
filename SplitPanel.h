@@ -63,8 +63,8 @@ namespace FD2D
         // instead of growing back toward what the user actually asked for -
         // making the second pane's effective size (and how many of its child
         // rows fit) depend on the *history* of window resizes rather than only
-        // the current window size, which showed up as control rows at the
-        // bottom of NifCompareControlPanel appearing/disappearing seemingly at
+        // the current window size, which showed up as child rows at the
+        // bottom of a pane appearing/disappearing seemingly at
         // random as the window was resized up and down through the same sizes.
         float m_splitRatio { 0.5f };
         float m_requestedSplitRatio { 0.5f };

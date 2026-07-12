@@ -1,6 +1,6 @@
 #include "Splitter.h"
 #include "Backplate.h"
-#include "../CommonUtil.h"
+#include "Util.h"
 #include <algorithm>
 #include <cmath>
 
@@ -361,7 +361,7 @@ namespace FD2D
         }
 
         // Hover fade animation (time-based).
-        const unsigned long long now = CommonUtil::NowMs();
+        const unsigned long long now = Util::NowMs();
         if (m_lastHoverAnimMs == 0)
         {
             m_lastHoverAnimMs = now;
@@ -380,7 +380,7 @@ namespace FD2D
         {
             m_hoverT = (std::max)(targetT, m_hoverT - step);
         }
-        m_hoverT = CommonUtil::Clamp01(m_hoverT);
+        m_hoverT = Util::Clamp01(m_hoverT);
 
         // Splitter visuals:
         // - Wide hit-area (rect) for usability
@@ -442,7 +442,7 @@ namespace FD2D
             // Grip dots (appear with hover/drag)
             if (m_brushGrip && (m_hoverT > 0.001f || m_dragging))
             {
-                const float gripT = CommonUtil::Clamp01(m_hoverT + (m_dragging ? 0.35f : 0.0f));
+                const float gripT = Util::Clamp01(m_hoverT + (m_dragging ? 0.35f : 0.0f));
                 const float dotAlpha = 0.25f + 0.55f * gripT;
                 m_brushGrip->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, dotAlpha));
 
