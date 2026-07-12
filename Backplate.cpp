@@ -1931,6 +1931,13 @@ namespace FD2D
                     pair.second->OnRender(renderTarget);
                 }
             }
+            for (auto& pair : m_children)
+            {
+                if (pair.second)
+                {
+                    pair.second->OnRenderOverlay(renderTarget);
+                }
+            }
 
             HRESULT hr = renderTarget->EndDraw();
             if (hr == D2DERR_RECREATE_TARGET)
@@ -2115,6 +2122,13 @@ namespace FD2D
             if (pair.second)
             {
                 pair.second->OnRender(m_d2dContext.Get());
+            }
+        }
+        for (auto& pair : m_children)
+        {
+            if (pair.second)
+            {
+                pair.second->OnRenderOverlay(m_d2dContext.Get());
             }
         }
 

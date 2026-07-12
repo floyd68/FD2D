@@ -6,26 +6,36 @@ namespace FD2D
     ComboBox::ComboBox()
         : Wnd()
     {
+        SetContentMargin(8.0f, 2.0f);
+        SetContentAlign(AlignH::Start, AlignV::Center);
     }
 
     ComboBox::ComboBox(const std::wstring& name)
         : Wnd(name)
     {
+        SetContentMargin(8.0f, 2.0f);
+        SetContentAlign(AlignH::Start, AlignV::Center);
     }
 
     Size ComboBox::Measure(Size available)
     {
-        UNREFERENCED_PARAMETER(available);
-        m_desired = { 160.0f + 2.0f * m_margin, kItemHeight + 2.0f * m_margin };
+        Size textSize = m_text.Measure(available);
+        float height = (std::max)(kItemHeight, textSize.h + m_contentMargin.Vertical());
+        m_desired = { 160.0f + 2.0f * m_margin, height + 2.0f * m_margin };
         return m_desired;
     }
 
     void ComboBox::Arrange(Rect finalRect)
     {
         Wnd::Arrange(finalRect);
-        D2D1_RECT_F textRect = LayoutRect();
-        textRect.right -= kArrowWidth;
-        m_text.SetRect(textRect);
+
+        // The arrow glyph owns the trailing chrome strip; content layout only
+        // applies inside the remaining text area.
+        Rect textBounds = BoundsRect();
+        textBounds.w = (std::max)(0.0f, textBounds.w - kArrowWidth);
+
+        Size textSize = m_text.Measure({ 0.0f, 0.0f });
+        m_text.SetRect(ToD2D(ContentRectFor(textBounds, textSize)));
     }
 
     void ComboBox::SetItems(std::vector<std::wstring> items)
@@ -66,10 +76,26 @@ namespace FD2D
         m_changed = std::move(handler);
     }
 
+    void ComboBox::SetDropdownBackground(const D2D1_COLOR_F& color)
+    {
+        m_dropdownBackground = color;
+        Invalidate();
+    }
+
     bool ComboBox::HitTestBox(const POINT& pt) const
     {
         const auto& rect = LayoutRect();
         return pt.x >= rect.left && pt.x <= rect.right && pt.y >= rect.top && pt.y <= rect.bottom;
+    }
+
+    bool ComboBox::HitTestDropdown(const POINT& pt) const
+    {
+        if (!m_open || m_items.empty())
+        {
+            return false;
+        }
+        D2D1_RECT_F dd = DropdownRect();
+        return pt.x >= dd.left && pt.x <= dd.right && pt.y >= dd.top && pt.y <= dd.bottom;
     }
 
     D2D1_RECT_F ComboBox::DropdownRect() const
@@ -97,6 +123,11 @@ namespace FD2D
         }
     }
 
+    bool ComboBox::HasInputOverlay() const
+    {
+        return m_open && !m_items.empty();
+    }
+
     bool ComboBox::OnInputEvent(const InputEvent& event)
     {
         switch (event.type)
@@ -114,8 +145,7 @@ namespace FD2D
             {
                 int newHover = -1;
                 D2D1_RECT_F dd = DropdownRect();
-                if (event.point.x >= dd.left && event.point.x <= dd.right &&
-                    event.point.y >= dd.top && event.point.y <= dd.bottom)
+                if (HitTestDropdown(event.point))
                 {
                     newHover = static_cast<int>((event.point.y - dd.top) / kItemHeight);
                 }
@@ -130,7 +160,7 @@ namespace FD2D
             {
                 Invalidate();
             }
-            return m_hoveredBox || m_open;
+            return m_hoveredBox || HitTestDropdown(event.point) || m_open;
         }
         case InputEventType::MouseDown:
         {
@@ -141,11 +171,9 @@ namespace FD2D
 
             if (m_open)
             {
-                D2D1_RECT_F dd = DropdownRect();
-                bool insideDropdown = event.point.x >= dd.left && event.point.x <= dd.right &&
-                    event.point.y >= dd.top && event.point.y <= dd.bottom;
-                if (insideDropdown)
+                if (HitTestDropdown(event.point))
                 {
+                    D2D1_RECT_F dd = DropdownRect();
                     int index = static_cast<int>((event.point.y - dd.top) / kItemHeight);
                     if (index >= 0 && index < static_cast<int>(m_items.size()))
                     {
@@ -207,6 +235,14 @@ namespace FD2D
         return Wnd::OnInputEvent(event);
     }
 
+    void ComboBox::EnsureBrush(ID2D1RenderTarget* target)
+    {
+        if (!m_brush)
+        {
+            target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &m_brush);
+        }
+    }
+
     void ComboBox::OnRender(ID2D1RenderTarget* target)
     {
         if (target == nullptr)
@@ -214,10 +250,7 @@ namespace FD2D
             return;
         }
 
-        if (!m_brush)
-        {
-            target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &m_brush);
-        }
+        EnsureBrush(target);
 
         const auto& rect = LayoutRect();
         m_brush->SetColor(m_hoveredBox || m_open ? D2D1::ColorF(0.26f, 0.26f, 0.29f, 1.0f) : D2D1::ColorF(0.18f, 0.18f, 0.20f, 1.0f));
@@ -237,33 +270,48 @@ namespace FD2D
         target->DrawLine(p1, p3, m_brush.Get(), 1.5f);
         target->DrawLine(p2, p3, m_brush.Get(), 1.5f);
 
-        if (m_open && !m_items.empty())
+        Wnd::OnRender(target);
+    }
+
+    void ComboBox::OnRenderOverlay(ID2D1RenderTarget* target)
+    {
+        // Draw the list in the overlay pass so it sits above sibling controls
+        // in the same strip, without a fullscreen scrim over the view panes.
+        if (target == nullptr || !m_open || m_items.empty())
         {
-            D2D1_RECT_F dd = DropdownRect();
-            m_brush->SetColor(D2D1::ColorF(0.14f, 0.14f, 0.16f, 1.0f));
-            target->FillRectangle(dd, m_brush.Get());
-            m_brush->SetColor(D2D1::ColorF(D2D1::ColorF::White));
-            target->DrawRectangle(dd, m_brush.Get(), 1.0f);
-
-            int visible = (std::min)(kMaxVisibleItems, static_cast<int>(m_items.size()));
-            for (int i = 0; i < visible; ++i)
-            {
-                D2D1_RECT_F itemRect = ItemRect(static_cast<size_t>(i));
-                if (i == m_hoveredItem)
-                {
-                    m_brush->SetColor(D2D1::ColorF(0.30f, 0.55f, 0.85f, 0.6f));
-                    target->FillRectangle(itemRect, m_brush.Get());
-                }
-
-                Text itemText;
-                D2D1_RECT_F textRect = itemRect;
-                textRect.left += 6.0f;
-                itemText.SetRect(textRect);
-                itemText.SetText(m_items[static_cast<size_t>(i)]);
-                itemText.OnRender(target);
-            }
+            Wnd::OnRenderOverlay(target);
+            return;
         }
 
-        Wnd::OnRender(target);
+        EnsureBrush(target);
+
+        D2D1_RECT_F dd = DropdownRect();
+        m_brush->SetColor(m_dropdownBackground);
+        target->FillRectangle(dd, m_brush.Get());
+        m_brush->SetColor(D2D1::ColorF(D2D1::ColorF::White));
+        target->DrawRectangle(dd, m_brush.Get(), 1.0f);
+
+        int visible = (std::min)(kMaxVisibleItems, static_cast<int>(m_items.size()));
+        for (int i = 0; i < visible; ++i)
+        {
+            D2D1_RECT_F itemRect = ItemRect(static_cast<size_t>(i));
+            if (i == m_hoveredItem)
+            {
+                m_brush->SetColor(D2D1::ColorF(0.30f, 0.55f, 0.85f, 0.6f));
+                target->FillRectangle(itemRect, m_brush.Get());
+            }
+
+            Text itemText;
+            itemText.SetText(m_items[static_cast<size_t>(i)]);
+            Size itemTextSize = itemText.Measure({ 0.0f, 0.0f });
+            Rect itemBounds = FromD2D(itemRect);
+            Thickness itemMargin = m_contentMargin;
+            itemMargin.right = (std::max)(itemMargin.right, 4.0f);
+            itemText.SetRect(ToD2D(LayoutContent(itemBounds, itemTextSize, itemMargin,
+                AlignH::Start, AlignV::Center)));
+            itemText.OnRender(target);
+        }
+
+        Wnd::OnRenderOverlay(target);
     }
 }

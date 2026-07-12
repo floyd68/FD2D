@@ -105,6 +105,65 @@ namespace FD2D
         }
     }
 
+    void Wnd::SetContentMargin(float uniform)
+    {
+        SetContentMargin(Thickness(uniform));
+    }
+
+    void Wnd::SetContentMargin(float horizontal, float vertical)
+    {
+        SetContentMargin(Thickness(horizontal, vertical));
+    }
+
+    void Wnd::SetContentMargin(const Thickness& margin)
+    {
+        m_contentMargin = margin;
+        NotifyContentLayoutChanged();
+    }
+
+    void Wnd::SetContentAlign(AlignH horizontal, AlignV vertical)
+    {
+        m_contentAlignH = horizontal;
+        m_contentAlignV = vertical;
+        NotifyContentLayoutChanged();
+    }
+
+    void Wnd::SetContentAlignH(AlignH horizontal)
+    {
+        m_contentAlignH = horizontal;
+        NotifyContentLayoutChanged();
+    }
+
+    void Wnd::SetContentAlignV(AlignV vertical)
+    {
+        m_contentAlignV = vertical;
+        NotifyContentLayoutChanged();
+    }
+
+    Rect Wnd::BoundsRect() const
+    {
+        return FromD2D(m_layoutRect);
+    }
+
+    Rect Wnd::ContentRectFor(const Size& contentSize) const
+    {
+        return ContentRectFor(BoundsRect(), contentSize);
+    }
+
+    Rect Wnd::ContentRectFor(const Rect& bounds, const Size& contentSize) const
+    {
+        return LayoutContent(bounds, contentSize, m_contentMargin, m_contentAlignH, m_contentAlignV);
+    }
+
+    void Wnd::NotifyContentLayoutChanged()
+    {
+        if (m_backplate)
+        {
+            m_backplate->RequestLayout();
+        }
+        Invalidate();
+    }
+
     void Wnd::SetName(const std::wstring& name)
     {
         m_name = name;
@@ -283,6 +342,17 @@ namespace FD2D
         }
     }
 
+    void Wnd::OnRenderOverlay(ID2D1RenderTarget* target)
+    {
+        for (auto& child : m_childrenOrdered)
+        {
+            if (child)
+            {
+                child->OnRenderOverlay(target);
+            }
+        }
+    }
+
     void Wnd::OnRenderD3D(ID3D11DeviceContext* context)
     {
         UNREFERENCED_PARAMETER(context);
@@ -296,6 +366,27 @@ namespace FD2D
         }
     }
 
+    bool Wnd::RouteOverlayMouseInput(const InputEvent& event)
+    {
+        for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
+        {
+            const auto& child = *it;
+            if (!child)
+            {
+                continue;
+            }
+            if (child->RouteOverlayMouseInput(event))
+            {
+                return true;
+            }
+            if (child->HasInputOverlay() && child->OnInputEvent(event))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool Wnd::OnInputEvent(const InputEvent& event)
     {
         // Mouse input should behave like hit-testing: topmost child first, stop at first handled.
@@ -303,6 +394,11 @@ namespace FD2D
         // All LayoutRects are in the same client coordinate system, so no conversion needed
         if (Util::IsMouseInputEventType(event.type))
         {
+            if (RouteOverlayMouseInput(event))
+            {
+                return true;
+            }
+
             // For wheel input, route based on cursor position so the pane under the mouse receives it
             // even if another control currently owns focus.
             if (event.type == InputEventType::MouseWheel || event.type == InputEventType::MouseHWheel)

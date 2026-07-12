@@ -7,17 +7,21 @@ namespace FD2D
     Slider::Slider()
         : Wnd()
     {
+        SetContentMargin(0.0f, 0.0f);
+        SetContentAlign(AlignH::Start, AlignV::Start);
     }
 
     Slider::Slider(const std::wstring& name)
         : Wnd(name)
     {
+        SetContentMargin(0.0f, 0.0f);
+        SetContentAlign(AlignH::Start, AlignV::Start);
     }
 
     Size Slider::Measure(Size available)
     {
         UNREFERENCED_PARAMETER(available);
-        m_labelHeight = m_label.Measure({ 0.0f, 0.0f }).h;
+        m_labelHeight = m_label.Measure({ 0.0f, 0.0f }).h + m_contentMargin.Vertical();
         float h = m_labelHeight + kThumbRadius * 2.0f + 2.0f * m_margin;
         m_desired = { 120.0f + 2.0f * m_margin, h };
         return m_desired;
@@ -26,11 +30,12 @@ namespace FD2D
     void Slider::Arrange(Rect finalRect)
     {
         Wnd::Arrange(finalRect);
-        m_labelHeight = m_label.Measure({ 0.0f, 0.0f }).h;
-        const auto& rect = LayoutRect();
-        D2D1_RECT_F labelRect = rect;
-        labelRect.bottom = labelRect.top + m_labelHeight;
-        m_label.SetRect(labelRect);
+        Size labelSize = m_label.Measure({ 0.0f, 0.0f });
+        m_labelHeight = labelSize.h + m_contentMargin.Vertical();
+
+        Rect labelBounds = BoundsRect();
+        labelBounds.h = m_labelHeight;
+        m_label.SetRect(ToD2D(ContentRectFor(labelBounds, labelSize)));
     }
 
     void Slider::SetRange(float minValue, float maxValue)

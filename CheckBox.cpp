@@ -5,38 +5,44 @@ namespace FD2D
     CheckBox::CheckBox()
         : Wnd()
     {
-        // Center-align vertically (to match BoxRect()'s centering below) so the
-        // label tracks the checkbox glyph regardless of row height, instead of
-        // sitting flush against the top of a rect that's only as tall as the
-        // label itself (which left zero slack and let the descenders of e.g.
-        // "Sync Views"/"Sync Lighting" get clipped by D2D1_DRAW_TEXT_OPTIONS_CLIP).
-        m_label.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        // Center the label against the checkbox glyph regardless of row height.
+        // ContentAlignV::Center places the natural-size text rect; DWrite's
+        // paragraph alignment is left at NEAR so descenders aren't clipped by
+        // a taller assigned rect with CLIP enabled.
+        SetContentMargin(4.0f, 0.0f);
+        SetContentAlign(AlignH::Start, AlignV::Center);
     }
 
     CheckBox::CheckBox(const std::wstring& name)
         : Wnd(name)
     {
-        m_label.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        SetContentMargin(4.0f, 0.0f);
+        SetContentAlign(AlignH::Start, AlignV::Center);
     }
 
     Size CheckBox::Measure(Size available)
     {
-        // labelSize.h now comes from Text::EnsureNaturalSize()'s real DWrite
-        // glyph metrics (already padded by its own +1px rounding margin), so
-        // no extra hand-tuned slack is needed here.
         Size labelSize = m_label.Measure(available);
-        m_desired = { kBoxSize + kLabelGap + labelSize.w + 2.0f * m_margin,
-            (std::max)(kBoxSize, labelSize.h) + 2.0f * m_margin };
+        m_desired = {
+            kBoxSize + kLabelGap + labelSize.w + m_contentMargin.Horizontal() + 2.0f * m_margin,
+            (std::max)(kBoxSize, labelSize.h + m_contentMargin.Vertical()) + 2.0f * m_margin
+        };
         return m_desired;
     }
 
     void CheckBox::Arrange(Rect finalRect)
     {
         Wnd::Arrange(finalRect);
-        const auto& rect = LayoutRect();
-        D2D1_RECT_F labelRect = rect;
-        labelRect.left = rect.left + kBoxSize + kLabelGap;
-        m_label.SetRect(labelRect);
+
+        // Leading chrome: checkbox glyph + gap. Content margin/align apply to
+        // the remaining label area only.
+        Rect labelBounds = BoundsRect();
+        float leading = kBoxSize + kLabelGap;
+        labelBounds.x += leading;
+        labelBounds.w = (std::max)(0.0f, labelBounds.w - leading);
+
+        Size labelSize = m_label.Measure({ 0.0f, 0.0f });
+        m_label.SetRect(ToD2D(ContentRectFor(labelBounds, labelSize)));
     }
 
     void CheckBox::SetLabel(const std::wstring& text)

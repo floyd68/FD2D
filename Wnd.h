@@ -110,6 +110,21 @@ namespace FD2D
         void SetMargin(float margin) { m_margin = margin; }
         void SetPadding(float padding) { m_padding = padding; }
 
+        // Content layout for composite controls that embed Text (or similar)
+        // outside the child-Wnd tree. Separate from SetPadding, which only
+        // insets arranged child Wnds. Defaults are zero margin + Start/Start
+        // so existing absolute-rect controls stay unchanged until they opt in.
+        void SetContentMargin(float uniform);
+        void SetContentMargin(float horizontal, float vertical);
+        void SetContentMargin(const Thickness& margin);
+        const Thickness& ContentMargin() const { return m_contentMargin; }
+
+        void SetContentAlign(AlignH horizontal, AlignV vertical);
+        void SetContentAlignH(AlignH horizontal);
+        void SetContentAlignV(AlignV vertical);
+        AlignH ContentAlignH() const { return m_contentAlignH; }
+        AlignV ContentAlignV() const { return m_contentAlignV; }
+
         bool AddChild(const std::shared_ptr<Wnd>& child);
         bool RemoveChild(const std::wstring& childName);
         void ClearChildren();
@@ -127,7 +142,14 @@ namespace FD2D
         // Default implementation forwards to children.
         virtual void OnRenderD3D(ID3D11DeviceContext* context);
         virtual void OnRender(ID2D1RenderTarget* target);
+        // Second D2D pass after the full tree's OnRender. Used for popups
+        // (ComboBox dropdowns) that must paint above sibling controls without
+        // covering the whole window with a scrim.
+        virtual void OnRenderOverlay(ID2D1RenderTarget* target);
         virtual bool OnInputEvent(const InputEvent& event);
+        // True while this control has a popup that should steal mouse input
+        // ahead of later siblings (see RouteOverlayMouseInput).
+        virtual bool HasInputOverlay() const { return false; }
         virtual bool OnCommandEvent(const CommandEvent& event);
         virtual bool OnFileDrop(const std::wstring& path, const POINT& clientPt);
 
@@ -142,6 +164,16 @@ namespace FD2D
 
     protected:
         Backplate* BackplateRef() const;
+
+        // LayoutRect() as an FD2D::Rect (x/y/w/h).
+        Rect BoundsRect() const;
+        // Place content of the given intrinsic size inside `bounds` (or this
+        // control's LayoutRect) using the current content margin + alignment.
+        Rect ContentRectFor(const Size& contentSize) const;
+        Rect ContentRectFor(const Rect& bounds, const Size& contentSize) const;
+        void NotifyContentLayoutChanged();
+        // Depth-first: give open overlay controls first chance at mouse input.
+        bool RouteOverlayMouseInput(const InputEvent& event);
 
     protected:
         std::wstring m_name {};
@@ -158,6 +190,9 @@ namespace FD2D
         bool m_anchorBottom { false };
         float m_margin { 0.0f };
         float m_padding { 0.0f };
+        Thickness m_contentMargin {};
+        AlignH m_contentAlignH { AlignH::Start };
+        AlignV m_contentAlignV { AlignV::Start };
     };
 }
 

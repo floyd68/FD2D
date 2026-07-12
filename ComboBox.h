@@ -8,11 +8,9 @@
 
 namespace FD2D
 {
-    // Simple drop-down list. When open, the item list is drawn as an overlay
-    // directly below the box as part of this control's own OnRender pass, so for
-    // correct visual layering the ComboBox should be one of the last children
-    // added to its parent panel (painter's-algorithm z-order, no separate popup
-    // surface is created).
+    // Simple drop-down list. The closed box is drawn in OnRender; the open
+    // item list is drawn in OnRenderOverlay so it paints above sibling
+    // controls in the same panel without a fullscreen scrim over view panes.
     class ComboBox : public Wnd
     {
     public:
@@ -31,14 +29,23 @@ namespace FD2D
 
         void OnSelectionChanged(SelectionChangedHandler handler);
 
+        // Dropdown list panel fill (rgb + alpha). Alpha 1 = opaque, 0 = invisible.
+        // Default is a dark fill at 25% transparency (alpha 0.75).
+        void SetDropdownBackground(const D2D1_COLOR_F& color);
+        const D2D1_COLOR_F& DropdownBackground() const { return m_dropdownBackground; }
+
+        bool HasInputOverlay() const override;
         bool OnInputEvent(const InputEvent& event) override;
         void OnRender(ID2D1RenderTarget* target) override;
+        void OnRenderOverlay(ID2D1RenderTarget* target) override;
 
     private:
         bool HitTestBox(const POINT& pt) const;
+        bool HitTestDropdown(const POINT& pt) const;
         D2D1_RECT_F ItemRect(size_t index) const;
         D2D1_RECT_F DropdownRect() const;
         void Close();
+        void EnsureBrush(ID2D1RenderTarget* target);
 
         std::vector<std::wstring> m_items {};
         int m_selectedIndex { -1 };
@@ -48,6 +55,7 @@ namespace FD2D
 
         Text m_text {};
         SelectionChangedHandler m_changed {};
+        D2D1_COLOR_F m_dropdownBackground { 0.10f, 0.10f, 0.12f, 0.75f };
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brush {};
 

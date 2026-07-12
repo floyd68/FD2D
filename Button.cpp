@@ -5,19 +5,24 @@ namespace FD2D
     Button::Button()
         : Wnd()
     {
+        SetContentMargin(10.0f, 5.0f);
+        SetContentAlign(AlignH::Center, AlignV::Center);
     }
 
     Button::Button(const std::wstring& name)
         : Wnd(name)
     {
+        SetContentMargin(10.0f, 5.0f);
+        SetContentAlign(AlignH::Center, AlignV::Center);
     }
 
     Size Button::Measure(Size available)
     {
-        // Calculate button size based on label size
         Size labelSize = m_label.Measure(available);
-        float padding = 20.0f; // Left/right padding
-        m_desired = { labelSize.w + padding + 2 * m_margin, labelSize.h + 10.0f + 2 * m_margin };
+        m_desired = {
+            labelSize.w + m_contentMargin.Horizontal() + 2.0f * m_margin,
+            labelSize.h + m_contentMargin.Vertical() + 2.0f * m_margin
+        };
         return m_desired;
     }
 
@@ -29,16 +34,14 @@ namespace FD2D
     void Button::Arrange(Rect finalRect)
     {
         Wnd::Arrange(finalRect);
-        
-        // Place label at the center of the button
-        const auto& rect = LayoutRect();
-        D2D1_RECT_F labelRect = rect;
-        m_label.SetRect(labelRect);
+        Size labelSize = m_label.Measure({ 0.0f, 0.0f });
+        m_label.SetRect(ToD2D(ContentRectFor(labelSize)));
     }
 
     void Button::SetLabel(const std::wstring& text)
     {
         m_label.SetText(text);
+        NotifyContentLayoutChanged();
     }
 
     void Button::SetColors(const D2D1_COLOR_F& normal, const D2D1_COLOR_F& hot, const D2D1_COLOR_F& pressed)
@@ -161,4 +164,3 @@ namespace FD2D
             pt.y <= rect.bottom;
     }
 }
-
