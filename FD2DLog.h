@@ -2,31 +2,16 @@
 
 // FD2DLog.h - self-contained logging/timing macros for FD2D internals.
 //
-// FD2D previously included "../AppLog.h" (a FICture2-app-level, spdlog-backed
-// logger living at the FICture2 repo root) directly from Backplate.cpp,
-// Image.cpp. That made FD2D uncompilable unless it
-// was checked out as a subdirectory of the exact FICture2 repository layout
-// (needing "../AppLog.h" and "../external/spdlog/include" to exist one level
-// above FD2D) - a problem for any other project (e.g. nifskope's
-// NifLiteViewer) that wants FD2D as a standalone submodule.
+// Dependency-free: optional sink via SetSink(); with no sink installed every
+// FD2D_LOG_* call is a silent no-op. Format strings use C++20 std::format.
 //
-// This header replaces that with a fully dependency-free equivalent:
-//   - FD2D_TIMER_START / FD2D_ELAPSED_MS: plain std::chrono, used both for
-//     real stall-detection thresholds (e.g. "if (frameMs > 100)") and for
-//     the log lines below - unconditionally functional, no dependency.
-//   - FD2D_LOG_INFO/WARN/ERROR/TRACE/DEBUG, FD2D_LOG_STEP: forward through a
-//     tiny "{}"-placeholder formatter (no fmt/spdlog dependency) to an
-//     optional sink. With no sink installed, every call is a no-op at
-//     effectively zero cost - matching AppLog.h's own documented default
-//     behavior ("If Init is never called, every FIC2_LOG_* macro is a silent
-//     no-op").
-//
-// A host application that wants these routed into its own logger (e.g.
-// FICture2's spdlog-based AppLog/"fic2" logger) can call FD2D::Log::SetSink()
-// once at startup; see FICture2.cpp for an example.
+// A host application that wants these routed into its own logger can call
+// FD2D::Log::SetSink() once at startup.
+
 #include <chrono>
-#include <sstream>
+#include <format>
 #include <string>
+#include <utility>
 
 namespace FD2D
 {
@@ -44,38 +29,10 @@ namespace Log
     {
         void Dispatch(Level level, std::string message);
 
-        template <typename T>
-        void FormatArg(std::ostringstream& out, const T& value)
-        {
-            out << value;
-        }
-        inline void FormatArg(std::ostringstream& out, bool value)
-        {
-            out << (value ? "true" : "false");
-        }
-
-        // Minimal spdlog/fmt-style "{}"-placeholder formatter: substitutes
-        // each successive "{}" in fmt with the corresponding argument via
-        // operator<<. Deliberately does not support fmt's extended format
-        // specifiers (e.g. "{:.1f}") - callers that need those should
-        // pre-format the value (see Backplate.cpp's FPS summary log for an
-        // example) and pass the result as a plain string argument.
         template <typename... Args>
-        std::string Format(const char* fmt, const Args&... args)
+        std::string Format(std::format_string<Args...> fmt, Args&&... args)
         {
-            std::ostringstream out;
-            const char* p = fmt;
-            auto emitOne = [&](const auto& value)
-            {
-                while (*p != '\0' && !(p[0] == '{' && p[1] == '}'))
-                    out << *p++;
-                if (*p != '\0')
-                    p += 2; // skip "{}"
-                FormatArg(out, value);
-            };
-            (emitOne(args), ...);
-            out << p;
-            return out.str();
+            return std::format(fmt, std::forward<Args>(args)...);
         }
     }
 }
@@ -94,7 +51,7 @@ namespace Log
 #endif
 
 // ---------------------------------------------------------------------------
-// Startup timing helpers (identical semantics to AppLog.h's originals).
+// Startup timing helpers.
 // ---------------------------------------------------------------------------
 #define FD2D_TIMER_START(var) \
     auto var = std::chrono::steady_clock::now()

@@ -3,7 +3,6 @@
 #include "Util.h"
 #include "FD2DLog.h"
 #include <cmath>
-#include <cstdio>
 #include <dxgi1_3.h>
 #include <string>
 #include <algorithm>
@@ -237,26 +236,21 @@ namespace FD2D
 
     void Backplate::LogDeviceRemovedReason(HRESULT triggerHr, const char* where) const
     {
-        char triggerBuf[16];
-        std::snprintf(triggerBuf, sizeof(triggerBuf), "0x%08X", static_cast<unsigned>(triggerHr));
-
         if (m_d3dDevice)
         {
             const HRESULT reasonHr = m_d3dDevice->GetDeviceRemovedReason();
-            char reasonBuf[16];
-            std::snprintf(reasonBuf, sizeof(reasonBuf), "0x%08X", static_cast<unsigned>(reasonHr));
             FD2D_LOG_INFO(
-                "[Graphics] device lost at {}: hr={} GetDeviceRemovedReason={}",
+                "[Graphics] device lost at {}: hr=0x{:08X} GetDeviceRemovedReason=0x{:08X}",
                 where ? where : "?",
-                triggerBuf,
-                reasonBuf);
+                static_cast<unsigned>(triggerHr),
+                static_cast<unsigned>(reasonHr));
         }
         else
         {
             FD2D_LOG_INFO(
-                "[Graphics] device lost at {}: hr={} (no D3D device)",
+                "[Graphics] device lost at {}: hr=0x{:08X} (no D3D device)",
                 where ? where : "?",
-                triggerBuf);
+                static_cast<unsigned>(triggerHr));
         }
     }
 
@@ -1790,9 +1784,9 @@ namespace FD2D
                 }
                 else
                 {
-                    char hrBuf[16];
-                    std::snprintf(hrBuf, sizeof(hrBuf), "0x%08X", static_cast<unsigned>(hrResize));
-                    FD2D_LOG_INFO("[Graphics] ResizeBuffers(inSizeMove) failed hr={}", hrBuf);
+                    FD2D_LOG_INFO(
+                        "[Graphics] ResizeBuffers(inSizeMove) failed hr=0x{:08X}",
+                        static_cast<unsigned>(hrResize));
                 }
             }
 
@@ -1834,9 +1828,9 @@ namespace FD2D
             }
             else if (FAILED(hrResize))
             {
-                char hrBuf[16];
-                std::snprintf(hrBuf, sizeof(hrBuf), "0x%08X", static_cast<unsigned>(hrResize));
-                FD2D_LOG_INFO("[Graphics] ResizeBuffers failed hr={}", hrBuf);
+                FD2D_LOG_INFO(
+                    "[Graphics] ResizeBuffers failed hr=0x{:08X}",
+                    static_cast<unsigned>(hrResize));
             }
             else
             {
@@ -2383,9 +2377,9 @@ namespace FD2D
             }
             else if (FAILED(hrPresent))
             {
-                char hrBuf[16];
-                std::snprintf(hrBuf, sizeof(hrBuf), "0x%08X", static_cast<unsigned>(hrPresent));
-                FD2D_LOG_INFO("[Graphics] SwapChain::Present failed hr={}", hrBuf);
+                FD2D_LOG_INFO(
+                    "[Graphics] SwapChain::Present failed hr=0x{:08X}",
+                    static_cast<unsigned>(hrPresent));
             }
         }
         } // end else (D3D11 path)
@@ -2433,17 +2427,10 @@ namespace FD2D
                 const double avgMs = m_fpsWindowTotalMs / (std::max)(1, m_fpsWindowFrames);
                 const double fps = static_cast<double>(m_fpsWindowFrames) * 1000.0 /
                     static_cast<double>((std::max)(windowElapsedMs, 1ULL));
-                // FD2D_LOG_INFO's formatter only substitutes bare "{}" placeholders (no
-                // fmt-style ":.1f" precision specifiers - see FD2DLog.h), so pre-format the
-                // three floating point values to one decimal place here.
-                char fpsBuf[32], avgBuf[32], maxBuf[32];
-                std::snprintf(fpsBuf, sizeof(fpsBuf), "%.1f", fps);
-                std::snprintf(avgBuf, sizeof(avgBuf), "%.1f", avgMs);
-                std::snprintf(maxBuf, sizeof(maxBuf), "%.1f", m_fpsWindowMaxMs);
                 FD2D_LOG_INFO(
-                    "[FPS] {} fps  frames={} avg={}ms max={}ms  "
+                    "[FPS] {:.1f} fps  frames={} avg={:.1f}ms max={:.1f}ms  "
                     "trigger(tick={} invalidate={} paint={} other={})  asyncPending={}/{}",
-                    fpsBuf, m_fpsWindowFrames, avgBuf, maxBuf,
+                    fps, m_fpsWindowFrames, avgMs, m_fpsWindowMaxMs,
                     m_fpsWindowTickFrames, m_fpsWindowInvalidateFrames,
                     m_fpsWindowPaintFrames, m_fpsWindowOtherFrames,
                     m_fpsWindowAsyncPendingFrames, m_fpsWindowFrames);
