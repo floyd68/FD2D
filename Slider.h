@@ -27,6 +27,11 @@ namespace FD2D
         void SetShowValueText(bool show) { m_showValueText = show; }
         void SetValueFormatter(std::function<std::wstring(float)> formatter);
 
+        // A disabled slider ignores all input and renders dimmed; its value
+        // is unchanged (owners may still SetValue programmatically).
+        void SetEnabled(bool enabled);
+        bool IsEnabled() const { return m_enabled; }
+
         void OnValueChanged(ValueChangedHandler handler);
 
         bool OnInputEvent(const InputEvent& event) override;
@@ -49,6 +54,7 @@ namespace FD2D
         bool m_hovered { false };
         bool m_dragging { false };
         bool m_showValueText { true };
+        bool m_enabled { true };
 
         Text m_label {};
         std::function<std::wstring(float)> m_formatter {};

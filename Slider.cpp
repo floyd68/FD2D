@@ -79,6 +79,21 @@ namespace FD2D
         m_changed = std::move(handler);
     }
 
+    void Slider::SetEnabled(bool enabled)
+    {
+        if (m_enabled == enabled)
+        {
+            return;
+        }
+        m_enabled = enabled;
+        if (!enabled)
+        {
+            m_dragging = false;
+            m_hovered = false;
+        }
+        Invalidate();
+    }
+
     float Slider::RatioForValue(float v) const
     {
         float range = m_max - m_min;
@@ -139,6 +154,10 @@ namespace FD2D
 
     bool Slider::OnInputEvent(const InputEvent& event)
     {
+        if (!m_enabled)
+        {
+            return Wnd::OnInputEvent(event);
+        }
         switch (event.type)
         {
         case InputEventType::MouseMove:
@@ -250,19 +269,22 @@ namespace FD2D
         }
 
         D2D1_RECT_F track = TrackRect();
-        m_brush->SetColor(D2D1::ColorF(0.30f, 0.30f, 0.33f, 1.0f));
+        m_brush->SetColor(m_enabled ? D2D1::ColorF(0.30f, 0.30f, 0.33f, 1.0f)
+                                    : D2D1::ColorF(0.22f, 0.22f, 0.24f, 1.0f));
         target->FillRectangle(track, m_brush.Get());
 
         D2D1_RECT_F filled = track;
         filled.right = track.left + (track.right - track.left) * RatioForValue(m_value);
-        m_brush->SetColor(D2D1::ColorF(0.30f, 0.55f, 0.85f, 1.0f));
+        m_brush->SetColor(m_enabled ? D2D1::ColorF(0.30f, 0.55f, 0.85f, 1.0f)
+                                    : D2D1::ColorF(0.34f, 0.38f, 0.44f, 1.0f));
         target->FillRectangle(filled, m_brush.Get());
 
         D2D1_RECT_F thumb = ThumbRect();
         D2D1_ELLIPSE ellipse = D2D1::Ellipse(
             D2D1::Point2F((thumb.left + thumb.right) * 0.5f, (thumb.top + thumb.bottom) * 0.5f),
             kThumbRadius, kThumbRadius);
-        m_brush->SetColor(m_dragging ? D2D1::ColorF(D2D1::ColorF::White) :
+        m_brush->SetColor(!m_enabled ? D2D1::ColorF(0.45f, 0.45f, 0.48f, 1.0f) :
+            m_dragging ? D2D1::ColorF(D2D1::ColorF::White) :
             (m_hovered ? D2D1::ColorF(0.92f, 0.92f, 0.95f, 1.0f) : D2D1::ColorF(0.80f, 0.80f, 0.84f, 1.0f)));
         target->FillEllipse(ellipse, m_brush.Get());
         m_brush->SetColor(D2D1::ColorF(0.10f, 0.10f, 0.10f, 1.0f));
