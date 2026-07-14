@@ -22,6 +22,12 @@ namespace FD2D
         void SetChecked(bool checked, bool notify = false);
         bool Checked() const { return m_checked; }
 
+        // A disabled checkbox ignores all input and renders dimmed; its
+        // checked state is unchanged (owners may still SetChecked
+        // programmatically).
+        void SetEnabled(bool enabled);
+        bool IsEnabled() const { return m_enabled; }
+
         void OnCheckedChanged(CheckedChangedHandler handler);
 
         bool OnInputEvent(const InputEvent& event) override;
@@ -34,6 +40,7 @@ namespace FD2D
         bool m_checked { false };
         bool m_hovered { false };
         bool m_pressed { false };
+        bool m_enabled { true };
 
         Text m_label {};
         CheckedChangedHandler m_changed {};

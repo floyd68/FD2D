@@ -66,6 +66,21 @@ namespace FD2D
         m_changed = std::move(handler);
     }
 
+    void CheckBox::SetEnabled(bool enabled)
+    {
+        if (m_enabled == enabled)
+        {
+            return;
+        }
+        m_enabled = enabled;
+        if (!enabled)
+        {
+            m_pressed = false;
+            m_hovered = false;
+        }
+        Invalidate();
+    }
+
     D2D1_RECT_F CheckBox::BoxRect() const
     {
         const auto& rect = LayoutRect();
@@ -82,6 +97,10 @@ namespace FD2D
 
     bool CheckBox::OnInputEvent(const InputEvent& event)
     {
+        if (!m_enabled)
+        {
+            return Wnd::OnInputEvent(event);
+        }
         switch (event.type)
         {
         case InputEventType::MouseMove:
@@ -151,7 +170,8 @@ namespace FD2D
             (m_hovered ? D2D1::ColorF(0.28f, 0.28f, 0.30f, 1.0f) : D2D1::ColorF(0.18f, 0.18f, 0.20f, 1.0f)));
         target->FillRectangle(box, m_brush.Get());
 
-        m_brush->SetColor(D2D1::ColorF(D2D1::ColorF::White));
+        m_brush->SetColor(m_enabled ? D2D1::ColorF(D2D1::ColorF::White)
+                                    : D2D1::ColorF(0.45f, 0.45f, 0.48f, 1.0f));
         target->DrawRectangle(box, m_brush.Get(), 1.25f);
 
         if (m_checked)
@@ -160,7 +180,8 @@ namespace FD2D
             D2D1_POINT_2F p1 = D2D1::Point2F(box.left + pad, (box.top + box.bottom) * 0.5f);
             D2D1_POINT_2F p2 = D2D1::Point2F(box.left + kBoxSize * 0.42f, box.bottom - pad);
             D2D1_POINT_2F p3 = D2D1::Point2F(box.right - pad, box.top + pad);
-            m_brush->SetColor(D2D1::ColorF(0.35f, 0.75f, 0.35f, 1.0f));
+            m_brush->SetColor(m_enabled ? D2D1::ColorF(0.35f, 0.75f, 0.35f, 1.0f)
+                                        : D2D1::ColorF(0.38f, 0.50f, 0.38f, 1.0f));
             target->DrawLine(p1, p2, m_brush.Get(), 2.0f);
             target->DrawLine(p2, p3, m_brush.Get(), 2.0f);
         }
