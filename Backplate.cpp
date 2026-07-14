@@ -1071,7 +1071,11 @@ namespace FD2D
                     message == WM_SYSDEADCHAR);
             }
 
-            // Route keyboard input only to the focused Wnd (if any).
+            // Route keyboard input to the focused Wnd first (if any). A
+            // focused control that declines the key does NOT swallow it:
+            // fall through to the tree broadcast below so application-wide
+            // shortcuts keep working while e.g. a checkbox or button holds
+            // focus from the last click.
             if (!isMouseMessage &&
                 (inputType == InputEventType::KeyDown ||
                     inputType == InputEventType::KeyUp ||
@@ -1087,7 +1091,6 @@ namespace FD2D
                     result = 0;
                     return true;
                 }
-                return false;
             }
 
             if (inputEvent.hasPoint && inputType == InputEventType::MouseDown)
