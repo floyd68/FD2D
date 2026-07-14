@@ -630,10 +630,9 @@ namespace FD2D
             return false;
         }
 
-        const std::wstring& path = paths.front();
         for (auto& pair : m_children)
         {
-            if (pair.second && pair.second->OnFileDrop(path, ptClient))
+            if (pair.second && pair.second->OnFileDropPaths(paths, ptClient))
             {
                 return true;
             }

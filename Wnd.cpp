@@ -473,6 +473,11 @@ namespace FD2D
         return handled;
     }
 
+    bool Wnd::OnFileDropPaths(const std::vector<std::wstring>& paths, const POINT& clientPt)
+    {
+        return !paths.empty() && OnFileDrop(paths.front(), clientPt);
+    }
+
     bool Wnd::OnFileDrop(const std::wstring& path, const POINT& clientPt)
     {
         // Default behavior: hit-test children (topmost first) and forward.

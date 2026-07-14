@@ -172,6 +172,10 @@ namespace FD2D
         virtual bool HasInputOverlay() const { return false; }
         virtual bool OnCommandEvent(const CommandEvent& event);
         virtual bool OnFileDrop(const std::wstring& path, const POINT& clientPt);
+        // Multi-file drop. Default forwards the FIRST path to OnFileDrop
+        // (the historical single-path behavior); containers that can place
+        // several files at once override this instead.
+        virtual bool OnFileDropPaths(const std::vector<std::wstring>& paths, const POINT& clientPt);
 
         // File drag hover (OLE drag&drop). Default implementation hit-tests children (topmost first).
         // Return true if handled and visual state was updated.

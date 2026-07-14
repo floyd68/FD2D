@@ -205,13 +205,19 @@ namespace FD2D
 
         class DropTarget;
 
+    public:
+        // Opts this window into OLE file drag&drop: registers the drop
+        // target (needs the HWND, so call after window creation; the
+        // calling thread must have OLE initialized) and routes drags/drops
+        // to the child Wnd tree via OnFileDrag/OnFileDropPaths. Idempotent.
+        bool EnsureDropTargetRegistered();
+
     protected:
         virtual Wnd* FindTargetWnd(const POINT& ptClient);
         virtual bool HandleMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESULT& result);
         virtual bool HandleFileDropPaths(const std::vector<std::wstring>& paths, const POINT& ptClient);
 
         // OLE drag&drop (for live drag-hover visuals)
-        bool EnsureDropTargetRegistered();
         void UnregisterDropTarget();
         bool HandleFileDragOver(const std::wstring& path, const POINT& ptClient);
         void HandleFileDragLeave();
