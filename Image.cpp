@@ -445,7 +445,6 @@ namespace FD2D
 
         case GraphicsInvalidationReason::DeviceLost:
         case GraphicsInvalidationReason::RendererFallback:
-        case GraphicsInvalidationReason::Shutdown:
             m_bitmap.Reset();
             m_srv.Reset();
             m_srvWidth = 0;
@@ -453,6 +452,16 @@ namespace FD2D
             ResetCheckerBrushes();
             ResetD3DQuadResources();
             Invalidate();
+            break;
+
+        case GraphicsInvalidationReason::Shutdown:
+            // Teardown only - do not Invalidate/Render; the HWND may already be gone.
+            m_bitmap.Reset();
+            m_srv.Reset();
+            m_srvWidth = 0;
+            m_srvHeight = 0;
+            ResetCheckerBrushes();
+            ResetD3DQuadResources();
             break;
 
         case GraphicsInvalidationReason::Resize:

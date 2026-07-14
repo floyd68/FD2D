@@ -136,15 +136,12 @@ namespace FD2D
 
     Backplate::~Backplate()
     {
-        NotifyGraphicsInvalidated(GraphicsInvalidationReason::Shutdown);
+        // Drop the HWND first so any Invalidate/Render triggered by the
+        // Shutdown invalidation cascade cannot touch a destroyed window.
+        m_window = nullptr;
         DetachAsyncRedrawControl();
+        NotifyGraphicsInvalidated(GraphicsInvalidationReason::Shutdown);
         UnregisterDropTarget();
-
-        if (m_window != nullptr && m_placeAutosaveTimerId != 0)
-        {
-            KillTimer(m_window, m_placeAutosaveTimerId);
-            m_placeAutosaveTimerId = 0;
-        }
 
         if (m_asyncRedrawEvent)
         {
@@ -228,7 +225,7 @@ namespace FD2D
 
     void Backplate::ScheduleNextFrame()
     {
-        if (m_window != nullptr)
+        if (m_window != nullptr && IsWindow(m_window))
         {
             InvalidateRect(m_window, nullptr, FALSE);
         }
@@ -647,7 +644,7 @@ namespace FD2D
 
     void Backplate::RequestAsyncRedraw()
     {
-        if (!m_asyncRedrawEvent || !m_window)
+        if (!m_asyncRedrawEvent || !m_window || !IsWindow(m_window))
         {
             return;
         }
@@ -662,7 +659,7 @@ namespace FD2D
 
     void Backplate::ProcessAsyncRedraw()
     {
-        if (!m_window || !m_asyncRedrawEvent)
+        if (!m_window || !IsWindow(m_window) || !m_asyncRedrawEvent)
         {
             return;
         }
@@ -705,7 +702,7 @@ namespace FD2D
 
     void Backplate::ProcessAnimationTick(unsigned long long nowMs)
     {
-        if (!m_window)
+        if (!m_window || !IsWindow(m_window))
         {
             return;
         }
@@ -1001,7 +998,10 @@ namespace FD2D
             if (m_window != nullptr && m_placeAutosaveTimerId != 0)
             {
                 KillTimer(m_window, m_placeAutosaveTimerId);
+                m_placeAutosaveTimerId = 0;
             }
+            // HWND is about to become invalid; clear before any late Invalidate/Render.
+            m_window = nullptr;
             PostQuitMessage(0);
             result = 0;
             return true;
@@ -1958,6 +1958,11 @@ namespace FD2D
         if (m_isRendering)
         {
             m_renderRequested = true;
+            return;
+        }
+
+        if (!m_window || !IsWindow(m_window))
+        {
             return;
         }
 
