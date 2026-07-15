@@ -23,6 +23,13 @@ namespace FD2D
         m_order.push_back(child);
     }
 
+    void DockPanel::ClearDocks()
+    {
+        m_order.clear();
+        m_docks.clear();
+        ClearChildren();
+    }
+
     Size DockPanel::Measure(Size available)
     {
         // Measure children with remaining space; conservative return = available.
