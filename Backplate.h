@@ -131,6 +131,16 @@ namespace FD2D
         // Force layout recalculation on next render.
         void RequestLayout();
 
+        // Transient notification banner (e.g. "Path copied to clipboard"),
+        // drawn over the UI near the bottom of the window and auto-dismissed
+        // after a short delay. The Windows-native-feel confirmation for
+        // in-app actions like the path-label right-click copy.
+        void ShowToast(const std::wstring& text);
+
+        // Copies UTF-16 text to the clipboard (owned by this window). Returns
+        // false if the clipboard could not be opened.
+        bool CopyTextToClipboard(const std::wstring& text);
+
         // Update window title bar with renderer information
         virtual void UpdateTitleBarInfo();
 
@@ -198,6 +208,17 @@ namespace FD2D
         bool HandleDeviceLostHr(HRESULT hr, const char* where);
         void LogDeviceRemovedReason(HRESULT triggerHr, const char* where) const;
         void Layout();
+
+        // Hover-tooltip + toast support (see the .cpp). UpdateHoverTarget runs
+        // on mouse move to find the control under the cursor and (re)arm the
+        // dwell; AdvanceHoverToast advances the dwell/toast timers each frame;
+        // DrawHoverAndToast paints them over the finished UI.
+        Wnd* HitTestTopLevel(const POINT& pt);
+        void UpdateHoverTarget(const POINT& ptClient);
+        void ClearHoverTooltip();
+        void AdvanceHoverToast(unsigned long long nowMs);
+        void DrawHoverAndToast(ID2D1RenderTarget* target);
+
         void InvokeBeforeDestroyOnce();
         void SchedulePlacementAutosave();
         void FlushPlacementAutosave();
@@ -282,6 +303,23 @@ namespace FD2D
         bool m_dropTargetRegistered { false };
         Microsoft::WRL::ComPtr<IDropTarget> m_dropTarget {};
         std::wstring m_dragPath {};
+
+        // Hover tooltip state: the control under the cursor, its tooltip text,
+        // when the hover began, whether the dwell has elapsed (so it is drawn),
+        // and the anchor it was shown at. m_mouseTracking guards a single
+        // TrackMouseEvent registration for WM_MOUSELEAVE.
+        Wnd* m_hoverWnd { nullptr };
+        std::wstring m_hoverTip {};
+        POINT m_hoverPt { 0, 0 };
+        POINT m_tipAnchor { 0, 0 };
+        unsigned long long m_hoverSinceMs { 0 };
+        bool m_tipShown { false };
+        bool m_mouseTracking { false };
+        // Transient toast banner text + its expiry time (0 = none).
+        std::wstring m_toastText {};
+        unsigned long long m_toastExpireMs { 0 };
+        // Lazily created DWrite format for tooltip/toast text.
+        Microsoft::WRL::ComPtr<IDWriteTextFormat> m_tipFormat {};
 
         D2D1_COLOR_F m_clearColor { 0.09f, 0.09f, 0.10f, 1.0f };
         D2D1_SIZE_U m_renderSurfaceSize { 0, 0 };

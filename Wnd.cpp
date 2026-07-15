@@ -554,6 +554,29 @@ namespace FD2D
         return m_backplate != nullptr && m_backplate->FocusedWnd() == this;
     }
 
+    Wnd* Wnd::HitTestDeepest(const POINT& pt)
+    {
+        const D2D1_RECT_F& r = m_layoutRect;
+        const float x = static_cast<float>(pt.x);
+        const float y = static_cast<float>(pt.y);
+        if (x < r.left || x > r.right || y < r.top || y > r.bottom)
+        {
+            return nullptr;
+        }
+        // Reverse (topmost-first) so an overlapping later child wins.
+        for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
+        {
+            if (*it)
+            {
+                if (Wnd* hit = (*it)->HitTestDeepest(pt))
+                {
+                    return hit;
+                }
+            }
+        }
+        return this;
+    }
+
     Backplate* Wnd::BackplateRef() const
     {
         return m_backplate;

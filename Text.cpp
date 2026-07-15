@@ -108,6 +108,42 @@ namespace FD2D
         m_onClick = std::move(handler);
     }
 
+    bool Text::IsTruncated() const
+    {
+        // m_layoutWidth is the width the on-screen layout was built at (the
+        // control's rect); m_naturalSize.w is the text's intrinsic width. When
+        // the latter is larger the text is clipped/ellipsized. Guard on a
+        // valid, non-dirty natural size and a real layout width (both are set
+        // by the time a hover can occur).
+        if (m_text.empty() || m_naturalSizeDirty || m_layoutWidth <= 0.0f)
+        {
+            return false;
+        }
+        return m_naturalSize.w > m_layoutWidth + 0.5f;
+    }
+
+    std::wstring Text::TooltipText() const
+    {
+        // Explicit tooltip (pre-abbreviated labels): show it when it differs
+        // from what is displayed, so the hover reveals the un-abbreviated form.
+        if (!m_tooltipText.empty() && m_tooltipText != m_text)
+        {
+            return m_tooltipText;
+        }
+        // Otherwise, reveal the displayed text only when it is clipped.
+        return (m_tooltipOnTruncation && IsTruncated()) ? m_text : std::wstring();
+    }
+
+    bool Text::TryGetCopyText(std::wstring& out) const
+    {
+        if (!m_copyTextOnRightClick)
+        {
+            return false;
+        }
+        out = m_copyText.empty() ? m_text : m_copyText;
+        return !out.empty();
+    }
+
     void Text::EnsureFormat()
     {
         if (m_format)

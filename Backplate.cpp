@@ -3,6 +3,7 @@
 #include "Util.h"
 #include "FD2DLog.h"
 #include <cmath>
+#include <cstring>
 #include <dxgi1_3.h>
 #include <string>
 #include <algorithm>
@@ -706,6 +707,11 @@ namespace FD2D
             return;
         }
 
+        // Advance tooltip dwell / toast expiry first: it re-arms the animation
+        // while a tooltip is pending or a toast is showing, so these keep
+        // ticking even when nothing else animates.
+        AdvanceHoverToast(nowMs);
+
         if (!HasActiveAnimation(nowMs))
         {
             return;
@@ -759,6 +765,258 @@ namespace FD2D
     {
         UNREFERENCED_PARAMETER(ptClient);
         return nullptr;
+    }
+
+    namespace
+    {
+        constexpr unsigned long long kTooltipDwellMs = 500ULL;
+        constexpr unsigned long long kToastDurationMs = 1800ULL;
+    }
+
+    Wnd* Backplate::HitTestTopLevel(const POINT& pt)
+    {
+        // Top-level children are unordered; return the deepest hit found. For
+        // this app there is a single top-level Wnd, so ambiguity is moot.
+        for (auto& pair : m_children)
+        {
+            if (pair.second)
+            {
+                if (Wnd* hit = pair.second->HitTestDeepest(pt))
+                {
+                    return hit;
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    void Backplate::UpdateHoverTarget(const POINT& ptClient)
+    {
+        m_hoverPt = ptClient;
+        Wnd* hit = HitTestTopLevel(ptClient);
+        std::wstring tip = hit ? hit->TooltipText() : std::wstring();
+
+        // Same control + same tip: keep the running dwell (and any shown
+        // tooltip) so small jitters don't restart it.
+        if (hit == m_hoverWnd && tip == m_hoverTip)
+        {
+            return;
+        }
+
+        const bool wasShown = m_tipShown;
+        m_hoverWnd = hit;
+        m_hoverTip = std::move(tip);
+        m_hoverSinceMs = Util::NowMs();
+        m_tipShown = false;
+        if (!m_hoverTip.empty())
+        {
+            RequestAnimationFrame(); // drive the dwell timer via ProcessAnimationTick
+        }
+        else if (wasShown && m_window != nullptr)
+        {
+            InvalidateRect(m_window, nullptr, FALSE); // erase the tooltip that was showing
+        }
+    }
+
+    void Backplate::ClearHoverTooltip()
+    {
+        m_hoverWnd = nullptr;
+        m_hoverTip.clear();
+        m_hoverSinceMs = 0;
+        if (m_tipShown)
+        {
+            m_tipShown = false;
+            if (m_window != nullptr)
+            {
+                InvalidateRect(m_window, nullptr, FALSE);
+            }
+        }
+    }
+
+    void Backplate::ShowToast(const std::wstring& text)
+    {
+        m_toastText = text;
+        m_toastExpireMs = Util::NowMs() + kToastDurationMs;
+        RequestAnimationFrame();
+        if (m_window != nullptr)
+        {
+            InvalidateRect(m_window, nullptr, FALSE);
+        }
+    }
+
+    bool Backplate::CopyTextToClipboard(const std::wstring& text)
+    {
+        if (m_window == nullptr || !OpenClipboard(m_window))
+        {
+            return false;
+        }
+        bool ok = false;
+        if (EmptyClipboard())
+        {
+            const std::size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+            if (HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes))
+            {
+                if (void* dst = GlobalLock(h))
+                {
+                    std::memcpy(dst, text.c_str(), bytes);
+                    GlobalUnlock(h);
+                    ok = (SetClipboardData(CF_UNICODETEXT, h) != nullptr);
+                }
+                if (!ok)
+                {
+                    GlobalFree(h); // ownership only transfers to the clipboard on success
+                }
+            }
+        }
+        CloseClipboard();
+        return ok;
+    }
+
+    void Backplate::AdvanceHoverToast(unsigned long long nowMs)
+    {
+        bool needAnim = false;
+
+        // Tooltip dwell: once elapsed, flip m_tipShown so the next render (this
+        // tick's Render, since animation is active) paints it. Keep re-arming
+        // the animation until then.
+        if (m_hoverWnd != nullptr && !m_hoverTip.empty() && !m_tipShown)
+        {
+            if (nowMs - m_hoverSinceMs >= kTooltipDwellMs)
+            {
+                m_tipShown = true;
+                m_tipAnchor = m_hoverPt;
+            }
+            else
+            {
+                needAnim = true;
+            }
+        }
+
+        // Toast expiry: clear it (one more render this tick erases it).
+        if (!m_toastText.empty())
+        {
+            if (nowMs >= m_toastExpireMs)
+            {
+                m_toastText.clear();
+            }
+            else
+            {
+                needAnim = true;
+            }
+        }
+
+        if (needAnim)
+        {
+            RequestAnimationFrame();
+        }
+    }
+
+    void Backplate::DrawHoverAndToast(ID2D1RenderTarget* target)
+    {
+        if (target == nullptr)
+        {
+            return;
+        }
+        if ((!m_tipShown || m_hoverTip.empty()) && m_toastText.empty())
+        {
+            return;
+        }
+
+        IDWriteFactory* dwrite = Core::DWriteFactory();
+        if (dwrite == nullptr)
+        {
+            return;
+        }
+        if (!m_tipFormat)
+        {
+            (void)dwrite->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0f, L"", &m_tipFormat);
+            if (!m_tipFormat)
+            {
+                return;
+            }
+            (void)m_tipFormat->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        }
+
+        const float clientW = static_cast<float>(m_size.width);
+        const float clientH = static_cast<float>(m_size.height);
+        constexpr float padX = 9.0f;
+        constexpr float padY = 5.0f;
+
+        auto drawBox = [&](const std::wstring& text, float boxLeft, float boxTop,
+                           bool clampBelowRightOfCursor, const D2D1_COLOR_F& bg,
+                           const D2D1_COLOR_F& border, const D2D1_COLOR_F& fg)
+        {
+            Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
+            if (FAILED(dwrite->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()),
+                m_tipFormat.Get(), 100000.0f, 100000.0f, &layout)) || !layout)
+            {
+                return;
+            }
+            DWRITE_TEXT_METRICS m {};
+            if (FAILED(layout->GetMetrics(&m)))
+            {
+                return;
+            }
+            const float boxW = m.width + padX * 2.0f;
+            const float boxH = m.height + padY * 2.0f;
+            if (clampBelowRightOfCursor)
+            {
+                // Keep the whole box on-screen: nudge left/up when it would
+                // overflow the right/bottom edge.
+                if (boxLeft + boxW > clientW - 2.0f) boxLeft = clientW - 2.0f - boxW;
+                if (boxTop + boxH > clientH - 2.0f) boxTop = m_tipAnchor.y - 8.0f - boxH;
+            }
+            if (boxLeft < 2.0f) boxLeft = 2.0f;
+            if (boxTop < 2.0f) boxTop = 2.0f;
+
+            const D2D1_ROUNDED_RECT rr {
+                D2D1::RectF(boxLeft, boxTop, boxLeft + boxW, boxTop + boxH), 4.0f, 4.0f };
+            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
+            if (SUCCEEDED(target->CreateSolidColorBrush(bg, &brush)))
+            {
+                target->FillRoundedRectangle(rr, brush.Get());
+            }
+            if (SUCCEEDED(target->CreateSolidColorBrush(border, &brush)))
+            {
+                target->DrawRoundedRectangle(rr, brush.Get(), 1.0f);
+            }
+            if (SUCCEEDED(target->CreateSolidColorBrush(fg, &brush)))
+            {
+                target->DrawTextLayout(D2D1::Point2F(boxLeft + padX, boxTop + padY),
+                    layout.Get(), brush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            }
+        };
+
+        if (m_tipShown && !m_hoverTip.empty())
+        {
+            drawBox(m_hoverTip, static_cast<float>(m_tipAnchor.x) + 12.0f,
+                    static_cast<float>(m_tipAnchor.y) + 20.0f, true,
+                    D2D1::ColorF(0.12f, 0.12f, 0.14f, 0.97f),
+                    D2D1::ColorF(0.42f, 0.44f, 0.50f, 1.0f),
+                    D2D1::ColorF(0.92f, 0.92f, 0.95f, 1.0f));
+        }
+        if (!m_toastText.empty())
+        {
+            // Centered near the bottom of the window.
+            Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
+            if (SUCCEEDED(dwrite->CreateTextLayout(m_toastText.c_str(),
+                static_cast<UINT32>(m_toastText.size()), m_tipFormat.Get(),
+                100000.0f, 100000.0f, &layout)) && layout)
+            {
+                DWRITE_TEXT_METRICS m {};
+                if (SUCCEEDED(layout->GetMetrics(&m)))
+                {
+                    const float boxW = m.width + padX * 2.0f;
+                    const float left = (clientW - boxW) * 0.5f;
+                    const float top = clientH - (m.height + padY * 2.0f) - 24.0f;
+                    drawBox(m_toastText, left, top, false,
+                            D2D1::ColorF(0.16f, 0.34f, 0.58f, 0.97f),
+                            D2D1::ColorF(0.30f, 0.55f, 0.85f, 1.0f),
+                            D2D1::ColorF(0.97f, 0.98f, 1.0f, 1.0f));
+                }
+            }
+        }
     }
 
     LRESULT CALLBACK Backplate::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -1046,6 +1304,30 @@ namespace FD2D
                 inputEvent.hasPoint = true;
             }
 
+            // Hover-tooltip + toast bookkeeping, independent of the child
+            // input routing below. A move re-arms the dwell over the control
+            // under the cursor; a leave/press/scroll dismisses any tooltip.
+            if (inputType == InputEventType::MouseMove && inputEvent.hasPoint)
+            {
+                if (!m_mouseTracking && m_window != nullptr)
+                {
+                    TRACKMOUSEEVENT tme { sizeof(TRACKMOUSEEVENT), TME_LEAVE, m_window, 0 };
+                    m_mouseTracking = (TrackMouseEvent(&tme) != FALSE);
+                }
+                UpdateHoverTarget(inputEvent.point);
+            }
+            else if (inputType == InputEventType::MouseLeave)
+            {
+                m_mouseTracking = false;
+                ClearHoverTooltip();
+            }
+            else if (inputType == InputEventType::MouseDown ||
+                     inputType == InputEventType::MouseWheel ||
+                     inputType == InputEventType::MouseHWheel)
+            {
+                ClearHoverTooltip();
+            }
+
             if (message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL)
             {
                 inputEvent.wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
@@ -1098,6 +1380,28 @@ namespace FD2D
                 if (target != nullptr)
                 {
                     target->RequestFocus();
+                }
+            }
+
+            // Right-click on a control that opts into TryGetCopyText (path
+            // labels) copies its text + shows a confirmation toast, ahead of
+            // the broadcast that would otherwise open a context menu.
+            if (inputEvent.hasPoint &&
+                inputType == InputEventType::MouseUp &&
+                inputEvent.button == MouseButton::Right)
+            {
+                if (Wnd* hit = HitTestTopLevel(inputEvent.point))
+                {
+                    std::wstring copyText;
+                    if (hit->TryGetCopyText(copyText) && !copyText.empty())
+                    {
+                        if (CopyTextToClipboard(copyText))
+                        {
+                            ShowToast(L"Path copied to clipboard");
+                        }
+                        result = 0;
+                        return true;
+                    }
                 }
             }
 
@@ -2113,6 +2417,7 @@ namespace FD2D
                     pair.second->OnRenderOverlay(renderTarget);
                 }
             }
+            DrawHoverAndToast(renderTarget);
 
             HRESULT hr = renderTarget->EndDraw();
             if (hr == D2DERR_RECREATE_TARGET)
@@ -2311,6 +2616,7 @@ namespace FD2D
                 pair.second->OnRenderOverlay(m_d2dContext.Get());
             }
         }
+        DrawHoverAndToast(m_d2dContext.Get());
 
         const auto t_endDraw = std::chrono::steady_clock::now();
         HRESULT hr = m_d2dContext->EndDraw();

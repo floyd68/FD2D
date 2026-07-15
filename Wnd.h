@@ -186,6 +186,22 @@ namespace FD2D
         void RequestFocus();
         bool HasFocus() const;
 
+        // Tooltip / context-copy hooks (driven by Backplate's hover tracker,
+        // not the layout tree). A control returns non-empty TooltipText() when
+        // it currently wants a hover tooltip (e.g. a Text whose path is
+        // truncated returns the full path); TryGetCopyText() fills `out` with
+        // the string a right-click should copy to the clipboard. Both default
+        // to "no".
+        virtual std::wstring TooltipText() const { return {}; }
+        virtual bool TryGetCopyText(std::wstring& out) const { (void)out; return false; }
+
+        // Deepest descendant (this control or a child, children in reverse /
+        // topmost-first order) whose LayoutRect contains `pt`; nullptr when
+        // `pt` is outside this control. Used by Backplate to find the control
+        // under the cursor for hover tooltips and right-click copy, which the
+        // normal input broadcast does not surface for deep children.
+        Wnd* HitTestDeepest(const POINT& pt);
+
     protected:
         Backplate* BackplateRef() const;
 
