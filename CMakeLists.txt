@@ -8,6 +8,7 @@ target_sources(FD2D PRIVATE
     ComboBox.cpp
     Core.cpp
     DockPanel.cpp
+    DynamicPanel.cpp
     FD2DLog.cpp
     GridPanel.cpp
     Image.cpp

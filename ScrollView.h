@@ -19,6 +19,12 @@ namespace FD2D
         void SetHorizontalScrollEnabled(bool enabled);
         bool HorizontalScrollEnabled() const { return m_enableHScroll; }
 
+        // Draw (and let the user drag) a thin scrollbar on any enabled axis whose
+        // content overflows the viewport. Off by default so existing wheel-only
+        // ScrollViews are unchanged; opt in for a visible, draggable bar.
+        void SetScrollBarsVisible(bool visible);
+        bool ScrollBarsVisible() const { return m_showScrollBars; }
+
         void SetVerticalScrollEnabled(bool enabled);
         bool VerticalScrollEnabled() const { return m_enableVScroll; }
 
@@ -52,6 +58,11 @@ namespace FD2D
     private:
         void ClampScroll();
         bool IsPointInViewport(int x, int y) const;
+        // Scrollbar geometry (client coords). Returns false when that axis has
+        // no overflow (so no bar is drawn/hit-tested). outThumb is the draggable
+        // handle inside outTrack.
+        bool HScrollBarRects(D2D1_RECT_F& outTrack, D2D1_RECT_F& outThumb) const;
+        bool VScrollBarRects(D2D1_RECT_F& outTrack, D2D1_RECT_F& outThumb) const;
         void ClampTargetScroll();
         void SetTargetScrollX(float x);
         void SetTargetScrollY(float y);
@@ -67,6 +78,12 @@ namespace FD2D
         bool m_forwardCapture { false };
         bool m_enableHScroll { true };
         bool m_enableVScroll { true };
+        bool m_showScrollBars { false };
+        // Scrollbar drag: 0 = horizontal thumb, 1 = vertical thumb, -1 = none.
+        int m_barDragAxis { -1 };
+        float m_barDragMouse { 0.0f };  // cursor pos on the drag axis at grab
+        float m_barDragScroll { 0.0f }; // scroll offset at grab
+        bool m_barHover { false };
         unsigned long long m_lastSmoothAnimMs { 0 };
         unsigned int m_smoothTimeMs { 110 }; // smaller = snappier
 
