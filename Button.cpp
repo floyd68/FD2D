@@ -144,11 +144,15 @@ namespace FD2D
             fillColor = m_colorHot;
         }
 
+        // Flat, rounded surface with a subtle hairline border that lifts to the
+        // accent blue on hover (replaces the old hard white 1.5px outline).
+        D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(LayoutRect(), 4.0f, 4.0f);
         m_brush->SetColor(fillColor);
-        target->FillRectangle(LayoutRect(), m_brush.Get());
+        target->FillRoundedRectangle(rr, m_brush.Get());
 
-        m_brush->SetColor(D2D1::ColorF(D2D1::ColorF::White));
-        target->DrawRectangle(LayoutRect(), m_brush.Get(), 1.5f);
+        m_brush->SetColor(m_hovered ? D2D1::ColorF(0.26f, 0.55f, 0.96f, 0.90f)
+                                    : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.16f));
+        target->DrawRoundedRectangle(rr, m_brush.Get(), 1.0f);
 
         m_label.OnRender(target);
 

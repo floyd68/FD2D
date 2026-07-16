@@ -165,25 +165,38 @@ namespace FD2D
             target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &m_brush);
         }
 
+        // Modern flat look: rounded box, accent-filled when checked (with a
+        // white tick), a subtle border otherwise that tints to the accent on
+        // hover. Accent is the shared UI blue used across the controls.
+        const D2D1_COLOR_F accent = m_enabled ? D2D1::ColorF(0.26f, 0.55f, 0.96f, 1.0f)
+                                              : D2D1::ColorF(0.34f, 0.40f, 0.50f, 1.0f);
         D2D1_RECT_F box = BoxRect();
-        m_brush->SetColor(m_pressed ? D2D1::ColorF(0.22f, 0.22f, 0.24f, 1.0f) :
-            (m_hovered ? D2D1::ColorF(0.28f, 0.28f, 0.30f, 1.0f) : D2D1::ColorF(0.18f, 0.18f, 0.20f, 1.0f)));
-        target->FillRectangle(box, m_brush.Get());
-
-        m_brush->SetColor(m_enabled ? D2D1::ColorF(D2D1::ColorF::White)
-                                    : D2D1::ColorF(0.45f, 0.45f, 0.48f, 1.0f));
-        target->DrawRectangle(box, m_brush.Get(), 1.25f);
+        D2D1_ROUNDED_RECT rbox = D2D1::RoundedRect(box, 3.0f, 3.0f);
 
         if (m_checked)
         {
+            m_brush->SetColor(m_pressed ? D2D1::ColorF(0.20f, 0.46f, 0.84f, 1.0f)
+                                        : (m_hovered ? D2D1::ColorF(0.34f, 0.62f, 1.0f, 1.0f) : accent));
+            target->FillRoundedRectangle(rbox, m_brush.Get());
+
             float pad = 3.5f;
             D2D1_POINT_2F p1 = D2D1::Point2F(box.left + pad, (box.top + box.bottom) * 0.5f);
             D2D1_POINT_2F p2 = D2D1::Point2F(box.left + kBoxSize * 0.42f, box.bottom - pad);
             D2D1_POINT_2F p3 = D2D1::Point2F(box.right - pad, box.top + pad);
-            m_brush->SetColor(m_enabled ? D2D1::ColorF(0.35f, 0.75f, 0.35f, 1.0f)
-                                        : D2D1::ColorF(0.38f, 0.50f, 0.38f, 1.0f));
+            m_brush->SetColor(m_enabled ? D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f)
+                                        : D2D1::ColorF(0.82f, 0.86f, 0.92f, 1.0f));
             target->DrawLine(p1, p2, m_brush.Get(), 2.0f);
             target->DrawLine(p2, p3, m_brush.Get(), 2.0f);
+        }
+        else
+        {
+            m_brush->SetColor(m_pressed ? D2D1::ColorF(0.24f, 0.25f, 0.28f, 1.0f) :
+                (m_hovered ? D2D1::ColorF(0.25f, 0.27f, 0.31f, 1.0f) : D2D1::ColorF(0.17f, 0.18f, 0.20f, 1.0f)));
+            target->FillRoundedRectangle(rbox, m_brush.Get());
+
+            m_brush->SetColor((m_hovered && m_enabled) ? accent :
+                (m_enabled ? D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.34f) : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.14f)));
+            target->DrawRoundedRectangle(rbox, m_brush.Get(), 1.25f);
         }
 
         m_label.OnRender(target);

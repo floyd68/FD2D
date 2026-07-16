@@ -268,26 +268,38 @@ namespace FD2D
             m_label.OnRender(target);
         }
 
+        // Rounded pill track with an accent-blue filled portion, and a light
+        // thumb that gains a soft accent halo while hovered/dragged (Material
+        // slider feel).
+        const D2D1_COLOR_F accent = m_enabled ? D2D1::ColorF(0.26f, 0.55f, 0.96f, 1.0f)
+                                              : D2D1::ColorF(0.34f, 0.38f, 0.44f, 1.0f);
         D2D1_RECT_F track = TrackRect();
-        m_brush->SetColor(m_enabled ? D2D1::ColorF(0.30f, 0.30f, 0.33f, 1.0f)
-                                    : D2D1::ColorF(0.22f, 0.22f, 0.24f, 1.0f));
-        target->FillRectangle(track, m_brush.Get());
+        const float trackR = (track.bottom - track.top) * 0.5f;
+        m_brush->SetColor(m_enabled ? D2D1::ColorF(0.28f, 0.29f, 0.33f, 1.0f)
+                                    : D2D1::ColorF(0.20f, 0.20f, 0.22f, 1.0f));
+        target->FillRoundedRectangle(D2D1::RoundedRect(track, trackR, trackR), m_brush.Get());
 
         D2D1_RECT_F filled = track;
         filled.right = track.left + (track.right - track.left) * RatioForValue(m_value);
-        m_brush->SetColor(m_enabled ? D2D1::ColorF(0.30f, 0.55f, 0.85f, 1.0f)
-                                    : D2D1::ColorF(0.34f, 0.38f, 0.44f, 1.0f));
-        target->FillRectangle(filled, m_brush.Get());
+        if (filled.right - filled.left >= 2.0f * trackR)
+        {
+            m_brush->SetColor(accent);
+            target->FillRoundedRectangle(D2D1::RoundedRect(filled, trackR, trackR), m_brush.Get());
+        }
 
         D2D1_RECT_F thumb = ThumbRect();
-        D2D1_ELLIPSE ellipse = D2D1::Ellipse(
-            D2D1::Point2F((thumb.left + thumb.right) * 0.5f, (thumb.top + thumb.bottom) * 0.5f),
-            kThumbRadius, kThumbRadius);
+        D2D1_POINT_2F thumbC = D2D1::Point2F((thumb.left + thumb.right) * 0.5f, (thumb.top + thumb.bottom) * 0.5f);
+        if (m_enabled && (m_hovered || m_dragging))
+        {
+            m_brush->SetColor(D2D1::ColorF(0.26f, 0.55f, 0.96f, m_dragging ? 0.28f : 0.18f));
+            target->FillEllipse(D2D1::Ellipse(thumbC, kThumbRadius + 5.0f, kThumbRadius + 5.0f), m_brush.Get());
+        }
+        D2D1_ELLIPSE ellipse = D2D1::Ellipse(thumbC, kThumbRadius, kThumbRadius);
         m_brush->SetColor(!m_enabled ? D2D1::ColorF(0.45f, 0.45f, 0.48f, 1.0f) :
             m_dragging ? D2D1::ColorF(D2D1::ColorF::White) :
-            (m_hovered ? D2D1::ColorF(0.92f, 0.92f, 0.95f, 1.0f) : D2D1::ColorF(0.80f, 0.80f, 0.84f, 1.0f)));
+            (m_hovered ? D2D1::ColorF(0.94f, 0.95f, 0.98f, 1.0f) : D2D1::ColorF(0.86f, 0.87f, 0.90f, 1.0f)));
         target->FillEllipse(ellipse, m_brush.Get());
-        m_brush->SetColor(D2D1::ColorF(0.10f, 0.10f, 0.10f, 1.0f));
+        m_brush->SetColor(D2D1::ColorF(0.10f, 0.11f, 0.13f, 0.85f));
         target->DrawEllipse(ellipse, m_brush.Get(), 1.0f);
 
         Wnd::OnRender(target);

@@ -252,16 +252,19 @@ namespace FD2D
 
         EnsureBrush(target);
 
+        const bool active = m_hoveredBox || m_open;
         const auto& rect = LayoutRect();
-        m_brush->SetColor(m_hoveredBox || m_open ? D2D1::ColorF(0.26f, 0.26f, 0.29f, 1.0f) : D2D1::ColorF(0.18f, 0.18f, 0.20f, 1.0f));
-        target->FillRectangle(rect, m_brush.Get());
-        m_brush->SetColor(D2D1::ColorF(D2D1::ColorF::White));
-        target->DrawRectangle(rect, m_brush.Get(), 1.0f);
+        D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(rect, 4.0f, 4.0f);
+        m_brush->SetColor(active ? D2D1::ColorF(0.25f, 0.27f, 0.31f, 1.0f) : D2D1::ColorF(0.17f, 0.18f, 0.20f, 1.0f));
+        target->FillRoundedRectangle(rr, m_brush.Get());
+        m_brush->SetColor(active ? D2D1::ColorF(0.26f, 0.55f, 0.96f, 0.90f) : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.16f));
+        target->DrawRoundedRectangle(rr, m_brush.Get(), 1.0f);
 
         m_text.SetText(SelectedText());
         m_text.OnRender(target);
 
-        // Arrow glyph.
+        // Chevron glyph, accent-tinted while active.
+        m_brush->SetColor(active ? D2D1::ColorF(0.62f, 0.80f, 1.0f, 1.0f) : D2D1::ColorF(0.82f, 0.82f, 0.86f, 1.0f));
         float ax = rect.right - kArrowWidth * 0.5f;
         float ay = (rect.top + rect.bottom) * 0.5f;
         D2D1_POINT_2F p1 = D2D1::Point2F(ax - 4.0f, ay - 2.0f);
@@ -286,10 +289,11 @@ namespace FD2D
         EnsureBrush(target);
 
         D2D1_RECT_F dd = DropdownRect();
-        m_brush->SetColor(m_dropdownBackground);
-        target->FillRectangle(dd, m_brush.Get());
-        m_brush->SetColor(D2D1::ColorF(D2D1::ColorF::White));
-        target->DrawRectangle(dd, m_brush.Get(), 1.0f);
+        D2D1_ROUNDED_RECT ddr = D2D1::RoundedRect(dd, 4.0f, 4.0f);
+        m_brush->SetColor(D2D1::ColorF(0.13f, 0.14f, 0.16f, 0.98f));
+        target->FillRoundedRectangle(ddr, m_brush.Get());
+        m_brush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.16f));
+        target->DrawRoundedRectangle(ddr, m_brush.Get(), 1.0f);
 
         int visible = (std::min)(kMaxVisibleItems, static_cast<int>(m_items.size()));
         for (int i = 0; i < visible; ++i)
@@ -297,8 +301,10 @@ namespace FD2D
             D2D1_RECT_F itemRect = ItemRect(static_cast<size_t>(i));
             if (i == m_hoveredItem)
             {
-                m_brush->SetColor(D2D1::ColorF(0.30f, 0.55f, 0.85f, 0.6f));
-                target->FillRectangle(itemRect, m_brush.Get());
+                D2D1_RECT_F hi = itemRect;
+                hi.left += 2.0f; hi.right -= 2.0f;
+                m_brush->SetColor(D2D1::ColorF(0.26f, 0.55f, 0.96f, 0.55f));
+                target->FillRoundedRectangle(D2D1::RoundedRect(hi, 3.0f, 3.0f), m_brush.Get());
             }
 
             Text itemText;

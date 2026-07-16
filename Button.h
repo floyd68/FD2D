@@ -27,9 +27,12 @@ namespace FD2D
     private:
         bool HitTest(const POINT& pt) const;
 
-        D2D1_COLOR_F m_colorNormal { D2D1::ColorF(D2D1::ColorF::DimGray) };
-        D2D1_COLOR_F m_colorHot { D2D1::ColorF(D2D1::ColorF::DarkSlateGray) };
-        D2D1_COLOR_F m_colorPressed { D2D1::ColorF(D2D1::ColorF::SlateGray) };
+        // Flat dark-surface defaults (a raised control that lightens on hover
+        // and takes a slight accent-blue lean when pressed). Apps can still
+        // override via SetColors.
+        D2D1_COLOR_F m_colorNormal { D2D1::ColorF(0.20f, 0.21f, 0.24f, 1.0f) };
+        D2D1_COLOR_F m_colorHot { D2D1::ColorF(0.27f, 0.29f, 0.34f, 1.0f) };
+        D2D1_COLOR_F m_colorPressed { D2D1::ColorF(0.22f, 0.33f, 0.50f, 1.0f) };
 
         bool m_hovered { false };
         bool m_pressed { false };
