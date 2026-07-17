@@ -71,12 +71,20 @@ namespace FD2D
                 "struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };"
                 "VSOut main(VSIn i){ VSOut o; o.pos=float4(i.pos,0,1); o.uv=i.uv; return o; }";
 
+            // channelMode isolates one channel as grayscale: 0=RGBA (normal),
+            // 1=R, 2=G, 3=B, 4=A. Alpha is forced opaque for isolated channels
+            // so e.g. a packed _rmaos channel is readable on its own.
             const char* psSrc =
                 "Texture2D tex0 : register(t0);"
                 "SamplerState samp0 : register(s0);"
-                "cbuffer Cb : register(b0) { float opacity; float3 pad; };"
+                "cbuffer Cb : register(b0) { float opacity; float channelMode; float2 pad; };"
                 "float4 main(float4 pos:SV_Position, float2 uv:TEXCOORD0) : SV_Target {"
                 "  float4 c = tex0.Sample(samp0, uv);"
+                "  int m = (int)channelMode;"
+                "  if (m == 1) c = float4(c.rrr, 1);"
+                "  else if (m == 2) c = float4(c.ggg, 1);"
+                "  else if (m == 3) c = float4(c.bbb, 1);"
+                "  else if (m == 4) c = float4(c.aaa, 1);"
                 "  c.a *= opacity;"
                 "  c.rgb *= opacity;"
                 "  return c;"
@@ -390,7 +398,8 @@ namespace FD2D
             m_drawState.panY != next.panY ||
             m_drawState.rotationQuarters != next.rotationQuarters ||
             m_drawState.highQualitySampling != next.highQualitySampling ||
-            m_drawState.alphaCheckerboardEnabled != next.alphaCheckerboardEnabled;
+            m_drawState.alphaCheckerboardEnabled != next.alphaCheckerboardEnabled ||
+            m_drawState.channelMode != next.channelMode;
 
         m_drawState = next;
         if (changed)
@@ -679,7 +688,8 @@ namespace FD2D
             float opacity,
             float uMax,
             float vMax,
-            ID3D11SamplerState* samplerOverride)
+            ID3D11SamplerState* samplerOverride,
+            float channelMode = 0.0f)
         {
             if (!srv || opacity <= 0.0f)
             {
@@ -750,7 +760,7 @@ namespace FD2D
                 {
                     float* p = reinterpret_cast<float*>(mappedCb.pData);
                     p[0] = opacity;
-                    p[1] = 0.0f;
+                    p[1] = channelMode;
                     p[2] = 0.0f;
                     p[3] = 0.0f;
                     context->Unmap(g_quad.cb.Get(), 0);
@@ -783,7 +793,8 @@ namespace FD2D
                 g_quad.samplerWrap.Get());
         }
 
-        drawSrvRect(m_srv.Get(), dest, 1.0f, 1.0f, 1.0f, nullptr);
+        drawSrvRect(m_srv.Get(), dest, 1.0f, 1.0f, 1.0f, nullptr,
+                    static_cast<float>(m_drawState.channelMode));
 
         if (prevScissorCount > 0 && !prevScissors.empty())
         {

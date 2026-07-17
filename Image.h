@@ -23,6 +23,10 @@ namespace FD2D
             int rotationQuarters { 0 }; // 0/1/2/3
             bool highQualitySampling { true };
             bool alphaCheckerboardEnabled { false };
+            // Channel isolation for the D3D (texture SRV) path: 0=RGBA (normal),
+            // 1=R, 2=G, 3=B, 4=A - shown as grayscale. Ignored on the D2D
+            // (bitmap) path.
+            int channelMode { 0 };
         };
 
         Image();
