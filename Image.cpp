@@ -73,11 +73,14 @@ namespace FD2D
 
             // channelMode isolates one channel as grayscale: 0=RGBA (normal),
             // 1=R, 2=G, 3=B, 4=A. Alpha is forced opaque for isolated channels
-            // so e.g. a packed _rmaos channel is readable on its own. For a
-            // premultiplied source, a color-channel isolation first unpremultiplies
-            // (rgb/a) so it reads the straight channel value - matching straight-
-            // alpha BCn. Mode 0 (normal display) is left untouched so the image
-            // still composites correctly (premultiplied) over the checkerboard.
+            // so e.g. a packed _rmaos channel is readable on its own. The blend
+            // state is premultiplied (ONE / INV_SRC_ALPHA), so:
+            //  - normal display (mode 0): a STRAIGHT source is premultiplied here
+            //    (rgb*=a) so it composites correctly over the checkerboard; a
+            //    premultiplied source is emitted as-is.
+            //  - color isolation (1/2/3): a PREMULTIPLIED source is unpremultiplied
+            //    (rgb/a) so it reads the straight channel value, matching straight
+            //    BCn. `premultiplied` (1/0) comes from the source's real alpha mode.
             const char* psSrc =
                 "Texture2D tex0 : register(t0);"
                 "SamplerState samp0 : register(s0);"
@@ -85,9 +88,12 @@ namespace FD2D
                 "float4 main(float4 pos:SV_Position, float2 uv:TEXCOORD0) : SV_Target {"
                 "  float4 c = tex0.Sample(samp0, uv);"
                 "  int m = (int)channelMode;"
-                "  if (m >= 1 && m <= 3) {"
+                "  if (m == 0) {"
+                "    if (premultiplied < 0.5) c.rgb *= c.a;"   // straight -> premultiply for the premultiplied blend
+                "  }"
+                "  else if (m >= 1 && m <= 3) {"
                 "    float3 rgb = c.rgb;"
-                "    if (premultiplied > 0.5 && c.a > 0.0) rgb /= c.a;"
+                "    if (premultiplied > 0.5 && c.a > 0.0) rgb /= c.a;"  // premultiplied -> straight channel value
                 "    if (m == 1) c = float4(rgb.rrr, 1);"
                 "    else if (m == 2) c = float4(rgb.ggg, 1);"
                 "    else c = float4(rgb.bbb, 1);"
