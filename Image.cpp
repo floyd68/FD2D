@@ -1,6 +1,7 @@
 ﻿#include "Image.h"
 #include "Backplate.h"
 #include "Core.h"
+#include "ShaderResourcePresenter.h"
 #include "Util.h"
 #include <algorithm>
 #include <cmath>
@@ -27,6 +28,8 @@ namespace FD2D
             uint64_t deviceGeneration { 0 };
             Microsoft::WRL::ComPtr<ID3D11VertexShader> vs {};
             Microsoft::WRL::ComPtr<ID3D11PixelShader> ps {};
+            Microsoft::WRL::ComPtr<ID3D11PixelShader> psArray {};
+            Microsoft::WRL::ComPtr<ID3D11PixelShader> psCube {};
             Microsoft::WRL::ComPtr<ID3D11InputLayout> inputLayout {};
             Microsoft::WRL::ComPtr<ID3D11Buffer> vb {};
             Microsoft::WRL::ComPtr<ID3D11Buffer> cb {};
@@ -54,7 +57,8 @@ namespace FD2D
 
             const bool sameDevice = (g_quad.device.Get() == device);
             const bool sameGen = (g_quad.deviceGeneration == deviceGeneration);
-            if (g_quad.vs && g_quad.ps && g_quad.inputLayout && g_quad.vb &&
+            if (g_quad.vs && g_quad.ps && g_quad.psArray && g_quad.psCube &&
+                g_quad.inputLayout && g_quad.vb &&
                 g_quad.samplerPoint && g_quad.samplerLinear && g_quad.samplerWrap &&
                 g_quad.blend && g_quad.rsScissor && g_quad.cb && g_quad.checkerSrv &&
                 sameDevice && sameGen)
@@ -114,8 +118,42 @@ namespace FD2D
                 "  return c;"
                 "}";
 
+            const char* psArraySrc =
+                "Texture2DArray tex0 : register(t0);"
+                "SamplerState samp0 : register(s0);"
+                "cbuffer Cb : register(b0) { float opacity; float channelMode; float enc; float use; };"
+                "float4 Present(float4 c) {"
+                "  int m = (int)channelMode; bool premul = enc > 0.5;"
+                "  if (m == 0) { if (use > 0.5) { if (premul && c.a > 0.0) c.rgb /= c.a; c.a = 1.0; }"
+                "    else if (!premul) c.rgb *= c.a; }"
+                "  else if (m >= 1 && m <= 3) { float3 rgb=c.rgb; if (premul && c.a>0.0) rgb/=c.a;"
+                "    if (m==1) c=float4(rgb.rrr,1); else if (m==2) c=float4(rgb.ggg,1); else c=float4(rgb.bbb,1); }"
+                "  else if (m==4) c=float4(c.aaa,1);"
+                "  c.a*=opacity; c.rgb*=opacity; return c;"
+                "}"
+                "float4 main(float4 pos:SV_Position,float2 uv:TEXCOORD0):SV_Target"
+                "{ return Present(tex0.Sample(samp0,float3(uv,0))); }";
+
+            const char* psCubeSrc =
+                "TextureCube tex0 : register(t0);"
+                "SamplerState samp0 : register(s0);"
+                "cbuffer Cb : register(b0) { float opacity; float channelMode; float enc; float use; };"
+                "float4 Present(float4 c) {"
+                "  int m = (int)channelMode; bool premul = enc > 0.5;"
+                "  if (m == 0) { if (use > 0.5) { if (premul && c.a > 0.0) c.rgb /= c.a; c.a = 1.0; }"
+                "    else if (!premul) c.rgb *= c.a; }"
+                "  else if (m >= 1 && m <= 3) { float3 rgb=c.rgb; if (premul && c.a>0.0) rgb/=c.a;"
+                "    if (m==1) c=float4(rgb.rrr,1); else if (m==2) c=float4(rgb.ggg,1); else c=float4(rgb.bbb,1); }"
+                "  else if (m==4) c=float4(c.aaa,1);"
+                "  c.a*=opacity; c.rgb*=opacity; return c;"
+                "}"
+                "float4 main(float4 pos:SV_Position,float2 uv:TEXCOORD0):SV_Target"
+                "{ float3 dir=float3(1,1-2*uv.y,2*uv.x-1); return Present(tex0.Sample(samp0,dir)); }";
+
             Microsoft::WRL::ComPtr<ID3DBlob> vsBlob;
             Microsoft::WRL::ComPtr<ID3DBlob> psBlob;
+            Microsoft::WRL::ComPtr<ID3DBlob> psArrayBlob;
+            Microsoft::WRL::ComPtr<ID3DBlob> psCubeBlob;
             Microsoft::WRL::ComPtr<ID3DBlob> err;
 
             HRESULT hr = D3DCompile(vsSrc, strlen(vsSrc), nullptr, nullptr, nullptr, "main", "vs_4_0", 0, 0, &vsBlob, &err);
@@ -128,6 +166,16 @@ namespace FD2D
             {
                 return hr;
             }
+            hr = D3DCompile(psArraySrc, strlen(psArraySrc), nullptr, nullptr, nullptr, "main", "ps_4_0", 0, 0, &psArrayBlob, &err);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
+            hr = D3DCompile(psCubeSrc, strlen(psCubeSrc), nullptr, nullptr, nullptr, "main", "ps_4_0", 0, 0, &psCubeBlob, &err);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
 
             hr = device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &g_quad.vs);
             if (FAILED(hr))
@@ -135,6 +183,18 @@ namespace FD2D
                 return hr;
             }
             hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &g_quad.ps);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
+            hr = device->CreatePixelShader(
+                psArrayBlob->GetBufferPointer(), psArrayBlob->GetBufferSize(), nullptr, &g_quad.psArray);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
+            hr = device->CreatePixelShader(
+                psCubeBlob->GetBufferPointer(), psCubeBlob->GetBufferSize(), nullptr, &g_quad.psCube);
             if (FAILED(hr))
             {
                 return hr;
@@ -294,7 +354,8 @@ namespace FD2D
             D3D11_SHADER_RESOURCE_VIEW_DESC svd {};
             srv->GetDesc(&svd);
             if (svd.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D &&
-                svd.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2DARRAY)
+                svd.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2DARRAY &&
+                svd.ViewDimension != D3D11_SRV_DIMENSION_TEXTURECUBE)
             {
                 return false;
             }
@@ -320,9 +381,13 @@ namespace FD2D
             {
                 mip = svd.Texture2D.MostDetailedMip;
             }
-            else
+            else if (svd.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2DARRAY)
             {
                 mip = svd.Texture2DArray.MostDetailedMip;
+            }
+            else if (svd.ViewDimension == D3D11_SRV_DIMENSION_TEXTURECUBE)
+            {
+                mip = svd.TextureCube.MostDetailedMip;
             }
 
             outW = (std::max)(1u, td.Width >> mip);
@@ -334,6 +399,330 @@ namespace FD2D
         {
             return ((q % 4) + 4) % 4;
         }
+    }
+
+    bool TryGetShaderResourceTexelSize(
+        ID3D11ShaderResourceView* srv,
+        UINT& width,
+        UINT& height)
+    {
+        return TryDiscoverSrvTexelSize(srv, width, height);
+    }
+
+    void ResetShaderResourcePresenter()
+    {
+        ResetD3DQuadResources();
+    }
+
+    HRESULT DrawShaderResource(
+        ID3D11DeviceContext* context,
+        Backplate& backplate,
+        ID3D11ShaderResourceView* srv,
+        const ShaderResourceDraw& draw)
+    {
+        if (!context || !srv || draw.contentWidth == 0 || draw.contentHeight == 0)
+        {
+            return E_INVALIDARG;
+        }
+
+        ID3D11Device* device = backplate.D3DDevice();
+        if (!device)
+        {
+            return E_NOINTERFACE;
+        }
+
+        const uint64_t deviceGeneration = backplate.GetGraphicsGeneration().device;
+        HRESULT hr = EnsureD3DQuadResources(device, deviceGeneration);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        const D2D1_SIZE_U logicalCs = backplate.ClientSize();
+        D2D1_SIZE_U cs = backplate.RenderSurfaceSize();
+        if (cs.width == 0 || cs.height == 0)
+        {
+            cs = logicalCs;
+        }
+        if (cs.width == 0 || cs.height == 0 || logicalCs.width == 0 || logicalCs.height == 0)
+        {
+            return E_FAIL;
+        }
+
+        const D2D1_SIZE_F logicalToRender = backplate.LogicalToRenderScale();
+        D2D1_RECT_F layout
+        {
+            draw.layout.left * logicalToRender.width,
+            draw.layout.top * logicalToRender.height,
+            draw.layout.right * logicalToRender.width,
+            draw.layout.bottom * logicalToRender.height
+        };
+        if (layout.right <= layout.left || layout.bottom <= layout.top)
+        {
+            return E_INVALIDARG;
+        }
+
+        D3D11_RECT scissor
+        {
+            static_cast<LONG>(std::floor(layout.left)),
+            static_cast<LONG>(std::floor(layout.top)),
+            static_cast<LONG>(std::ceil(layout.right)),
+            static_cast<LONG>(std::ceil(layout.bottom))
+        };
+        scissor.left = (std::max)(0L, (std::min)(scissor.left, static_cast<LONG>(cs.width)));
+        scissor.top = (std::max)(0L, (std::min)(scissor.top, static_cast<LONG>(cs.height)));
+        scissor.right = (std::max)(0L, (std::min)(scissor.right, static_cast<LONG>(cs.width)));
+        scissor.bottom = (std::max)(0L, (std::min)(scissor.bottom, static_cast<LONG>(cs.height)));
+        if (scissor.left >= scissor.right || scissor.top >= scissor.bottom)
+        {
+            return S_FALSE;
+        }
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc {};
+        srv->GetDesc(&srvDesc);
+        ID3D11PixelShader* shader = nullptr;
+        switch (srvDesc.ViewDimension)
+        {
+        case D3D11_SRV_DIMENSION_TEXTURE2D:
+            shader = g_quad.ps.Get();
+            break;
+
+        case D3D11_SRV_DIMENSION_TEXTURE2DARRAY:
+            shader = g_quad.psArray.Get();
+            break;
+
+        case D3D11_SRV_DIMENSION_TEXTURECUBE:
+            shader = g_quad.psCube.Get();
+            break;
+
+        default:
+            return E_INVALIDARG;
+        }
+
+        Microsoft::WRL::ComPtr<ID3D11RasterizerState> prevRs;
+        context->RSGetState(&prevRs);
+        UINT prevScissorCount = 0;
+        context->RSGetScissorRects(&prevScissorCount, nullptr);
+        std::vector<D3D11_RECT> prevScissors(prevScissorCount);
+        if (prevScissorCount > 0)
+        {
+            context->RSGetScissorRects(&prevScissorCount, prevScissors.data());
+        }
+
+        Microsoft::WRL::ComPtr<ID3D11InputLayout> prevInputLayout;
+        context->IAGetInputLayout(&prevInputLayout);
+        Microsoft::WRL::ComPtr<ID3D11Buffer> prevVertexBuffer;
+        UINT prevVertexStride = 0;
+        UINT prevVertexOffset = 0;
+        context->IAGetVertexBuffers(
+            0,
+            1,
+            prevVertexBuffer.GetAddressOf(),
+            &prevVertexStride,
+            &prevVertexOffset);
+        D3D11_PRIMITIVE_TOPOLOGY prevTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+        context->IAGetPrimitiveTopology(&prevTopology);
+
+        Microsoft::WRL::ComPtr<ID3D11VertexShader> prevVs;
+        context->VSGetShader(&prevVs, nullptr, nullptr);
+        Microsoft::WRL::ComPtr<ID3D11PixelShader> prevPs;
+        context->PSGetShader(&prevPs, nullptr, nullptr);
+        Microsoft::WRL::ComPtr<ID3D11SamplerState> prevSampler;
+        context->PSGetSamplers(0, 1, prevSampler.GetAddressOf());
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> prevSrv;
+        context->PSGetShaderResources(0, 1, prevSrv.GetAddressOf());
+        Microsoft::WRL::ComPtr<ID3D11Buffer> prevConstantBuffer;
+        context->PSGetConstantBuffers(0, 1, prevConstantBuffer.GetAddressOf());
+
+        Microsoft::WRL::ComPtr<ID3D11BlendState> prevBlendState;
+        float prevBlendFactor[4] {};
+        UINT prevSampleMask = 0;
+        context->OMGetBlendState(&prevBlendState, prevBlendFactor, &prevSampleMask);
+
+        const auto restoreState = [&]()
+        {
+            context->IASetInputLayout(prevInputLayout.Get());
+            ID3D11Buffer* vertexBuffer = prevVertexBuffer.Get();
+            context->IASetVertexBuffers(
+                0,
+                1,
+                &vertexBuffer,
+                &prevVertexStride,
+                &prevVertexOffset);
+            context->IASetPrimitiveTopology(prevTopology);
+            context->VSSetShader(prevVs.Get(), nullptr, 0);
+            context->PSSetShader(prevPs.Get(), nullptr, 0);
+
+            ID3D11SamplerState* samplerState = prevSampler.Get();
+            context->PSSetSamplers(0, 1, &samplerState);
+            ID3D11ShaderResourceView* shaderResource = prevSrv.Get();
+            context->PSSetShaderResources(0, 1, &shaderResource);
+            ID3D11Buffer* constantBuffer = prevConstantBuffer.Get();
+            context->PSSetConstantBuffers(0, 1, &constantBuffer);
+
+            context->OMSetBlendState(prevBlendState.Get(), prevBlendFactor, prevSampleMask);
+            context->RSSetScissorRects(
+                prevScissorCount,
+                prevScissorCount > 0 ? prevScissors.data() : nullptr);
+            context->RSSetState(prevRs.Get());
+        };
+
+        context->RSSetState(g_quad.rsScissor.Get());
+        context->RSSetScissorRects(1, &scissor);
+
+        const auto toNdcX = [cs](float x)
+        {
+            return (x / static_cast<float>(cs.width)) * 2.0f - 1.0f;
+        };
+        const auto toNdcY = [cs](float y)
+        {
+            return 1.0f - (y / static_cast<float>(cs.height)) * 2.0f;
+        };
+
+        const auto drawRect = [&](
+            ID3D11ShaderResourceView* source,
+            const D2D1_RECT_F& rectPx,
+            float uMax,
+            float vMax,
+            ID3D11SamplerState* sampler,
+            ID3D11PixelShader* shader,
+            float channelMode,
+            float encoding,
+            float usage) -> HRESULT
+        {
+            const D2D1_RECT_F zoomed = Util::ApplyZoomPanToRect(
+                rectPx,
+                draw.zoomScale,
+                draw.panX * logicalToRender.width,
+                draw.panY * logicalToRender.height);
+            const float cx = (layout.left + layout.right) * 0.5f;
+            const float cy = (layout.top + layout.bottom) * 0.5f;
+            const int q = NormalizeRotationQuarters(draw.rotationQuarters);
+            const auto rotate = [cx, cy, q](float x, float y, float& outX, float& outY)
+            {
+                const float dx = x - cx;
+                const float dy = y - cy;
+                switch (q)
+                {
+                case 1:
+                    outX = cx - dy;
+                    outY = cy + dx;
+                    break;
+
+                case 2:
+                    outX = cx - dx;
+                    outY = cy - dy;
+                    break;
+
+                case 3:
+                    outX = cx + dy;
+                    outY = cy - dx;
+                    break;
+
+                default:
+                    outX = x;
+                    outY = y;
+                    break;
+                }
+            };
+
+            float tlx, tly, trx, try_, blx, bly, brx, bry;
+            rotate(zoomed.left, zoomed.top, tlx, tly);
+            rotate(zoomed.right, zoomed.top, trx, try_);
+            rotate(zoomed.left, zoomed.bottom, blx, bly);
+            rotate(zoomed.right, zoomed.bottom, brx, bry);
+
+            D3D11_MAPPED_SUBRESOURCE mapped {};
+            HRESULT mapHr = context->Map(g_quad.vb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+            if (FAILED(mapHr))
+            {
+                return mapHr;
+            }
+            auto* vertices = reinterpret_cast<QuadVertex*>(mapped.pData);
+            vertices[0] = { toNdcX(tlx), toNdcY(tly), 0.0f, 0.0f };
+            vertices[1] = { toNdcX(trx), toNdcY(try_), uMax, 0.0f };
+            vertices[2] = { toNdcX(blx), toNdcY(bly), 0.0f, vMax };
+            vertices[3] = { toNdcX(brx), toNdcY(bry), uMax, vMax };
+            context->Unmap(g_quad.vb.Get(), 0);
+
+            UINT stride = sizeof(QuadVertex);
+            UINT offset = 0;
+            context->IASetInputLayout(g_quad.inputLayout.Get());
+            context->IASetVertexBuffers(0, 1, g_quad.vb.GetAddressOf(), &stride, &offset);
+            context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+            context->VSSetShader(g_quad.vs.Get(), nullptr, 0);
+            context->PSSetShader(shader, nullptr, 0);
+            context->PSSetSamplers(0, 1, &sampler);
+            context->PSSetShaderResources(0, 1, &source);
+
+            float blendFactor[4] = {};
+            context->OMSetBlendState(g_quad.blend.Get(), blendFactor, 0xFFFFFFFF);
+
+            D3D11_MAPPED_SUBRESOURCE mappedCb {};
+            mapHr = context->Map(g_quad.cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedCb);
+            if (FAILED(mapHr))
+            {
+                return mapHr;
+            }
+            float* constants = reinterpret_cast<float*>(mappedCb.pData);
+            constants[0] = 1.0f;
+            constants[1] = channelMode;
+            constants[2] = encoding;
+            constants[3] = usage;
+            context->Unmap(g_quad.cb.Get(), 0);
+
+            ID3D11Buffer* cb = g_quad.cb.Get();
+            context->PSSetConstantBuffers(0, 1, &cb);
+            context->Draw(4, 0);
+
+            ID3D11ShaderResourceView* nullSrv = nullptr;
+            context->PSSetShaderResources(0, 1, &nullSrv);
+            return S_OK;
+        };
+
+        const D2D1_RECT_F dest = Util::ComputeAspectFitRect(
+            layout,
+            D2D1::SizeF(
+                static_cast<float>(draw.contentWidth),
+                static_cast<float>(draw.contentHeight)),
+            NormalizeRotationQuarters(draw.rotationQuarters));
+
+        HRESULT drawHr = S_OK;
+        if (draw.alphaCheckerboardEnabled)
+        {
+            const float width = (std::max)(1.0f, dest.right - dest.left);
+            const float height = (std::max)(1.0f, dest.bottom - dest.top);
+            drawHr = drawRect(
+                g_quad.checkerSrv.Get(),
+                dest,
+                width / 64.0f,
+                height / 64.0f,
+                g_quad.samplerWrap.Get(),
+                g_quad.ps.Get(),
+                0.0f,
+                0.0f,
+                0.0f);
+        }
+
+        ID3D11SamplerState* sampler = draw.highQualitySampling
+            ? g_quad.samplerLinear.Get()
+            : g_quad.samplerPoint.Get();
+        if (SUCCEEDED(drawHr))
+        {
+            drawHr = drawRect(
+                srv,
+                dest,
+                1.0f,
+                1.0f,
+                sampler,
+                shader,
+                static_cast<float>(draw.channelMode),
+                static_cast<float>(draw.sourceAlphaEncoding),
+                static_cast<float>(draw.sourceAlphaUsage));
+        }
+
+        restoreState();
+        return drawHr;
     }
 
     Image::Image()
@@ -623,220 +1012,23 @@ namespace FD2D
 
     void Image::OnRenderD3D(ID3D11DeviceContext* context)
     {
-        if (!context || !m_backplate || !m_srv || m_srvWidth == 0 || m_srvHeight == 0)
+        if (context && m_backplate && m_srv && m_srvWidth > 0 && m_srvHeight > 0)
         {
-            Wnd::OnRenderD3D(context);
-            return;
+            ShaderResourceDraw draw;
+            draw.layout = LayoutRect();
+            draw.contentWidth = m_srvWidth;
+            draw.contentHeight = m_srvHeight;
+            draw.zoomScale = m_drawState.zoomScale;
+            draw.panX = m_drawState.panX;
+            draw.panY = m_drawState.panY;
+            draw.rotationQuarters = m_drawState.rotationQuarters;
+            draw.highQualitySampling = m_drawState.highQualitySampling;
+            draw.alphaCheckerboardEnabled = m_drawState.alphaCheckerboardEnabled;
+            draw.channelMode = m_drawState.channelMode;
+            draw.sourceAlphaEncoding = m_drawState.sourceAlphaEncoding;
+            draw.sourceAlphaUsage = m_drawState.sourceAlphaUsage;
+            (void)DrawShaderResource(context, *m_backplate, m_srv.Get(), draw);
         }
-
-        ID3D11Device* device = m_backplate->D3DDevice();
-        if (!device)
-        {
-            Wnd::OnRenderD3D(context);
-            return;
-        }
-
-        const uint64_t deviceGeneration = m_backplate->GetGraphicsGeneration().device;
-        if (FAILED(EnsureD3DQuadResources(device, deviceGeneration)))
-        {
-            Wnd::OnRenderD3D(context);
-            return;
-        }
-
-        const D2D1_SIZE_U logicalCs = m_backplate->ClientSize();
-        D2D1_SIZE_U cs = m_backplate->RenderSurfaceSize();
-        if (cs.width == 0 || cs.height == 0)
-        {
-            cs = logicalCs;
-        }
-        if (cs.width == 0 || cs.height == 0 || logicalCs.width == 0 || logicalCs.height == 0)
-        {
-            Wnd::OnRenderD3D(context);
-            return;
-        }
-
-        const D2D1_SIZE_F logicalToRender = m_backplate->LogicalToRenderScale();
-        const D2D1_RECT_F rawLayout = LayoutRect();
-        D2D1_RECT_F layout
-        {
-            rawLayout.left * logicalToRender.width,
-            rawLayout.top * logicalToRender.height,
-            rawLayout.right * logicalToRender.width,
-            rawLayout.bottom * logicalToRender.height
-        };
-        const float layoutW = layout.right - layout.left;
-        const float layoutH = layout.bottom - layout.top;
-        if (!(layoutW > 0.0f && layoutH > 0.0f))
-        {
-            Wnd::OnRenderD3D(context);
-            return;
-        }
-
-        D3D11_RECT scissor {};
-        scissor.left = static_cast<LONG>(std::floor(layout.left));
-        scissor.top = static_cast<LONG>(std::floor(layout.top));
-        scissor.right = static_cast<LONG>(std::ceil(layout.right));
-        scissor.bottom = static_cast<LONG>(std::ceil(layout.bottom));
-        scissor.left = (std::max)(0L, (std::min)(scissor.left, static_cast<LONG>(cs.width)));
-        scissor.top = (std::max)(0L, (std::min)(scissor.top, static_cast<LONG>(cs.height)));
-        scissor.right = (std::max)(0L, (std::min)(scissor.right, static_cast<LONG>(cs.width)));
-        scissor.bottom = (std::max)(0L, (std::min)(scissor.bottom, static_cast<LONG>(cs.height)));
-        if (scissor.left >= scissor.right || scissor.top >= scissor.bottom)
-        {
-            Wnd::OnRenderD3D(context);
-            return;
-        }
-
-        Microsoft::WRL::ComPtr<ID3D11RasterizerState> prevRs {};
-        context->RSGetState(&prevRs);
-
-        UINT prevScissorCount = 0;
-        context->RSGetScissorRects(&prevScissorCount, nullptr);
-        std::vector<D3D11_RECT> prevScissors;
-        if (prevScissorCount > 0)
-        {
-            prevScissors.resize(prevScissorCount);
-            context->RSGetScissorRects(&prevScissorCount, prevScissors.data());
-        }
-
-        if (g_quad.rsScissor)
-        {
-            context->RSSetState(g_quad.rsScissor.Get());
-        }
-        context->RSSetScissorRects(1, &scissor);
-
-        const auto toNdcX = [cs](float x) { return (x / static_cast<float>(cs.width)) * 2.0f - 1.0f; };
-        const auto toNdcY = [cs](float y) { return 1.0f - (y / static_cast<float>(cs.height)) * 2.0f; };
-
-        const auto drawSrvRect = [&](
-            ID3D11ShaderResourceView* srv,
-            const D2D1_RECT_F& rectPx,
-            float opacity,
-            float uMax,
-            float vMax,
-            ID3D11SamplerState* samplerOverride,
-            float channelMode = 0.0f,
-            float enc = 0.0f,
-            float use = 0.0f)
-        {
-            if (!srv || opacity <= 0.0f)
-            {
-                return;
-            }
-
-            const D2D1_RECT_F zoomedRect = Util::ApplyZoomPanToRect(
-                rectPx,
-                m_drawState.zoomScale,
-                m_drawState.panX * logicalToRender.width,
-                m_drawState.panY * logicalToRender.height);
-
-            const float cxPx = (layout.left + layout.right) * 0.5f;
-            const float cyPx = (layout.top + layout.bottom) * 0.5f;
-            const int q = m_drawState.rotationQuarters;
-
-            const auto rotPt = [cxPx, cyPx, q](float px, float py, float& rx, float& ry)
-            {
-                const float dx = px - cxPx;
-                const float dy = py - cyPx;
-                switch (q)
-                {
-                case 1: rx = cxPx - dy; ry = cyPx + dx; break;
-                case 2: rx = cxPx - dx; ry = cyPx - dy; break;
-                case 3: rx = cxPx + dy; ry = cyPx - dx; break;
-                default: rx = px;       ry = py;        break;
-                }
-            };
-
-            float tlx, tly, trx, trry, blx, bly, brx, bry;
-            rotPt(zoomedRect.left,  zoomedRect.top,    tlx, tly);
-            rotPt(zoomedRect.right, zoomedRect.top,    trx, trry);
-            rotPt(zoomedRect.left,  zoomedRect.bottom, blx, bly);
-            rotPt(zoomedRect.right, zoomedRect.bottom, brx, bry);
-
-            D3D11_MAPPED_SUBRESOURCE mapped {};
-            if (SUCCEEDED(context->Map(g_quad.vb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
-            {
-                auto* v = reinterpret_cast<QuadVertex*>(mapped.pData);
-                v[0] = { toNdcX(tlx), toNdcY(tly),  0.0f, 0.0f };
-                v[1] = { toNdcX(trx), toNdcY(trry), uMax, 0.0f };
-                v[2] = { toNdcX(blx), toNdcY(bly),  0.0f, vMax };
-                v[3] = { toNdcX(brx), toNdcY(bry),  uMax, vMax };
-                context->Unmap(g_quad.vb.Get(), 0);
-            }
-
-            UINT stride = sizeof(QuadVertex);
-            UINT offset = 0;
-            context->IASetInputLayout(g_quad.inputLayout.Get());
-            context->IASetVertexBuffers(0, 1, g_quad.vb.GetAddressOf(), &stride, &offset);
-            context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-            context->VSSetShader(g_quad.vs.Get(), nullptr, 0);
-            context->PSSetShader(g_quad.ps.Get(), nullptr, 0);
-
-            ID3D11SamplerState* samp = samplerOverride
-                ? samplerOverride
-                : (m_drawState.highQualitySampling ? g_quad.samplerLinear.Get() : g_quad.samplerPoint.Get());
-            context->PSSetSamplers(0, 1, &samp);
-            context->PSSetShaderResources(0, 1, &srv);
-
-            float blendFactor[4] = { 0, 0, 0, 0 };
-            context->OMSetBlendState(g_quad.blend.Get(), blendFactor, 0xFFFFFFFF);
-
-            if (g_quad.cb)
-            {
-                D3D11_MAPPED_SUBRESOURCE mappedCb {};
-                if (SUCCEEDED(context->Map(g_quad.cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedCb)))
-                {
-                    float* p = reinterpret_cast<float*>(mappedCb.pData);
-                    p[0] = opacity;
-                    p[1] = channelMode;
-                    p[2] = enc;
-                    p[3] = use;
-                    context->Unmap(g_quad.cb.Get(), 0);
-                }
-                ID3D11Buffer* cbp = g_quad.cb.Get();
-                context->PSSetConstantBuffers(0, 1, &cbp);
-            }
-
-            context->Draw(4, 0);
-
-            ID3D11ShaderResourceView* nullSrv[1] = { nullptr };
-            context->PSSetShaderResources(0, 1, nullSrv);
-        };
-
-        const D2D1_RECT_F dest = Util::ComputeAspectFitRect(
-            layout,
-            D2D1::SizeF(static_cast<float>(m_srvWidth), static_cast<float>(m_srvHeight)),
-            m_drawState.rotationQuarters);
-
-        if (m_drawState.alphaCheckerboardEnabled && g_quad.checkerSrv && g_quad.samplerWrap)
-        {
-            const float w = (std::max)(1.0f, dest.right - dest.left);
-            const float h = (std::max)(1.0f, dest.bottom - dest.top);
-            drawSrvRect(
-                g_quad.checkerSrv.Get(),
-                dest,
-                1.0f,
-                w / 64.0f,
-                h / 64.0f,
-                g_quad.samplerWrap.Get());
-        }
-
-        drawSrvRect(m_srv.Get(), dest, 1.0f, 1.0f, 1.0f, nullptr,
-                    static_cast<float>(m_drawState.channelMode),
-                    static_cast<float>(m_drawState.sourceAlphaEncoding),
-                    static_cast<float>(m_drawState.sourceAlphaUsage));
-
-        if (prevScissorCount > 0 && !prevScissors.empty())
-        {
-            context->RSSetScissorRects(prevScissorCount, prevScissors.data());
-        }
-        else
-        {
-            D3D11_RECT full { 0, 0, static_cast<LONG>(cs.width), static_cast<LONG>(cs.height) };
-            context->RSSetScissorRects(1, &full);
-        }
-        context->RSSetState(prevRs.Get());
-
         Wnd::OnRenderD3D(context);
     }
 }
