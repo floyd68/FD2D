@@ -27,6 +27,12 @@ namespace FD2D
             // 1=R, 2=G, 3=B, 4=A - shown as grayscale. Ignored on the D2D
             // (bitmap) path.
             int channelMode { 0 };
+            // True when the SRV holds premultiplied-alpha color (CPU BGRA8 from
+            // WIC/DirectXTex); then a color-channel (R/G/B) isolation divides by
+            // alpha so it reads the STRAIGHT channel value - matching straight-
+            // alpha BCn textures. No effect on normal RGBA display (mode 0), which
+            // must stay premultiplied to composite correctly over the checker.
+            bool sourcePremultiplied { false };
         };
 
         Image();

@@ -73,17 +73,25 @@ namespace FD2D
 
             // channelMode isolates one channel as grayscale: 0=RGBA (normal),
             // 1=R, 2=G, 3=B, 4=A. Alpha is forced opaque for isolated channels
-            // so e.g. a packed _rmaos channel is readable on its own.
+            // so e.g. a packed _rmaos channel is readable on its own. For a
+            // premultiplied source, a color-channel isolation first unpremultiplies
+            // (rgb/a) so it reads the straight channel value - matching straight-
+            // alpha BCn. Mode 0 (normal display) is left untouched so the image
+            // still composites correctly (premultiplied) over the checkerboard.
             const char* psSrc =
                 "Texture2D tex0 : register(t0);"
                 "SamplerState samp0 : register(s0);"
-                "cbuffer Cb : register(b0) { float opacity; float channelMode; float2 pad; };"
+                "cbuffer Cb : register(b0) { float opacity; float channelMode; float premultiplied; float pad; };"
                 "float4 main(float4 pos:SV_Position, float2 uv:TEXCOORD0) : SV_Target {"
                 "  float4 c = tex0.Sample(samp0, uv);"
                 "  int m = (int)channelMode;"
-                "  if (m == 1) c = float4(c.rrr, 1);"
-                "  else if (m == 2) c = float4(c.ggg, 1);"
-                "  else if (m == 3) c = float4(c.bbb, 1);"
+                "  if (m >= 1 && m <= 3) {"
+                "    float3 rgb = c.rgb;"
+                "    if (premultiplied > 0.5 && c.a > 0.0) rgb /= c.a;"
+                "    if (m == 1) c = float4(rgb.rrr, 1);"
+                "    else if (m == 2) c = float4(rgb.ggg, 1);"
+                "    else c = float4(rgb.bbb, 1);"
+                "  }"
                 "  else if (m == 4) c = float4(c.aaa, 1);"
                 "  c.a *= opacity;"
                 "  c.rgb *= opacity;"
@@ -689,7 +697,8 @@ namespace FD2D
             float uMax,
             float vMax,
             ID3D11SamplerState* samplerOverride,
-            float channelMode = 0.0f)
+            float channelMode = 0.0f,
+            float premultiplied = 0.0f)
         {
             if (!srv || opacity <= 0.0f)
             {
@@ -761,7 +770,7 @@ namespace FD2D
                     float* p = reinterpret_cast<float*>(mappedCb.pData);
                     p[0] = opacity;
                     p[1] = channelMode;
-                    p[2] = 0.0f;
+                    p[2] = premultiplied;
                     p[3] = 0.0f;
                     context->Unmap(g_quad.cb.Get(), 0);
                 }
@@ -794,7 +803,8 @@ namespace FD2D
         }
 
         drawSrvRect(m_srv.Get(), dest, 1.0f, 1.0f, 1.0f, nullptr,
-                    static_cast<float>(m_drawState.channelMode));
+                    static_cast<float>(m_drawState.channelMode),
+                    m_drawState.sourcePremultiplied ? 1.0f : 0.0f);
 
         if (prevScissorCount > 0 && !prevScissors.empty())
         {
