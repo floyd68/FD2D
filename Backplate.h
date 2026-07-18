@@ -109,6 +109,16 @@ namespace FD2D
         D2D1_SIZE_U ClientSize() const { return m_size; }
         D2D1_SIZE_U RenderSurfaceSize() const { return m_renderSurfaceSize; }
         D2D1_SIZE_F LogicalToRenderScale() const { return m_logicalToRenderScale; }
+        // Reads a logical client-space rectangle from the last fully composed
+        // offscreen frame (D3D + D2D) into tightly packed BGRA8 pixels. This is
+        // independent of desktop occlusion. Call Render() first when a current
+        // frame is required. Returns E_NOINTERFACE for the D2D-only backend.
+        HRESULT ReadComposedPixels(
+            const D2D1_RECT_F& logicalRect,
+            std::vector<std::uint8_t>& pixels,
+            UINT& width,
+            UINT& height,
+            UINT& stride);
 
         // Cross-thread redraw signaling without PostMessage:
         // worker thread calls RequestAsyncRedraw() -> signals event (coalesced)

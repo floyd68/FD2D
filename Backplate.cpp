@@ -2258,6 +2258,136 @@ namespace FD2D
         }
     }
 
+    HRESULT Backplate::ReadComposedPixels(
+        const D2D1_RECT_F& logicalRect,
+        std::vector<std::uint8_t>& pixels,
+        UINT& width,
+        UINT& height,
+        UINT& stride)
+    {
+        pixels.clear();
+        width = 0;
+        height = 0;
+        stride = 0;
+
+        if (!m_d3dDevice || !m_d3dContext)
+        {
+            return E_NOINTERFACE;
+        }
+        if (!m_useOffscreenBuffer ||
+            m_inSizeMove ||
+            !m_offscreenTexture)
+        {
+            return HRESULT_FROM_WIN32(ERROR_NOT_READY);
+        }
+
+        D3D11_TEXTURE2D_DESC sourceDesc {};
+        m_offscreenTexture->GetDesc(&sourceDesc);
+        if (sourceDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM ||
+            sourceDesc.SampleDesc.Count != 1)
+        {
+            return DXGI_ERROR_UNSUPPORTED;
+        }
+
+        const float scaleX = m_logicalToRenderScale.width;
+        const float scaleY = m_logicalToRenderScale.height;
+        const LONG left = (std::max)(
+            0L,
+            (std::min)(
+                static_cast<LONG>(sourceDesc.Width),
+                static_cast<LONG>(
+                    std::floor(logicalRect.left * scaleX))));
+        const LONG top = (std::max)(
+            0L,
+            (std::min)(
+                static_cast<LONG>(sourceDesc.Height),
+                static_cast<LONG>(
+                    std::floor(logicalRect.top * scaleY))));
+        const LONG right = (std::max)(
+            0L,
+            (std::min)(
+                static_cast<LONG>(sourceDesc.Width),
+                static_cast<LONG>(
+                    std::ceil(logicalRect.right * scaleX))));
+        const LONG bottom = (std::max)(
+            0L,
+            (std::min)(
+                static_cast<LONG>(sourceDesc.Height),
+                static_cast<LONG>(
+                    std::ceil(logicalRect.bottom * scaleY))));
+        if (right <= left || bottom <= top)
+        {
+            return E_INVALIDARG;
+        }
+
+        width = static_cast<UINT>(right - left);
+        height = static_cast<UINT>(bottom - top);
+        stride = width * 4;
+
+        D3D11_TEXTURE2D_DESC stagingDesc {};
+        stagingDesc.Width = width;
+        stagingDesc.Height = height;
+        stagingDesc.MipLevels = 1;
+        stagingDesc.ArraySize = 1;
+        stagingDesc.Format = sourceDesc.Format;
+        stagingDesc.SampleDesc.Count = 1;
+        stagingDesc.Usage = D3D11_USAGE_STAGING;
+        stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
+        HRESULT result = m_d3dDevice->CreateTexture2D(
+            &stagingDesc,
+            nullptr,
+            &staging);
+        if (FAILED(result))
+        {
+            return result;
+        }
+
+        D3D11_BOX sourceBox {};
+        sourceBox.left = static_cast<UINT>(left);
+        sourceBox.top = static_cast<UINT>(top);
+        sourceBox.front = 0;
+        sourceBox.right = static_cast<UINT>(right);
+        sourceBox.bottom = static_cast<UINT>(bottom);
+        sourceBox.back = 1;
+        m_d3dContext->CopySubresourceRegion(
+            staging.Get(),
+            0,
+            0,
+            0,
+            0,
+            m_offscreenTexture.Get(),
+            0,
+            &sourceBox);
+
+        D3D11_MAPPED_SUBRESOURCE mapped {};
+        result = m_d3dContext->Map(
+            staging.Get(),
+            0,
+            D3D11_MAP_READ,
+            0,
+            &mapped);
+        if (FAILED(result))
+        {
+            return result;
+        }
+
+        pixels.resize(
+            static_cast<std::size_t>(stride) * height);
+        for (UINT row = 0; row < height; ++row)
+        {
+            std::memcpy(
+                pixels.data() +
+                    static_cast<std::size_t>(row) * stride,
+                static_cast<const std::uint8_t*>(mapped.pData) +
+                    static_cast<std::size_t>(row) * mapped.RowPitch,
+                stride);
+        }
+        m_d3dContext->Unmap(staging.Get(), 0);
+        return S_OK;
+    }
+
     void Backplate::Render()
     {
         // Prevent recursive rendering (e.g., layout changes during OnRender triggering Invalidate)
