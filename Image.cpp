@@ -72,28 +72,42 @@ namespace FD2D
                 "VSOut main(VSIn i){ VSOut o; o.pos=float4(i.pos,0,1); o.uv=i.uv; return o; }";
 
             // channelMode isolates one channel as grayscale: 0=RGBA (normal),
-            // 1=R, 2=G, 3=B, 4=A. Alpha is forced opaque for isolated channels
-            // so e.g. a packed _rmaos channel is readable on its own. The blend
-            // state is premultiplied (ONE / INV_SRC_ALPHA), so:
-            //  - normal display (mode 0): a STRAIGHT source is premultiplied here
-            //    (rgb*=a) so it composites correctly over the checkerboard; a
-            //    premultiplied source is emitted as-is.
-            //  - color isolation (1/2/3): a PREMULTIPLIED source is unpremultiplied
-            //    (rgb/a) so it reads the straight channel value, matching straight
-            //    BCn. `premultiplied` (1/0) comes from the source's real alpha mode.
+            // 1=R, 2=G, 3=B, 4=A. Alpha is forced opaque for isolated channels so
+            // e.g. a packed _rmaos channel is readable on its own. alphaMode
+            // (0=straight, 1=premultiplied, 2=opaque/custom) + the checker flag
+            // reconcile the source under the premultiplied blend (ONE/INV_SRC_ALPHA):
+            //  - normal display (mode 0): whether alpha is COVERAGE is decided by
+            //    the alpha checkerboard toggle, because many game textures pack
+            //    non-coverage DATA in alpha (parallax height, specular) yet declare
+            //    it straight - fading those by alpha would wrongly darken them.
+            //      checker OFF (default): show opaque straight RGB (alpha ignored) -
+            //        premultiplied is unpremultiplied back to straight; alpha=1.
+            //      checker ON: treat alpha as coverage and composite over the
+            //        checker - straight premultiplies (rgb*=a), premultiplied stays,
+            //        opaque/custom forces alpha=1 (never coverage).
+            //  - color isolation (1/2/3): a premultiplied source is unpremultiplied
+            //    (rgb/a) for the true straight channel value; straight/opaque as-is.
+            //  - alpha isolation (4): always the stored alpha value.
             const char* psSrc =
                 "Texture2D tex0 : register(t0);"
                 "SamplerState samp0 : register(s0);"
-                "cbuffer Cb : register(b0) { float opacity; float channelMode; float premultiplied; float pad; };"
+                "cbuffer Cb : register(b0) { float opacity; float channelMode; float alphaMode; float checker; };"
                 "float4 main(float4 pos:SV_Position, float2 uv:TEXCOORD0) : SV_Target {"
                 "  float4 c = tex0.Sample(samp0, uv);"
                 "  int m = (int)channelMode;"
+                "  int am = (int)alphaMode;"
                 "  if (m == 0) {"
-                "    if (premultiplied < 0.5) c.rgb *= c.a;"   // straight -> premultiply for the premultiplied blend
+                "    if (checker > 0.5) {"                    // coverage composite over the checker
+                "      if (am == 2) c.a = 1.0;"               //   opaque/custom: not coverage
+                "      else if (am != 1) c.rgb *= c.a;"       //   straight -> premultiply (premultiplied: as-is)
+                "    } else {"                                 // default: opaque, full straight RGB
+                "      if (am == 1 && c.a > 0.0) c.rgb /= c.a;"  //   premultiplied -> straight
+                "      c.a = 1.0;"
+                "    }"
                 "  }"
                 "  else if (m >= 1 && m <= 3) {"
                 "    float3 rgb = c.rgb;"
-                "    if (premultiplied > 0.5 && c.a > 0.0) rgb /= c.a;"  // premultiplied -> straight channel value
+                "    if (am == 1 && c.a > 0.0) rgb /= c.a;"  // premultiplied -> straight channel value
                 "    if (m == 1) c = float4(rgb.rrr, 1);"
                 "    else if (m == 2) c = float4(rgb.ggg, 1);"
                 "    else c = float4(rgb.bbb, 1);"
@@ -413,7 +427,8 @@ namespace FD2D
             m_drawState.rotationQuarters != next.rotationQuarters ||
             m_drawState.highQualitySampling != next.highQualitySampling ||
             m_drawState.alphaCheckerboardEnabled != next.alphaCheckerboardEnabled ||
-            m_drawState.channelMode != next.channelMode;
+            m_drawState.channelMode != next.channelMode ||
+            m_drawState.sourceAlphaMode != next.sourceAlphaMode;
 
         m_drawState = next;
         if (changed)
@@ -704,7 +719,8 @@ namespace FD2D
             float vMax,
             ID3D11SamplerState* samplerOverride,
             float channelMode = 0.0f,
-            float premultiplied = 0.0f)
+            float alphaMode = 0.0f,
+            float checker = 0.0f)
         {
             if (!srv || opacity <= 0.0f)
             {
@@ -776,8 +792,8 @@ namespace FD2D
                     float* p = reinterpret_cast<float*>(mappedCb.pData);
                     p[0] = opacity;
                     p[1] = channelMode;
-                    p[2] = premultiplied;
-                    p[3] = 0.0f;
+                    p[2] = alphaMode;
+                    p[3] = checker;
                     context->Unmap(g_quad.cb.Get(), 0);
                 }
                 ID3D11Buffer* cbp = g_quad.cb.Get();
@@ -810,7 +826,8 @@ namespace FD2D
 
         drawSrvRect(m_srv.Get(), dest, 1.0f, 1.0f, 1.0f, nullptr,
                     static_cast<float>(m_drawState.channelMode),
-                    m_drawState.sourcePremultiplied ? 1.0f : 0.0f);
+                    static_cast<float>(m_drawState.sourceAlphaMode),
+                    m_drawState.alphaCheckerboardEnabled ? 1.0f : 0.0f);
 
         if (prevScissorCount > 0 && !prevScissors.empty())
         {
