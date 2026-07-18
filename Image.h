@@ -27,17 +27,16 @@ namespace FD2D
             // 1=R, 2=G, 3=B, 4=A - shown as grayscale. Ignored on the D2D
             // (bitmap) path.
             int channelMode { 0 };
-            // How the SRV's alpha relates to its color, so channel isolation reads
-            // true values and normal display composites correctly:
-            //   0 = Straight       - color independent of alpha
-            //   1 = Premultiplied  - color already multiplied by alpha
-            //   2 = Opaque/Custom  - alpha is not coverage (opaque, or carries data)
-            // Color isolation (1/2/3) unpremultiplies a premultiplied source for the
-            // true channel value; others as-is. Alpha isolation (4) shows stored alpha.
-            // NORMAL display treats alpha as coverage ONLY when the alpha checkerboard
-            // is on (many game textures pack non-coverage DATA in a "straight" alpha,
-            // so fading by default would wrongly darken them); off = opaque straight RGB.
-            int sourceAlphaMode { 0 };
+            // Alpha ENCODING - how color is stored relative to alpha (independent
+            // of what the alpha means): 0 = straight, 1 = premultiplied. Premultiply,
+            // when needed, happens here at presentation (the source is preserved), and
+            // color isolation unpremultiplies a premultiplied source for the true value.
+            int sourceAlphaEncoding { 0 };
+            // Alpha USAGE - what the alpha MEANS, resolved by the caller's policy:
+            // 0 = coverage (composite it), 1 = data (alpha isn't transparency, so
+            // normal display shows opaque straight RGB). The alpha checkerboard is a
+            // BACKGROUND only and does not change this.
+            int sourceAlphaUsage { 0 };
         };
 
         Image();

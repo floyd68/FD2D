@@ -73,41 +73,37 @@ namespace FD2D
 
             // channelMode isolates one channel as grayscale: 0=RGBA (normal),
             // 1=R, 2=G, 3=B, 4=A. Alpha is forced opaque for isolated channels so
-            // e.g. a packed _rmaos channel is readable on its own. alphaMode
-            // (0=straight, 1=premultiplied, 2=opaque/custom) + the checker flag
-            // reconcile the source under the premultiplied blend (ONE/INV_SRC_ALPHA):
-            //  - normal display (mode 0): whether alpha is COVERAGE is decided by
-            //    the alpha checkerboard toggle, because many game textures pack
-            //    non-coverage DATA in alpha (parallax height, specular) yet declare
-            //    it straight - fading those by alpha would wrongly darken them.
-            //      checker OFF (default): show opaque straight RGB (alpha ignored) -
-            //        premultiplied is unpremultiplied back to straight; alpha=1.
-            //      checker ON: treat alpha as coverage and composite over the
-            //        checker - straight premultiplies (rgb*=a), premultiplied stays,
-            //        opaque/custom forces alpha=1 (never coverage).
+            // e.g. a packed _rmaos channel is readable on its own. Two orthogonal
+            // inputs reconcile the source under the premultiplied blend (ONE/INV_SRC_ALPHA):
+            //   enc  (0=straight, 1=premultiplied)  - how color is STORED
+            //   use  (0=coverage, 1=data)           - what the alpha MEANS
+            //  - normal display (mode 0): data => opaque straight RGB (alpha isn't
+            //    transparency, so it must not fade the image); coverage => composite
+            //    (straight premultiplies rgb*=a; premultiplied stays as-is).
             //  - color isolation (1/2/3): a premultiplied source is unpremultiplied
-            //    (rgb/a) for the true straight channel value; straight/opaque as-is.
+            //    (rgb/a) for the true straight channel value; straight as-is.
             //  - alpha isolation (4): always the stored alpha value.
+            // The alpha checkerboard is only a background pass; it does not change
+            // coverage here.
             const char* psSrc =
                 "Texture2D tex0 : register(t0);"
                 "SamplerState samp0 : register(s0);"
-                "cbuffer Cb : register(b0) { float opacity; float channelMode; float alphaMode; float checker; };"
+                "cbuffer Cb : register(b0) { float opacity; float channelMode; float enc; float use; };"
                 "float4 main(float4 pos:SV_Position, float2 uv:TEXCOORD0) : SV_Target {"
                 "  float4 c = tex0.Sample(samp0, uv);"
                 "  int m = (int)channelMode;"
-                "  int am = (int)alphaMode;"
+                "  bool premul = enc > 0.5;"
                 "  if (m == 0) {"
-                "    if (checker > 0.5) {"                    // coverage composite over the checker
-                "      if (am == 2) c.a = 1.0;"               //   opaque/custom: not coverage
-                "      else if (am != 1) c.rgb *= c.a;"       //   straight -> premultiply (premultiplied: as-is)
-                "    } else {"                                 // default: opaque, full straight RGB
-                "      if (am == 1 && c.a > 0.0) c.rgb /= c.a;"  //   premultiplied -> straight
+                "    if (use > 0.5) {"                          // data: opaque straight RGB
+                "      if (premul && c.a > 0.0) c.rgb /= c.a;"
                 "      c.a = 1.0;"
-                "    }"
+                "    } else if (!premul) {"                     // coverage + straight -> premultiply for blend
+                "      c.rgb *= c.a;"
+                "    }"                                          // coverage + premultiplied: as-is
                 "  }"
                 "  else if (m >= 1 && m <= 3) {"
                 "    float3 rgb = c.rgb;"
-                "    if (am == 1 && c.a > 0.0) rgb /= c.a;"  // premultiplied -> straight channel value
+                "    if (premul && c.a > 0.0) rgb /= c.a;"      // premultiplied -> straight channel value
                 "    if (m == 1) c = float4(rgb.rrr, 1);"
                 "    else if (m == 2) c = float4(rgb.ggg, 1);"
                 "    else c = float4(rgb.bbb, 1);"
@@ -428,7 +424,8 @@ namespace FD2D
             m_drawState.highQualitySampling != next.highQualitySampling ||
             m_drawState.alphaCheckerboardEnabled != next.alphaCheckerboardEnabled ||
             m_drawState.channelMode != next.channelMode ||
-            m_drawState.sourceAlphaMode != next.sourceAlphaMode;
+            m_drawState.sourceAlphaEncoding != next.sourceAlphaEncoding ||
+            m_drawState.sourceAlphaUsage != next.sourceAlphaUsage;
 
         m_drawState = next;
         if (changed)
@@ -719,8 +716,8 @@ namespace FD2D
             float vMax,
             ID3D11SamplerState* samplerOverride,
             float channelMode = 0.0f,
-            float alphaMode = 0.0f,
-            float checker = 0.0f)
+            float enc = 0.0f,
+            float use = 0.0f)
         {
             if (!srv || opacity <= 0.0f)
             {
@@ -792,8 +789,8 @@ namespace FD2D
                     float* p = reinterpret_cast<float*>(mappedCb.pData);
                     p[0] = opacity;
                     p[1] = channelMode;
-                    p[2] = alphaMode;
-                    p[3] = checker;
+                    p[2] = enc;
+                    p[3] = use;
                     context->Unmap(g_quad.cb.Get(), 0);
                 }
                 ID3D11Buffer* cbp = g_quad.cb.Get();
@@ -826,8 +823,8 @@ namespace FD2D
 
         drawSrvRect(m_srv.Get(), dest, 1.0f, 1.0f, 1.0f, nullptr,
                     static_cast<float>(m_drawState.channelMode),
-                    static_cast<float>(m_drawState.sourceAlphaMode),
-                    m_drawState.alphaCheckerboardEnabled ? 1.0f : 0.0f);
+                    static_cast<float>(m_drawState.sourceAlphaEncoding),
+                    static_cast<float>(m_drawState.sourceAlphaUsage));
 
         if (prevScissorCount > 0 && !prevScissors.empty())
         {
