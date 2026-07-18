@@ -38,6 +38,7 @@ namespace FD2D
             Microsoft::WRL::ComPtr<ID3D11SamplerState> samplerWrap {};
             Microsoft::WRL::ComPtr<ID3D11BlendState> blend {};
             Microsoft::WRL::ComPtr<ID3D11RasterizerState> rsScissor {};
+            Microsoft::WRL::ComPtr<ID3D11DepthStencilState> depthDisabled {};
             Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> checkerSrv {};
         };
 
@@ -60,7 +61,8 @@ namespace FD2D
             if (g_quad.vs && g_quad.ps && g_quad.psArray && g_quad.psCube &&
                 g_quad.inputLayout && g_quad.vb &&
                 g_quad.samplerPoint && g_quad.samplerLinear && g_quad.samplerWrap &&
-                g_quad.blend && g_quad.rsScissor && g_quad.cb && g_quad.checkerSrv &&
+                g_quad.blend && g_quad.rsScissor && g_quad.depthDisabled &&
+                g_quad.cb && g_quad.checkerSrv &&
                 sameDevice && sameGen)
             {
                 return S_OK;
@@ -282,6 +284,18 @@ namespace FD2D
                 return hr;
             }
 
+            D3D11_DEPTH_STENCIL_DESC depth {};
+            depth.DepthEnable = FALSE;
+            depth.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+            depth.DepthFunc = D3D11_COMPARISON_ALWAYS;
+            hr = device->CreateDepthStencilState(
+                &depth,
+                &g_quad.depthDisabled);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
+
             D3D11_BUFFER_DESC cbd {};
             cbd.Usage = D3D11_USAGE_DYNAMIC;
             cbd.ByteWidth = 16;
@@ -430,6 +444,12 @@ namespace FD2D
         {
             return E_NOINTERFACE;
         }
+        ID3D11RenderTargetView* destination =
+            backplate.ActiveD3DRenderTarget();
+        if (!destination)
+        {
+            return E_FAIL;
+        }
 
         const uint64_t deviceGeneration = backplate.GetGraphicsGeneration().device;
         HRESULT hr = EnsureD3DQuadResources(device, deviceGeneration);
@@ -539,6 +559,31 @@ namespace FD2D
         UINT prevSampleMask = 0;
         context->OMGetBlendState(&prevBlendState, prevBlendFactor, &prevSampleMask);
 
+        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> prevRenderTarget;
+        Microsoft::WRL::ComPtr<ID3D11DepthStencilView> prevDepthView;
+        context->OMGetRenderTargets(
+            1,
+            &prevRenderTarget,
+            &prevDepthView);
+        Microsoft::WRL::ComPtr<ID3D11DepthStencilState> prevDepthState;
+        UINT prevStencilReference = 0;
+        context->OMGetDepthStencilState(
+            &prevDepthState,
+            &prevStencilReference);
+
+        UINT prevViewportCount = 0;
+        context->RSGetViewports(
+            &prevViewportCount,
+            nullptr);
+        std::vector<D3D11_VIEWPORT> prevViewports(
+            prevViewportCount);
+        if (prevViewportCount > 0)
+        {
+            context->RSGetViewports(
+                &prevViewportCount,
+                prevViewports.data());
+        }
+
         const auto restoreState = [&]()
         {
             context->IASetInputLayout(prevInputLayout.Get());
@@ -561,12 +606,45 @@ namespace FD2D
             context->PSSetConstantBuffers(0, 1, &constantBuffer);
 
             context->OMSetBlendState(prevBlendState.Get(), prevBlendFactor, prevSampleMask);
+            ID3D11RenderTargetView* renderTarget =
+                prevRenderTarget.Get();
+            context->OMSetRenderTargets(
+                1,
+                &renderTarget,
+                prevDepthView.Get());
+            context->OMSetDepthStencilState(
+                prevDepthState.Get(),
+                prevStencilReference);
+            context->RSSetViewports(
+                prevViewportCount,
+                prevViewportCount > 0
+                    ? prevViewports.data()
+                    : nullptr);
             context->RSSetScissorRects(
                 prevScissorCount,
                 prevScissorCount > 0 ? prevScissors.data() : nullptr);
             context->RSSetState(prevRs.Get());
         };
 
+        context->OMSetRenderTargets(
+            1,
+            &destination,
+            nullptr);
+        context->OMSetDepthStencilState(
+            g_quad.depthDisabled.Get(),
+            0);
+        const D3D11_VIEWPORT presentationViewport
+        {
+            0.0f,
+            0.0f,
+            static_cast<float>(cs.width),
+            static_cast<float>(cs.height),
+            0.0f,
+            1.0f
+        };
+        context->RSSetViewports(
+            1,
+            &presentationViewport);
         context->RSSetState(g_quad.rsScissor.Get());
         context->RSSetScissorRects(1, &scissor);
 

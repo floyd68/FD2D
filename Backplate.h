@@ -106,6 +106,13 @@ namespace FD2D
         ID2D1RenderTarget* RenderTarget() const;
         ID3D11Device* D3DDevice() const { return m_rendererId == L"d2d_hwndrt" ? nullptr : m_d3dDevice.Get(); }
         ID3D11DeviceContext* D3DContext() const { return m_rendererId == L"d2d_hwndrt" ? nullptr : m_d3dContext.Get(); }
+        // Valid only while Backplate is dispatching the D3D render pass.
+        // Shared presenters bind this explicitly because child renderers may
+        // temporarily replace or unbind the output-merger target.
+        ID3D11RenderTargetView* ActiveD3DRenderTarget() const
+        {
+            return m_activeD3DRenderTarget;
+        }
         D2D1_SIZE_U ClientSize() const { return m_size; }
         D2D1_SIZE_U RenderSurfaceSize() const { return m_renderSurfaceSize; }
         D2D1_SIZE_F LogicalToRenderScale() const { return m_logicalToRenderScale; }
