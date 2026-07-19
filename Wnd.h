@@ -41,6 +41,16 @@ namespace FD2D
         Insert   // drop will insert alongside the current drop target
     };
 
+    // Fixed overlay bands keep render and input ordering deterministic without
+    // introducing a retained command queue or arbitrary z-index sorting.
+    enum class OverlayLayer : std::uint8_t
+    {
+        Chrome,
+        Inspector,
+        Popup,
+        Modal
+    };
+
     enum class InputEventType
     {
         None,
@@ -162,14 +172,12 @@ namespace FD2D
         // Default implementation forwards to children.
         virtual void OnRenderD3D(ID3D11DeviceContext* context);
         virtual void OnRender(ID2D1RenderTarget* target);
-        // Second D2D pass after the full tree's OnRender. Used for popups
-        // (ComboBox dropdowns) that must paint above sibling controls without
-        // covering the whole window with a scrim.
-        virtual void OnRenderOverlay(ID2D1RenderTarget* target);
+        // Overlay traversal is owned by Wnd so paint order and input order stay
+        // exact opposites. Most controls do not participate in these passes.
+        void RenderOverlayTree(ID2D1RenderTarget* target, OverlayLayer layer);
+        bool RouteOverlayInput(const InputEvent& event, OverlayLayer layer);
+        bool HasActiveOverlayInTree(OverlayLayer layer) const;
         virtual bool OnInputEvent(const InputEvent& event);
-        // True while this control has a popup that should steal mouse input
-        // ahead of later siblings (see RouteOverlayMouseInput).
-        virtual bool HasInputOverlay() const { return false; }
         virtual bool OnCommandEvent(const CommandEvent& event);
         virtual bool OnFileDrop(const std::wstring& path, const POINT& clientPt);
         // Multi-file drop. Default forwards the FIRST path to OnFileDrop
@@ -212,8 +220,13 @@ namespace FD2D
         Rect ContentRectFor(const Size& contentSize) const;
         Rect ContentRectFor(const Rect& bounds, const Size& contentSize) const;
         void NotifyContentLayoutChanged();
-        // Depth-first: give open overlay controls first chance at mouse input.
-        bool RouteOverlayMouseInput(const InputEvent& event);
+        virtual bool IsOverlayActive(OverlayLayer layer) const;
+        virtual void OnRenderOverlay(ID2D1RenderTarget* target, OverlayLayer layer);
+        virtual bool OnOverlayInput(const InputEvent& event, OverlayLayer layer);
+        // Containers can override these two hooks to apply the same coordinate
+        // transform to descendant overlay painting and hit-testing.
+        virtual void RenderChildOverlays(ID2D1RenderTarget* target, OverlayLayer layer);
+        virtual bool RouteChildOverlayInput(const InputEvent& event, OverlayLayer layer);
 
     protected:
         std::wstring m_name {};

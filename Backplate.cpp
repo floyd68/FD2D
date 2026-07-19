@@ -215,11 +215,11 @@ namespace FD2D
     void Backplate::NotifyGraphicsInvalidated(GraphicsInvalidationReason reason)
     {
         const GraphicsGeneration generation = m_graphicsGeneration;
-        for (auto& pair : m_children)
+        for (const auto& child : m_childrenOrdered)
         {
-            if (pair.second)
+            if (child)
             {
-                pair.second->OnGraphicsInvalidated(reason, generation);
+                child->OnGraphicsInvalidated(reason, generation);
             }
         }
     }
@@ -577,19 +577,19 @@ namespace FD2D
 
         // Clear any prior visuals from children that are no longer the drag target
         // (the loop below only reaches the first child that claims the point).
-        for (auto& pair : m_children)
+        for (const auto& child : m_childrenOrdered)
         {
-            if (pair.second)
+            if (child)
             {
-                pair.second->OnFileDragLeave();
+                child->OnFileDragLeave();
             }
         }
 
         FileDragVisual visual = FileDragVisual::None;
         bool handled = false;
-        for (auto& pair : m_children)
+        for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
         {
-            if (pair.second && pair.second->OnFileDrag(path, ptClient, visual))
+            if (*it && (*it)->OnFileDrag(path, ptClient, visual))
             {
                 handled = true;
                 break;
@@ -609,11 +609,11 @@ namespace FD2D
     void Backplate::HandleFileDragLeave()
     {
         BeginDeferredRender();
-        for (auto& pair : m_children)
+        for (const auto& child : m_childrenOrdered)
         {
-            if (pair.second)
+            if (child)
             {
-                pair.second->OnFileDragLeave();
+                child->OnFileDragLeave();
             }
         }
         EndDeferredRender();
@@ -631,9 +631,9 @@ namespace FD2D
             return false;
         }
 
-        for (auto& pair : m_children)
+        for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
         {
-            if (pair.second && pair.second->OnFileDropPaths(paths, ptClient))
+            if (*it && (*it)->OnFileDropPaths(paths, ptClient))
             {
                 return true;
             }
@@ -775,13 +775,11 @@ namespace FD2D
 
     Wnd* Backplate::HitTestTopLevel(const POINT& pt)
     {
-        // Top-level children are unordered; return the deepest hit found. For
-        // this app there is a single top-level Wnd, so ambiguity is moot.
-        for (auto& pair : m_children)
+        for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
         {
-            if (pair.second)
+            if (*it)
             {
-                if (Wnd* hit = pair.second->HitTestDeepest(pt))
+                if (Wnd* hit = (*it)->HitTestDeepest(pt))
                 {
                     return hit;
                 }
@@ -911,13 +909,58 @@ namespace FD2D
         }
     }
 
-    void Backplate::DrawHoverAndToast(ID2D1RenderTarget* target)
+    bool Backplate::HasActiveOverlay(OverlayLayer layer) const
+    {
+        for (const auto& child : m_childrenOrdered)
+        {
+            if (child && child->HasActiveOverlayInTree(layer))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool Backplate::RouteOverlayInput(const InputEvent& event, OverlayLayer layer)
+    {
+        for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
+        {
+            if (*it && (*it)->RouteOverlayInput(event, layer))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void Backplate::RenderOverlayLayer(ID2D1RenderTarget* target, OverlayLayer layer)
+    {
+        for (const auto& child : m_childrenOrdered)
+        {
+            if (child)
+            {
+                child->RenderOverlayTree(target, layer);
+            }
+        }
+    }
+
+    void Backplate::DrawHoverAndToast(
+        ID2D1RenderTarget* target,
+        bool drawHover,
+        bool drawToast)
     {
         if (target == nullptr)
         {
             return;
         }
-        if ((!m_tipShown || m_hoverTip.empty()) && m_toastText.empty())
+        const bool hasHover =
+            drawHover &&
+            m_tipShown &&
+            !m_hoverTip.empty();
+        const bool hasToast =
+            drawToast &&
+            !m_toastText.empty();
+        if (!hasHover && !hasToast)
         {
             return;
         }
@@ -988,7 +1031,7 @@ namespace FD2D
             }
         };
 
-        if (m_tipShown && !m_hoverTip.empty())
+        if (hasHover)
         {
             drawBox(m_hoverTip, static_cast<float>(m_tipAnchor.x) + 12.0f,
                     static_cast<float>(m_tipAnchor.y) + 20.0f, true,
@@ -996,7 +1039,7 @@ namespace FD2D
                     D2D1::ColorF(0.42f, 0.44f, 0.50f, 1.0f),
                     D2D1::ColorF(0.92f, 0.92f, 0.95f, 1.0f));
         }
-        if (!m_toastText.empty())
+        if (hasToast)
         {
             // Centered near the bottom of the window.
             Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
@@ -1059,24 +1102,6 @@ namespace FD2D
 
         switch (message)
         {
-        case WM_KEYDOWN:
-        case WM_SYSKEYDOWN:
-        {
-            // ESC: exit application (handled at the window level so it works regardless of focus).
-            if (wParam == VK_ESCAPE)
-            {
-                const bool isRepeat = ((lParam & (1LL << 30)) != 0);
-                if (!isRepeat && m_window != nullptr)
-                {
-                    PostMessageW(m_window, WM_CLOSE, 0, 0);
-                }
-                result = 0;
-                return true;
-            }
-
-            break;
-        }
-
         case WM_CLOSE:
         {
             // Save settings while the HWND is still valid.
@@ -1127,11 +1152,11 @@ namespace FD2D
                 float minClientW = 0.0f;
                 float minClientH = 0.0f;
 
-                for (const auto& pair : m_children)
+                for (const auto& child : m_childrenOrdered)
                 {
-                    if (pair.second)
+                    if (child)
                     {
-                        Size ms = pair.second->MinSize();
+                        Size ms = child->MinSize();
                         minClientW = (std::max)(minClientW, ms.w);
                         minClientH = (std::max)(minClientH, ms.h);
                     }
@@ -1204,12 +1229,12 @@ namespace FD2D
             auto* bm = reinterpret_cast<Backplate::BroadcastMessage*>(lParam);
             if (bm != nullptr)
             {
-                for (auto& pair : m_children)
+                for (const auto& child : m_childrenOrdered)
                 {
-                    if (pair.second)
+                    if (child)
                     {
                         const CommandEvent event { bm->message, bm->wParam, bm->lParam };
-                        (void)pair.second->OnCommandEvent(event);
+                        (void)child->OnCommandEvent(event);
                     }
                 }
                 delete bm;
@@ -1352,6 +1377,26 @@ namespace FD2D
                     message == WM_SYSDEADCHAR);
             }
 
+            // Overlay input follows the reverse of paint priority. An active
+            // modal owns the entire input surface, including its outer margin.
+            const bool modalActive =
+                HasActiveOverlay(OverlayLayer::Modal);
+            if (RouteOverlayInput(inputEvent, OverlayLayer::Modal) ||
+                (modalActive && inputType != InputEventType::None))
+            {
+                ClearHoverTooltip();
+                result = 0;
+                return true;
+            }
+            if (RouteOverlayInput(inputEvent, OverlayLayer::Popup) ||
+                RouteOverlayInput(inputEvent, OverlayLayer::Inspector) ||
+                RouteOverlayInput(inputEvent, OverlayLayer::Chrome))
+            {
+                ClearHoverTooltip();
+                result = 0;
+                return true;
+            }
+
             // Route keyboard input to the focused Wnd first (if any). A
             // focused control that declines the key does NOT swallow it:
             // fall through to the tree broadcast below so application-wide
@@ -1417,16 +1462,23 @@ namespace FD2D
                 }
             }
 
-            bool handledInput = false;
-            for (auto& pair : m_children)
+            for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
             {
-                if (pair.second && pair.second->OnInputEvent(inputEvent))
+                if (*it && (*it)->OnInputEvent(inputEvent))
                 {
-                    handledInput = true;
+                    result = 0;
+                    return true;
                 }
             }
-            if (handledInput)
+
+            // Escape is an application close fallback, not a global preemptive
+            // shortcut: popups and modals above get first chance to consume it.
+            if (inputType == InputEventType::KeyDown &&
+                inputEvent.keyCode == VK_ESCAPE &&
+                !inputEvent.wasDown &&
+                m_window != nullptr)
             {
+                PostMessageW(m_window, WM_CLOSE, 0, 0);
                 result = 0;
                 return true;
             }
@@ -1445,9 +1497,9 @@ namespace FD2D
         }
 
         bool handledCommand = false;
-        for (auto& pair : m_children)
+        for (const auto& child : m_childrenOrdered)
         {
-            if (pair.second && pair.second->OnCommandEvent(commandEvent))
+            if (child && child->OnCommandEvent(commandEvent))
             {
                 handledCommand = true;
             }
@@ -2533,21 +2585,23 @@ namespace FD2D
             renderTarget->Clear(m_clearColor);
             renderTarget->SetTransform(logicalToRender);
 
-            for (auto& pair : m_children)
+            for (const auto& child : m_childrenOrdered)
             {
-                if (pair.second)
+                if (child)
                 {
-                    pair.second->OnRender(renderTarget);
+                    child->OnRender(renderTarget);
                 }
             }
-            for (auto& pair : m_children)
-            {
-                if (pair.second)
-                {
-                    pair.second->OnRenderOverlay(renderTarget);
-                }
-            }
-            DrawHoverAndToast(renderTarget);
+            RenderOverlayLayer(renderTarget, OverlayLayer::Chrome);
+            RenderOverlayLayer(renderTarget, OverlayLayer::Inspector);
+            RenderOverlayLayer(renderTarget, OverlayLayer::Popup);
+            const bool transientOverlay =
+                HasActiveOverlay(OverlayLayer::Inspector) ||
+                HasActiveOverlay(OverlayLayer::Popup) ||
+                HasActiveOverlay(OverlayLayer::Modal);
+            DrawHoverAndToast(renderTarget, !transientOverlay, false);
+            RenderOverlayLayer(renderTarget, OverlayLayer::Modal);
+            DrawHoverAndToast(renderTarget, false, true);
 
             HRESULT hr = renderTarget->EndDraw();
             if (hr == D2DERR_RECREATE_TARGET)
@@ -2683,11 +2737,11 @@ namespace FD2D
             m_d3dContext->RSSetViewports(1, &vp);
 
             const auto t_d3dPass = std::chrono::steady_clock::now();
-            for (auto& pair : m_children)
+            for (const auto& child : m_childrenOrdered)
             {
-                if (pair.second)
+                if (child)
                 {
-                    pair.second->OnRenderD3D(m_d3dContext.Get());
+                    child->OnRenderD3D(m_d3dContext.Get());
                 }
             }
             {
@@ -2732,21 +2786,23 @@ namespace FD2D
             m_logicalToRenderScale.width,
             m_logicalToRenderScale.height));
 
-        for (auto& pair : m_children)
+        for (const auto& child : m_childrenOrdered)
         {
-            if (pair.second)
+            if (child)
             {
-                pair.second->OnRender(m_d2dContext.Get());
+                child->OnRender(m_d2dContext.Get());
             }
         }
-        for (auto& pair : m_children)
-        {
-            if (pair.second)
-            {
-                pair.second->OnRenderOverlay(m_d2dContext.Get());
-            }
-        }
-        DrawHoverAndToast(m_d2dContext.Get());
+        RenderOverlayLayer(m_d2dContext.Get(), OverlayLayer::Chrome);
+        RenderOverlayLayer(m_d2dContext.Get(), OverlayLayer::Inspector);
+        RenderOverlayLayer(m_d2dContext.Get(), OverlayLayer::Popup);
+        const bool transientOverlay =
+            HasActiveOverlay(OverlayLayer::Inspector) ||
+            HasActiveOverlay(OverlayLayer::Popup) ||
+            HasActiveOverlay(OverlayLayer::Modal);
+        DrawHoverAndToast(m_d2dContext.Get(), !transientOverlay, false);
+        RenderOverlayLayer(m_d2dContext.Get(), OverlayLayer::Modal);
+        DrawHoverAndToast(m_d2dContext.Get(), false, true);
 
         const auto t_endDraw = std::chrono::steady_clock::now();
         HRESULT hr = m_d2dContext->EndDraw();
@@ -2895,12 +2951,12 @@ namespace FD2D
     {
         D2D1_SIZE_F size { static_cast<FLOAT>(m_size.width), static_cast<FLOAT>(m_size.height) };
 
-        for (auto& pair : m_children)
+        for (const auto& child : m_childrenOrdered)
         {
-            if (pair.second)
+            if (child)
             {
-                pair.second->Measure({ size.width, size.height });
-                pair.second->Arrange({ 0.0f, 0.0f, size.width, size.height });
+                child->Measure({ size.width, size.height });
+                child->Arrange({ 0.0f, 0.0f, size.width, size.height });
             }
         }
 
@@ -2932,6 +2988,7 @@ namespace FD2D
         FD2D_TIMER_START(t_addwnd);
 
         m_children.emplace(wnd->Name(), wnd);
+        m_childrenOrdered.push_back(wnd);
         wnd->OnAttached(*this);
         FD2D_LOG_STEP(t_addwnd, "[AddWnd] OnAttached");
 

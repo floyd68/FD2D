@@ -123,9 +123,27 @@ namespace FD2D
         }
     }
 
-    bool ComboBox::HasInputOverlay() const
+    bool ComboBox::IsOverlayActive(OverlayLayer layer) const
     {
-        return m_open && !m_items.empty();
+        return layer == OverlayLayer::Popup &&
+            m_open &&
+            !m_items.empty();
+    }
+
+    bool ComboBox::OnOverlayInput(const InputEvent& event, OverlayLayer layer)
+    {
+        if (layer != OverlayLayer::Popup || !m_open)
+        {
+            return false;
+        }
+
+        if (event.type == InputEventType::KeyDown && event.keyCode == VK_ESCAPE)
+        {
+            Close();
+            return true;
+        }
+
+        return OnInputEvent(event);
     }
 
     bool ComboBox::OnInputEvent(const InputEvent& event)
@@ -276,13 +294,15 @@ namespace FD2D
         Wnd::OnRender(target);
     }
 
-    void ComboBox::OnRenderOverlay(ID2D1RenderTarget* target)
+    void ComboBox::OnRenderOverlay(ID2D1RenderTarget* target, OverlayLayer layer)
     {
         // Draw the list in the overlay pass so it sits above sibling controls
         // in the same strip, without a fullscreen scrim over the view panes.
-        if (target == nullptr || !m_open || m_items.empty())
+        if (layer != OverlayLayer::Popup ||
+            target == nullptr ||
+            !m_open ||
+            m_items.empty())
         {
-            Wnd::OnRenderOverlay(target);
             return;
         }
 
@@ -318,6 +338,5 @@ namespace FD2D
             itemText.OnRender(target);
         }
 
-        Wnd::OnRenderOverlay(target);
     }
 }

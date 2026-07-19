@@ -457,6 +457,39 @@ namespace FD2D
         }
     }
 
+    void ScrollView::RenderChildOverlays(ID2D1RenderTarget* target, OverlayLayer layer)
+    {
+        if (target == nullptr)
+        {
+            return;
+        }
+
+        D2D1_MATRIX_3X2_F previous {};
+        target->GetTransform(&previous);
+        target->SetTransform(
+            previous *
+            D2D1::Matrix3x2F::Translation(-m_scrollX, -m_scrollY));
+        Wnd::RenderChildOverlays(target, layer);
+        target->SetTransform(previous);
+    }
+
+    bool ScrollView::RouteChildOverlayInput(const InputEvent& event, OverlayLayer layer)
+    {
+        InputEvent translated = event;
+        if (translated.hasPoint)
+        {
+            translated.point.x = static_cast<int>(
+                std::lround(
+                    static_cast<double>(translated.point.x) +
+                    static_cast<double>(m_scrollX)));
+            translated.point.y = static_cast<int>(
+                std::lround(
+                    static_cast<double>(translated.point.y) +
+                    static_cast<double>(m_scrollY)));
+        }
+        return Wnd::RouteChildOverlayInput(translated, layer);
+    }
+
     bool ScrollView::OnInputEvent(const InputEvent& event)
     {
         // Draggable scrollbars (opt-in). Handled before the content dispatch so a

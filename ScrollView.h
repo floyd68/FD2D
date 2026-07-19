@@ -55,6 +55,10 @@ namespace FD2D
         void OnRender(ID2D1RenderTarget* target) override;
         bool OnInputEvent(const InputEvent& event) override;
 
+    protected:
+        void RenderChildOverlays(ID2D1RenderTarget* target, OverlayLayer layer) override;
+        bool RouteChildOverlayInput(const InputEvent& event, OverlayLayer layer) override;
+
     private:
         void ClampScroll();
         bool IsPointInViewport(int x, int y) const;

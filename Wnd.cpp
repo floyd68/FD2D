@@ -353,15 +353,27 @@ namespace FD2D
         }
     }
 
-    void Wnd::OnRenderOverlay(ID2D1RenderTarget* target)
+    void Wnd::RenderOverlayTree(ID2D1RenderTarget* target, OverlayLayer layer)
+    {
+        RenderChildOverlays(target, layer);
+        OnRenderOverlay(target, layer);
+    }
+
+    void Wnd::RenderChildOverlays(ID2D1RenderTarget* target, OverlayLayer layer)
     {
         for (auto& child : m_childrenOrdered)
         {
             if (child)
             {
-                child->OnRenderOverlay(target);
+                child->RenderOverlayTree(target, layer);
             }
         }
+    }
+
+    void Wnd::OnRenderOverlay(ID2D1RenderTarget* target, OverlayLayer layer)
+    {
+        UNREFERENCED_PARAMETER(target);
+        UNREFERENCED_PARAMETER(layer);
     }
 
     void Wnd::OnRenderD3D(ID3D11DeviceContext* context)
@@ -377,7 +389,16 @@ namespace FD2D
         }
     }
 
-    bool Wnd::RouteOverlayMouseInput(const InputEvent& event)
+    bool Wnd::RouteOverlayInput(const InputEvent& event, OverlayLayer layer)
+    {
+        if (IsOverlayActive(layer) && OnOverlayInput(event, layer))
+        {
+            return true;
+        }
+        return RouteChildOverlayInput(event, layer);
+    }
+
+    bool Wnd::RouteChildOverlayInput(const InputEvent& event, OverlayLayer layer)
     {
         for (auto it = m_childrenOrdered.rbegin(); it != m_childrenOrdered.rend(); ++it)
         {
@@ -386,15 +407,40 @@ namespace FD2D
             {
                 continue;
             }
-            if (child->RouteOverlayMouseInput(event))
-            {
-                return true;
-            }
-            if (child->HasInputOverlay() && child->OnInputEvent(event))
+            if (child->RouteOverlayInput(event, layer))
             {
                 return true;
             }
         }
+        return false;
+    }
+
+    bool Wnd::HasActiveOverlayInTree(OverlayLayer layer) const
+    {
+        if (IsOverlayActive(layer))
+        {
+            return true;
+        }
+        for (const auto& child : m_childrenOrdered)
+        {
+            if (child && child->HasActiveOverlayInTree(layer))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool Wnd::IsOverlayActive(OverlayLayer layer) const
+    {
+        UNREFERENCED_PARAMETER(layer);
+        return false;
+    }
+
+    bool Wnd::OnOverlayInput(const InputEvent& event, OverlayLayer layer)
+    {
+        UNREFERENCED_PARAMETER(event);
+        UNREFERENCED_PARAMETER(layer);
         return false;
     }
 
@@ -405,11 +451,6 @@ namespace FD2D
         // All LayoutRects are in the same client coordinate system, so no conversion needed
         if (Util::IsMouseInputEventType(event.type))
         {
-            if (RouteOverlayMouseInput(event))
-            {
-                return true;
-            }
-
             // For wheel input, route based on cursor position so the pane under the mouse receives it
             // even if another control currently owns focus.
             if (event.type == InputEventType::MouseWheel || event.type == InputEventType::MouseHWheel)

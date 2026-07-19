@@ -34,10 +34,13 @@ namespace FD2D
         void SetDropdownBackground(const D2D1_COLOR_F& color);
         const D2D1_COLOR_F& DropdownBackground() const { return m_dropdownBackground; }
 
-        bool HasInputOverlay() const override;
         bool OnInputEvent(const InputEvent& event) override;
         void OnRender(ID2D1RenderTarget* target) override;
-        void OnRenderOverlay(ID2D1RenderTarget* target) override;
+
+    protected:
+        bool IsOverlayActive(OverlayLayer layer) const override;
+        void OnRenderOverlay(ID2D1RenderTarget* target, OverlayLayer layer) override;
+        bool OnOverlayInput(const InputEvent& event, OverlayLayer layer) override;
 
     private:
         bool HitTestBox(const POINT& pt) const;

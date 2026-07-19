@@ -229,12 +229,18 @@ namespace FD2D
         // Hover-tooltip + toast support (see the .cpp). UpdateHoverTarget runs
         // on mouse move to find the control under the cursor and (re)arm the
         // dwell; AdvanceHoverToast advances the dwell/toast timers each frame;
-        // DrawHoverAndToast paints them over the finished UI.
+        // Hover and toast can be emitted in separate priority bands.
         Wnd* HitTestTopLevel(const POINT& pt);
         void UpdateHoverTarget(const POINT& ptClient);
         void ClearHoverTooltip();
         void AdvanceHoverToast(unsigned long long nowMs);
-        void DrawHoverAndToast(ID2D1RenderTarget* target);
+        void DrawHoverAndToast(
+            ID2D1RenderTarget* target,
+            bool drawHover,
+            bool drawToast);
+        bool HasActiveOverlay(OverlayLayer layer) const;
+        bool RouteOverlayInput(const InputEvent& event, OverlayLayer layer);
+        void RenderOverlayLayer(ID2D1RenderTarget* target, OverlayLayer layer);
 
         void InvokeBeforeDestroyOnce();
         void SchedulePlacementAutosave();
@@ -289,6 +295,7 @@ namespace FD2D
         bool m_useOffscreenBuffer { true };
 
         std::unordered_map<std::wstring, std::shared_ptr<Wnd>> m_children {};
+        std::vector<std::shared_ptr<Wnd>> m_childrenOrdered {};
         WNDPROC m_prevWndProc { nullptr };
         bool m_classRegistered { false };
         std::wstring m_name {};
