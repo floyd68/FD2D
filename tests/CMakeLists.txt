@@ -6,6 +6,7 @@ add_executable(FD2DTests
     TestMain.cpp
     AsyncRedrawDispatchTests.cpp
     AsyncRedrawSignalTests.cpp
+    ImageTransformTests.cpp
 )
 
 target_include_directories(FD2DTests PRIVATE
@@ -20,6 +21,14 @@ target_compile_definitions(FD2DTests PRIVATE
 
 target_link_libraries(FD2DTests PRIVATE
     FD2D
+    d2d1
+    dwrite
+    d3d11
+    dxgi
+    d3dcompiler
+    windowscodecs
+    ole32
+    shell32
 )
 
 if(MSVC)
@@ -38,5 +47,6 @@ endif()
 
 add_test(NAME FD2D.AsyncRedrawSignal COMMAND FD2DTests AsyncRedrawSignal_)
 add_test(NAME FD2D.AsyncRedrawDispatch COMMAND FD2DTests AsyncRedrawDispatch_)
+add_test(NAME FD2D.ImageTransform COMMAND FD2DTests ImageTransform_)
 # Safety net only: every wait inside the tests is bounded.
-set_tests_properties(FD2D.AsyncRedrawSignal FD2D.AsyncRedrawDispatch PROPERTIES TIMEOUT 120)
+set_tests_properties(FD2D.AsyncRedrawSignal FD2D.AsyncRedrawDispatch FD2D.ImageTransform PROPERTIES TIMEOUT 120)

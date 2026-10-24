@@ -1000,13 +1000,22 @@ namespace FD2D
                     m_drawState.panX,
                     m_drawState.panY);
 
+                // The incoming transform carries the parents' placement (scroll
+                // offsets, translations) and the backplate's logical-to-render
+                // scale during live resize. Rotation is local to this image, so it
+                // is applied first and the incoming transform after it (row-vector
+                // convention: point * Rotation * incoming). The exact incoming
+                // transform is restored after drawing.
+                D2D1::Matrix3x2F incomingTransform;
+                target->GetTransform(&incomingTransform);
                 if (m_drawState.rotationQuarters != 0)
                 {
                     const float cx = (layoutRect.left + layoutRect.right) * 0.5f;
                     const float cy = (layoutRect.top + layoutRect.bottom) * 0.5f;
-                    target->SetTransform(D2D1::Matrix3x2F::Rotation(
+                    const D2D1::Matrix3x2F rotation = D2D1::Matrix3x2F::Rotation(
                         static_cast<float>(m_drawState.rotationQuarters) * 90.0f,
-                        D2D1::Point2F(cx, cy)));
+                        D2D1::Point2F(cx, cy));
+                    target->SetTransform(rotation * incomingTransform);
                 }
 
                 if (m_drawState.alphaCheckerboardEnabled)
@@ -1079,7 +1088,7 @@ namespace FD2D
 
                 if (m_drawState.rotationQuarters != 0)
                 {
-                    target->SetTransform(D2D1::Matrix3x2F::Identity());
+                    target->SetTransform(incomingTransform);
                 }
             }
         }
