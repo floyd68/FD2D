@@ -15,6 +15,7 @@
 #include <functional>
 #include <vector>
 
+#include "AsyncRedrawSignal.h"
 #include "Wnd.h"
 
 namespace FD2D
@@ -130,7 +131,7 @@ namespace FD2D
         // Cross-thread redraw signaling without PostMessage:
         // worker thread calls RequestAsyncRedraw() -> signals event (coalesced)
         // UI thread waits on AsyncRedrawEvent() and calls ProcessAsyncRedraw().
-        HANDLE AsyncRedrawEvent() const { return m_asyncRedrawEvent; }
+        HANDLE AsyncRedrawEvent() const { return m_asyncRedrawSignal.Event(); }
         void RequestAsyncRedraw();
         void ProcessAsyncRedraw();
 
@@ -301,8 +302,7 @@ namespace FD2D
         std::wstring m_name {};
         bool m_layoutDirty { true };
 
-        HANDLE m_asyncRedrawEvent { nullptr };
-        std::atomic<bool> m_asyncRedrawPending { false };
+        AsyncRedrawSignal m_asyncRedrawSignal {};
         std::shared_ptr<AsyncRedrawToken::ControlBlock> m_asyncRedrawControl {};
         GraphicsGeneration m_graphicsGeneration {};
 

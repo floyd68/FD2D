@@ -2,6 +2,7 @@ add_library(FD2D STATIC)
 
 target_sources(FD2D PRIVATE
     Application.cpp
+    AsyncRedrawSignal.cpp
     Backplate.cpp
     Button.cpp
     CheckBox.cpp
@@ -38,4 +39,10 @@ target_compile_definitions(FD2D PRIVATE
 
 if(MSVC)
     target_compile_options(FD2D PRIVATE /permissive- /utf-8)
+endif()
+
+option(FD2D_BUILD_TESTS "Build FD2D unit tests (configure from the FICture2 tree)" OFF)
+if(FD2D_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()

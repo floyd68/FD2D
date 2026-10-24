@@ -1,5 +1,8 @@
 #include "Application.h"
+#include "AsyncRedrawDispatch.h"
 #include "Util.h"
+#include <cstddef>
+#include <memory>
 #include <vector>
 
 namespace FD2D
@@ -99,9 +102,15 @@ namespace FD2D
     {
         for (;;)
         {
-            // Build the set of async redraw events (one per backplate).
+            // Build the set of async redraw events (one per backplate), keeping the
+            // owning backplate at the same index so a fired event maps back to it.
+            // Owners are held by shared_ptr for the iteration so a backplate that
+            // is unregistered while another one repaints stays valid until the
+            // pass completes (ProcessAsyncRedraw itself checks the HWND).
             std::vector<HANDLE> events;
+            std::vector<std::shared_ptr<Backplate>> eventOwners;
             events.reserve(m_backplates.size());
+            eventOwners.reserve(m_backplates.size());
             for (const auto& kv : m_backplates)
             {
                 if (kv.second)
@@ -110,6 +119,7 @@ namespace FD2D
                     if (ev)
                     {
                         events.push_back(ev);
+                        eventOwners.push_back(kv.second);
                     }
                 }
             }
@@ -144,16 +154,17 @@ namespace FD2D
                     return -1;
                 }
 
-                // One of our async redraw events fired.
+                // At least one async redraw event fired. The wait reports only the
+                // lowest signaled index, so service every owner whose event is
+                // signaled right now, once each, starting at the reported one. A
+                // busy owner that re-signals during its repaint cannot starve the
+                // others: it is not revisited until the next iteration.
                 if (waitRes >= WAIT_OBJECT_0 && waitRes < WAIT_OBJECT_0 + waitCount)
                 {
-                    for (const auto& kv : m_backplates)
+                    ServiceSignaledEvents(events, waitRes - WAIT_OBJECT_0, [&](std::size_t index)
                     {
-                        if (kv.second)
-                        {
-                            kv.second->ProcessAsyncRedraw();
-                        }
-                    }
+                        eventOwners[index]->ProcessAsyncRedraw();
+                    });
                     // Do NOT continue here:
                     // When worker completions arrive frequently (e.g., heavy I/O), we can starve the animation tick
                     // and make spinners/fades appear to "pause". We'll fall through to drain messages and run a
