@@ -4,6 +4,7 @@
 add_executable(FD2DTests
     TestHarness.h
     TestMain.cpp
+    AsyncRedrawDispatchTests.cpp
     AsyncRedrawSignalTests.cpp
 )
 
@@ -25,6 +26,17 @@ if(MSVC)
     target_compile_options(FD2DTests PRIVATE /permissive- /utf-8)
 endif()
 
+# Manual two-backplate host (needs a desktop; not registered with CTest).
+add_executable(FD2DAsyncRedrawHost AsyncRedrawHost.cpp)
+target_compile_definitions(FD2DAsyncRedrawHost PRIVATE FD2D_STATIC UNICODE _UNICODE)
+target_link_libraries(FD2DAsyncRedrawHost PRIVATE
+    FD2D d2d1 dwrite d3d11 dxgi d3dcompiler windowscodecs ole32 shell32
+)
+if(MSVC)
+    target_compile_options(FD2DAsyncRedrawHost PRIVATE /permissive- /utf-8)
+endif()
+
 add_test(NAME FD2D.AsyncRedrawSignal COMMAND FD2DTests AsyncRedrawSignal_)
+add_test(NAME FD2D.AsyncRedrawDispatch COMMAND FD2DTests AsyncRedrawDispatch_)
 # Safety net only: every wait inside the tests is bounded.
-set_tests_properties(FD2D.AsyncRedrawSignal PROPERTIES TIMEOUT 120)
+set_tests_properties(FD2D.AsyncRedrawSignal FD2D.AsyncRedrawDispatch PROPERTIES TIMEOUT 120)

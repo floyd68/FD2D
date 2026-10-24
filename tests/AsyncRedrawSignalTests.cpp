@@ -85,29 +85,61 @@ FD2D_TEST(AsyncRedrawSignal_StressNeverStrandsPendingWithoutEvent)
 
     constexpr int kProducers = 4;
     constexpr int kRequestsPerProducer = 5000;
+    constexpr int kCheckpointEvery = 1000;
+    constexpr auto kCheckpointTimeout = std::chrono::seconds(10);
     std::atomic<bool> producersDone { false };
     std::atomic<int> drains { 0 };
+    std::atomic<int> checkpointTimeouts { 0 };
 
+    // The consumer keeps draining until the producers are done AND the event is
+    // no longer set, so the last wakeup is always consumed here, not by the
+    // assertions below.
     std::thread consumer([&]()
     {
-        while (!producersDone.load())
+        for (;;)
         {
             if (WaitForSingleObject(signal.Event(), 20) == WAIT_OBJECT_0)
             {
                 signal.Drain();
                 ++drains;
             }
+            if (producersDone.load() && !signal.IsSignaled())
+            {
+                return;
+            }
         }
     });
 
+    // Producers prove overlap with the consumer: at every checkpoint a producer
+    // requests a redraw and then waits (bounded) until the consumer has drained
+    // at least once more. The request guarantees a set event, so the consumer
+    // must make progress; a timeout is a test failure, never a hang.
     std::vector<std::thread> producers;
     for (int p = 0; p < kProducers; ++p)
     {
         producers.emplace_back([&]()
         {
-            for (int i = 0; i < kRequestsPerProducer; ++i)
+            for (int i = 1; i <= kRequestsPerProducer; ++i)
             {
-                (void)signal.Request();
+                if (i % kCheckpointEvery == 0)
+                {
+                    const int before = drains.load();
+                    (void)signal.Request();
+                    const auto deadline = std::chrono::steady_clock::now() + kCheckpointTimeout;
+                    while (drains.load() == before)
+                    {
+                        if (std::chrono::steady_clock::now() >= deadline)
+                        {
+                            ++checkpointTimeouts;
+                            break;
+                        }
+                        std::this_thread::yield();
+                    }
+                }
+                else
+                {
+                    (void)signal.Request();
+                }
             }
         });
     }
@@ -118,23 +150,15 @@ FD2D_TEST(AsyncRedrawSignal_StressNeverStrandsPendingWithoutEvent)
     producersDone.store(true);
     consumer.join();
 
-    // Quiesced. The invariant is "never pending without an event": a pending
-    // request must still have its event set so the consumer would wake. The
-    // reverse (event set, nothing pending) is an allowed spurious wakeup: a
-    // producer that flipped the flag just before a drain sets the event just
-    // after it, and the consumer then drains an empty signal.
-    const bool pending = signal.IsPending();
-    const bool signaled = signal.IsSignaled();
-    FD2D_CHECK(!(pending && !signaled));
-    if (pending || signaled)
-    {
-        FD2D_CHECK(signal.Drain() == pending);
-    }
-    FD2D_CHECK(!signal.IsPending());
-    FD2D_CHECK(!signal.IsSignaled());
-
-    FD2D_CHECK(drains.load() >= 1);
+    // Every checkpoint saw the consumer drain while production was still running.
+    FD2D_CHECK(checkpointTimeouts.load() == 0);
+    FD2D_CHECK(drains.load() >= kProducers * (kRequestsPerProducer / kCheckpointEvery));
     FD2D_CHECK(drains.load() <= kProducers * kRequestsPerProducer);
+
+    // Quiesced: the consumer exits only with the event clear, and the invariant
+    // "never pending without an event" then implies nothing is pending either.
+    FD2D_CHECK(!signal.IsSignaled());
+    FD2D_CHECK(!signal.IsPending());
 
     // The signal is still usable after the storm.
     FD2D_CHECK(signal.Request());

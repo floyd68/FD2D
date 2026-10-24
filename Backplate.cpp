@@ -1558,8 +1558,10 @@ namespace FD2D
         if (RegisterClassExW(&wcex) == 0)
         {
             DWORD error = GetLastError();
-            // If the class is already registered, treat it as success
-            if (error == ERROR_ALREADY_EXISTS)
+            // If the class is already registered (a second Backplate with the same
+            // class name), treat it as success. RegisterClassExW reports this as
+            // ERROR_CLASS_ALREADY_EXISTS; the generic code is kept for safety.
+            if (error == ERROR_CLASS_ALREADY_EXISTS || error == ERROR_ALREADY_EXISTS)
             {
                 m_classRegistered = true;
                 return true;
