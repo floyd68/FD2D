@@ -122,7 +122,6 @@ namespace FD2D
 
     Backplate::Backplate()
     {
-        m_asyncRedrawEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         m_asyncRedrawControl = std::make_shared<AsyncRedrawToken::ControlBlock>();
         m_asyncRedrawControl->backplate = this;
     }
@@ -130,7 +129,6 @@ namespace FD2D
     Backplate::Backplate(const std::wstring& name)
         : m_name(name)
     {
-        m_asyncRedrawEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         m_asyncRedrawControl = std::make_shared<AsyncRedrawToken::ControlBlock>();
         m_asyncRedrawControl->backplate = this;
     }
@@ -143,12 +141,6 @@ namespace FD2D
         DetachAsyncRedrawControl();
         NotifyGraphicsInvalidated(GraphicsInvalidationReason::Shutdown);
         UnregisterDropTarget();
-
-        if (m_asyncRedrawEvent)
-        {
-            CloseHandle(m_asyncRedrawEvent);
-            m_asyncRedrawEvent = nullptr;
-        }
     }
 
     AsyncRedrawToken::AsyncRedrawToken(std::weak_ptr<ControlBlock> control)
@@ -644,29 +636,26 @@ namespace FD2D
 
     void Backplate::RequestAsyncRedraw()
     {
-        if (!m_asyncRedrawEvent || !m_window || !IsWindow(m_window))
+        if (!m_asyncRedrawSignal.IsValid() || !m_window || !IsWindow(m_window))
         {
             return;
         }
 
         // Coalesce multiple worker completions into a single wakeup.
-        const bool wasPending = m_asyncRedrawPending.exchange(true);
-        if (!wasPending)
-        {
-            SetEvent(m_asyncRedrawEvent);
-        }
+        (void)m_asyncRedrawSignal.Request();
     }
 
     void Backplate::ProcessAsyncRedraw()
     {
-        if (!m_window || !IsWindow(m_window) || !m_asyncRedrawEvent)
+        if (!m_window || !IsWindow(m_window) || !m_asyncRedrawSignal.IsValid())
         {
             return;
         }
 
-        // Drain the pending flag and reset the event for future signals.
-        m_asyncRedrawPending.store(false);
-        ResetEvent(m_asyncRedrawEvent);
+        // Reset the event and clear the pending flag (in that order) before the
+        // repaint below, so a completion that lands during the repaint signals a
+        // fresh wakeup and one that landed just before it is covered by the repaint.
+        (void)m_asyncRedrawSignal.Drain();
 
         // During interactive resizing, avoid synchronous repaint pressure.
         if (m_inSizeMove)
@@ -721,7 +710,7 @@ namespace FD2D
         // - Default: ~60fps for smooth interactions.
         // - While async redraw bursts are pending or during live resize:
         //   back off to ~30fps to reduce UI-thread render pressure.
-        const bool asyncPending = m_asyncRedrawPending.load();
+        const bool asyncPending = m_asyncRedrawSignal.IsPending();
         const unsigned long long minTickIntervalMs =
             (m_inSizeMove || asyncPending) ? 33ULL : 16ULL;
 
@@ -2473,7 +2462,7 @@ namespace FD2D
         // decode-completion redraw was already pending, for the [FPS] summary below.
         const RenderTrigger renderTrigger = m_pendingRenderTrigger;
         m_pendingRenderTrigger = RenderTrigger::Other;
-        const bool asyncPendingAtStart = m_asyncRedrawPending.load();
+        const bool asyncPendingAtStart = m_asyncRedrawSignal.IsPending();
 
         // Render loop: continue until no more render requests
         int renderLoopIterations = 0;

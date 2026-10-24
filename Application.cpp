@@ -99,9 +99,12 @@ namespace FD2D
     {
         for (;;)
         {
-            // Build the set of async redraw events (one per backplate).
+            // Build the set of async redraw events (one per backplate), keeping the
+            // owning backplate at the same index so a fired event maps back to it.
             std::vector<HANDLE> events;
+            std::vector<Backplate*> eventOwners;
             events.reserve(m_backplates.size());
+            eventOwners.reserve(m_backplates.size());
             for (const auto& kv : m_backplates)
             {
                 if (kv.second)
@@ -110,6 +113,7 @@ namespace FD2D
                     if (ev)
                     {
                         events.push_back(ev);
+                        eventOwners.push_back(kv.second.get());
                     }
                 }
             }
@@ -144,16 +148,12 @@ namespace FD2D
                     return -1;
                 }
 
-                // One of our async redraw events fired.
+                // One of our async redraw events fired: redraw only its owner. If
+                // several fired at once, the wait reports the lowest index and the
+                // others stay signaled (manual-reset) for the next loop iteration.
                 if (waitRes >= WAIT_OBJECT_0 && waitRes < WAIT_OBJECT_0 + waitCount)
                 {
-                    for (const auto& kv : m_backplates)
-                    {
-                        if (kv.second)
-                        {
-                            kv.second->ProcessAsyncRedraw();
-                        }
-                    }
+                    eventOwners[waitRes - WAIT_OBJECT_0]->ProcessAsyncRedraw();
                     // Do NOT continue here:
                     // When worker completions arrive frequently (e.g., heavy I/O), we can starve the animation tick
                     // and make spinners/fades appear to "pause". We'll fall through to drain messages and run a
