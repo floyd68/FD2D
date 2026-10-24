@@ -151,8 +151,11 @@ FD2D_TEST(AsyncRedrawSignal_StressNeverStrandsPendingWithoutEvent)
     consumer.join();
 
     // Every checkpoint saw the consumer drain while production was still running.
+    // Checkpoints of different producers may be satisfied by the same coalesced
+    // drain, but a producer's successive checkpoints need distinct drains, so at
+    // least one drain per checkpoint round happened during production.
     FD2D_CHECK(checkpointTimeouts.load() == 0);
-    FD2D_CHECK(drains.load() >= kProducers * (kRequestsPerProducer / kCheckpointEvery));
+    FD2D_CHECK(drains.load() >= kRequestsPerProducer / kCheckpointEvery);
     FD2D_CHECK(drains.load() <= kProducers * kRequestsPerProducer);
 
     // Quiesced: the consumer exits only with the event clear, and the invariant

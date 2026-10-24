@@ -5,7 +5,9 @@
 // are still requesting, and reports whether window B kept rendering while
 // window A's worker was flooding requests.
 //
-// Usage: FD2DAsyncRedrawHost [seconds-before-closing-B=6]
+// Usage: FD2DAsyncRedrawHost [seconds-before-closing-B=6] [b-idle]
+//   b-idle: window B's worker never requests a redraw; B must then render only
+//   its initial paints while A floods (unsignaled owners are not serviced).
 
 #include "Application.h"
 #include "Backplate.h"
@@ -93,6 +95,7 @@ namespace
 int main(int argc, char** argv)
 {
     const int closeAfterSeconds = (argc > 1) ? std::atoi(argv[1]) : 6;
+    const bool bIdle = (argc > 2) && std::string(argv[2]) == "b-idle";
 
     FD2D::InitContext context {};
     context.instance = GetModuleHandleW(nullptr);
@@ -121,13 +124,17 @@ int main(int argc, char** argv)
             std::this_thread::sleep_for(std::chrono::microseconds(200));
         }
     });
-    // Worker B is a normal decode cadence.
+    // Worker B is a normal decode cadence (or idle, to check that an unsignaled
+    // backplate is not redrawn by A's traffic).
     std::thread workerB([&]()
     {
         while (!stop.load())
         {
-            b.token->RequestAsyncRedraw();
-            ++b.requests;
+            if (!bIdle)
+            {
+                b.token->RequestAsyncRedraw();
+                ++b.requests;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     });
@@ -184,8 +191,22 @@ int main(int argc, char** argv)
     std::printf("B frames while A flooded: %u; seconds in which B rendered nothing: %d\n",
         bFramesWhileAFloods.load(), secondsWithoutBFrame.load());
 
-    const bool bStarved = secondsWithoutBFrame.load() > 0;
-    std::printf("RESULT: %s\n", bStarved ? "FAIL (B starved)" : "OK (B kept rendering; clean exit)");
+    bool failed = false;
+    if (bIdle)
+    {
+        // B never requested: after its initial paints (show/size), A's flood must
+        // not produce B frames. Allow the first second for those initial paints.
+        const unsigned bFrames = b.counter->frames.load();
+        std::printf("b-idle: B total frames=%u (initial paints only expected)\n", bFrames);
+        failed = (bFramesWhileAFloods.load() > bFrames) || (bFrames > 5);
+        std::printf("RESULT: %s\n", failed ? "FAIL (idle B was redrawn by A's traffic)" : "OK (idle B not serviced; clean exit)");
+    }
+    else
+    {
+        failed = secondsWithoutBFrame.load() > 0;
+        std::printf("RESULT: %s\n", failed ? "FAIL (B starved)" : "OK (B kept rendering; clean exit)");
+    }
+    const bool bStarved = failed;
 
     a.token.reset();
     b.token.reset();
