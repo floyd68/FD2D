@@ -236,6 +236,7 @@ namespace FD2D
             bool bumpRenderer);
         void NotifyGraphicsInvalidated(GraphicsInvalidationReason reason);
         void ScheduleNextFrame();
+        void OnRecoverableEndDrawFailure(HRESULT hr, const char* where);
         bool HandleDeviceLostHr(HRESULT hr, const char* where);
         void LogDeviceRemovedReason(HRESULT triggerHr, const char* where) const;
         void Layout();
@@ -319,6 +320,7 @@ namespace FD2D
         std::shared_ptr<AsyncRedrawToken::ControlBlock> m_asyncRedrawControl {};
         GraphicsGeneration m_graphicsGeneration {};
         std::unordered_map<const void*, std::shared_ptr<void>> m_deviceCache {};
+        unsigned m_endDrawFailureStreak { 0 };
 
         std::atomic<unsigned long long> m_lastAnimationRequestMs { 0 };
         std::atomic<unsigned long long> m_lastAnimationTickMs { 0 };

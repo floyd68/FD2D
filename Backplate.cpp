@@ -234,6 +234,27 @@ namespace FD2D
         }
     }
 
+    void Backplate::OnRecoverableEndDrawFailure(HRESULT hr, const char* where)
+    {
+        // Rebuild target-bound resources under a new target generation. The first
+        // few failures of a streak redraw immediately; after that, retries come
+        // from normal invalidation only, so a failure that keeps recurring (a
+        // resource that never gets rebuilt) cannot spin the render loop or flood
+        // the log. A successful frame ends the streak.
+        constexpr unsigned kImmediateRetries = 3;
+        ++m_endDrawFailureStreak;
+        if (m_endDrawFailureStreak == 1 || (m_endDrawFailureStreak % 100) == 0)
+        {
+            FD2D_LOG_INFO("[Graphics] {} failed hr=0x{:08X} (consecutive failures: {}); recreating target resources",
+                where, static_cast<unsigned>(hr), m_endDrawFailureStreak);
+        }
+        InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, false, true, false);
+        if (m_endDrawFailureStreak <= kImmediateRetries)
+        {
+            ScheduleNextFrame();
+        }
+    }
+
     void Backplate::ScheduleNextFrame()
     {
         if (m_window != nullptr && IsWindow(m_window))
@@ -2628,11 +2649,8 @@ namespace FD2D
                 // Any other failure (for example a resource from another domain)
                 // leaves the frame undrawn: rebuild the target-bound resources and
                 // render again rather than waiting for an unrelated invalidation.
-                FD2D_LOG_INFO("[Graphics] D2D EndDraw failed hr=0x{:08X}; recreating target resources",
-                    static_cast<unsigned>(hr));
                 m_offscreenRT.Reset();
-                InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, false, true, false);
-                ScheduleNextFrame();
+                OnRecoverableEndDrawFailure(hr, "D2D EndDraw");
                 return;
             }
 
@@ -2666,15 +2684,13 @@ namespace FD2D
                     }
                     if (FAILED(hr))
                     {
-                        FD2D_LOG_INFO("[Graphics] D2D EndDraw (offscreen copy) failed hr=0x{:08X}; recreating target resources",
-                            static_cast<unsigned>(hr));
                         m_offscreenRT.Reset();
-                        InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, false, true, false);
-                        ScheduleNextFrame();
+                        OnRecoverableEndDrawFailure(hr, "D2D EndDraw (offscreen copy)");
                         return;
                     }
                 }
             }
+            m_endDrawFailureStreak = 0;
             
             // D2D-only path complete - continue to check if re-render needed
         }
@@ -2898,12 +2914,10 @@ namespace FD2D
             // Other failures: the targets were discarded above; recreate them with
             // a new target generation (so cached D2D resources are rebuilt) and
             // render the frame again instead of presenting a partial one.
-            FD2D_LOG_INFO("[Graphics] D2D EndDraw failed hr=0x{:08X}; recreating targets",
-                static_cast<unsigned>(hr));
-            InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, false, true, false);
-            ScheduleNextFrame();
+            OnRecoverableEndDrawFailure(hr, "D2D EndDraw");
             return;
         }
+        m_endDrawFailureStreak = 0;
 
         // Detach target before Present for clean interop.
         if (m_d2dContext)
