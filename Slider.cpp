@@ -243,6 +243,13 @@ namespace FD2D
             return;
         }
 
+        // Brushes belong to the render target that created them: recreate them
+        // after a target/device recreation or a move to another backplate.
+        if (RefreshTargetResourceStamp(m_brushStamp))
+        {
+            m_brush.Reset();
+            m_label.ResetTargetResources();  // embedded, not attached: driven from here
+        }
         if (!m_brush)
         {
             target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &m_brush);

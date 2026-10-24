@@ -77,6 +77,8 @@ namespace FD2D
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brushHoverOverlay {};
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brushDrag {};
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brushGrip {};
+        // Target generation the brushes were created under (see GraphicsResourceStamp).
+        GraphicsResourceStamp m_brushStamp {};
     };
 }
 

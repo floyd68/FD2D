@@ -21,11 +21,13 @@ namespace FD2D
             float v;
         };
 
-        // Device-generation keyed quad resources (not a forever process-global cache).
+        // Quad pipeline for one D3D device. Stored in the owning backplate's
+        // device cache (Backplate::DeviceCacheEntry), which is cleared whenever
+        // that backplate discards its device: each backplate/device keeps its
+        // own set, and none outlives or crosses to another device.
         struct D3DQuadResources
         {
             Microsoft::WRL::ComPtr<ID3D11Device> device {};
-            uint64_t deviceGeneration { 0 };
             Microsoft::WRL::ComPtr<ID3D11VertexShader> vs {};
             Microsoft::WRL::ComPtr<ID3D11PixelShader> ps {};
             Microsoft::WRL::ComPtr<ID3D11PixelShader> psArray {};
@@ -42,35 +44,27 @@ namespace FD2D
             Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> checkerSrv {};
         };
 
-        static D3DQuadResources g_quad {};
+        // Address-unique key for this presenter's entry in the backplate device cache.
+        static const char kQuadCacheKey = 0;
 
-        static void ResetD3DQuadResources()
+        static D3DQuadResources* EnsureD3DQuadResources(Backplate& backplate, ID3D11Device* device, HRESULT& outHr)
         {
-            g_quad = {};
-        }
-
-        static HRESULT EnsureD3DQuadResources(ID3D11Device* device, uint64_t deviceGeneration)
-        {
+            outHr = S_OK;
             if (!device)
             {
-                return E_INVALIDARG;
+                outHr = E_INVALIDARG;
+                return nullptr;
             }
 
-            const bool sameDevice = (g_quad.device.Get() == device);
-            const bool sameGen = (g_quad.deviceGeneration == deviceGeneration);
-            if (g_quad.vs && g_quad.ps && g_quad.psArray && g_quad.psCube &&
-                g_quad.inputLayout && g_quad.vb &&
-                g_quad.samplerPoint && g_quad.samplerLinear && g_quad.samplerWrap &&
-                g_quad.blend && g_quad.rsScissor && g_quad.depthDisabled &&
-                g_quad.cb && g_quad.checkerSrv &&
-                sameDevice && sameGen)
+            auto cached = std::static_pointer_cast<D3DQuadResources>(backplate.DeviceCacheEntry(&kQuadCacheKey));
+            if (cached && cached->device.Get() == device)
             {
-                return S_OK;
+                return cached.get();
             }
 
-            ResetD3DQuadResources();
-            g_quad.device = device;
-            g_quad.deviceGeneration = deviceGeneration;
+            auto created = std::make_shared<D3DQuadResources>();
+            D3DQuadResources& quad = *created;
+            quad.device = device;
 
             const char* vsSrc =
                 "struct VSIn { float2 pos : POSITION; float2 uv : TEXCOORD0; };"
@@ -161,45 +155,53 @@ namespace FD2D
             HRESULT hr = D3DCompile(vsSrc, strlen(vsSrc), nullptr, nullptr, nullptr, "main", "vs_4_0", 0, 0, &vsBlob, &err);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
             hr = D3DCompile(psSrc, strlen(psSrc), nullptr, nullptr, nullptr, "main", "ps_4_0", 0, 0, &psBlob, &err);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
             hr = D3DCompile(psArraySrc, strlen(psArraySrc), nullptr, nullptr, nullptr, "main", "ps_4_0", 0, 0, &psArrayBlob, &err);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
             hr = D3DCompile(psCubeSrc, strlen(psCubeSrc), nullptr, nullptr, nullptr, "main", "ps_4_0", 0, 0, &psCubeBlob, &err);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
 
-            hr = device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &g_quad.vs);
+            hr = device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &quad.vs);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
-            hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &g_quad.ps);
+            hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &quad.ps);
             if (FAILED(hr))
             {
-                return hr;
-            }
-            hr = device->CreatePixelShader(
-                psArrayBlob->GetBufferPointer(), psArrayBlob->GetBufferSize(), nullptr, &g_quad.psArray);
-            if (FAILED(hr))
-            {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
             hr = device->CreatePixelShader(
-                psCubeBlob->GetBufferPointer(), psCubeBlob->GetBufferSize(), nullptr, &g_quad.psCube);
+                psArrayBlob->GetBufferPointer(), psArrayBlob->GetBufferSize(), nullptr, &quad.psArray);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
+            }
+            hr = device->CreatePixelShader(
+                psCubeBlob->GetBufferPointer(), psCubeBlob->GetBufferSize(), nullptr, &quad.psCube);
+            if (FAILED(hr))
+            {
+                outHr = hr;
+                return nullptr;
             }
 
             const D3D11_INPUT_ELEMENT_DESC il[] =
@@ -207,10 +209,11 @@ namespace FD2D
                 { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
                 { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D11_INPUT_PER_VERTEX_DATA, 0 },
             };
-            hr = device->CreateInputLayout(il, 2, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &g_quad.inputLayout);
+            hr = device->CreateInputLayout(il, 2, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &quad.inputLayout);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
 
             D3D11_BUFFER_DESC bd {};
@@ -218,10 +221,11 @@ namespace FD2D
             bd.ByteWidth = sizeof(QuadVertex) * 4;
             bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
             bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-            hr = device->CreateBuffer(&bd, nullptr, &g_quad.vb);
+            hr = device->CreateBuffer(&bd, nullptr, &quad.vb);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
 
             D3D11_SAMPLER_DESC sdPoint {};
@@ -233,29 +237,32 @@ namespace FD2D
             sdPoint.MinLOD = 0.0f;
             sdPoint.MaxLOD = D3D11_FLOAT32_MAX;
             sdPoint.ComparisonFunc = D3D11_COMPARISON_NEVER;
-            hr = device->CreateSamplerState(&sdPoint, &g_quad.samplerPoint);
+            hr = device->CreateSamplerState(&sdPoint, &quad.samplerPoint);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
 
             D3D11_SAMPLER_DESC sdLinear = sdPoint;
             sdLinear.Filter = D3D11_FILTER_ANISOTROPIC;
             sdLinear.MaxAnisotropy = 16;
-            hr = device->CreateSamplerState(&sdLinear, &g_quad.samplerLinear);
+            hr = device->CreateSamplerState(&sdLinear, &quad.samplerLinear);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
 
             D3D11_SAMPLER_DESC sdWrap = sdPoint;
             sdWrap.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
             sdWrap.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
             sdWrap.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-            hr = device->CreateSamplerState(&sdWrap, &g_quad.samplerWrap);
+            hr = device->CreateSamplerState(&sdWrap, &quad.samplerWrap);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
 
             D3D11_BLEND_DESC blend {};
@@ -267,10 +274,11 @@ namespace FD2D
             blend.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
             blend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
             blend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-            hr = device->CreateBlendState(&blend, &g_quad.blend);
+            hr = device->CreateBlendState(&blend, &quad.blend);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
 
             D3D11_RASTERIZER_DESC rd {};
@@ -278,10 +286,11 @@ namespace FD2D
             rd.CullMode = D3D11_CULL_NONE;
             rd.DepthClipEnable = TRUE;
             rd.ScissorEnable = TRUE;
-            hr = device->CreateRasterizerState(&rd, &g_quad.rsScissor);
+            hr = device->CreateRasterizerState(&rd, &quad.rsScissor);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
 
             D3D11_DEPTH_STENCIL_DESC depth {};
@@ -290,10 +299,11 @@ namespace FD2D
             depth.DepthFunc = D3D11_COMPARISON_ALWAYS;
             hr = device->CreateDepthStencilState(
                 &depth,
-                &g_quad.depthDisabled);
+                &quad.depthDisabled);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
 
             D3D11_BUFFER_DESC cbd {};
@@ -301,10 +311,11 @@ namespace FD2D
             cbd.ByteWidth = 16;
             cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
             cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-            hr = device->CreateBuffer(&cbd, nullptr, &g_quad.cb);
+            hr = device->CreateBuffer(&cbd, nullptr, &quad.cb);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
 
             constexpr UINT texW = 64;
@@ -344,16 +355,19 @@ namespace FD2D
             hr = device->CreateTexture2D(&td, &init, &tex);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
 
-            hr = device->CreateShaderResourceView(tex.Get(), nullptr, &g_quad.checkerSrv);
+            hr = device->CreateShaderResourceView(tex.Get(), nullptr, &quad.checkerSrv);
             if (FAILED(hr))
             {
-                return hr;
+                outHr = hr;
+                return nullptr;
             }
 
-            return S_OK;
+            backplate.SetDeviceCacheEntry(&kQuadCacheKey, created);
+            return created.get();
         }
 
         static bool TryDiscoverSrvTexelSize(ID3D11ShaderResourceView* srv, UINT& outW, UINT& outH)
@@ -423,11 +437,6 @@ namespace FD2D
         return TryDiscoverSrvTexelSize(srv, width, height);
     }
 
-    void ResetShaderResourcePresenter()
-    {
-        ResetD3DQuadResources();
-    }
-
     HRESULT DrawShaderResource(
         ID3D11DeviceContext* context,
         Backplate& backplate,
@@ -451,12 +460,13 @@ namespace FD2D
             return E_FAIL;
         }
 
-        const uint64_t deviceGeneration = backplate.GetGraphicsGeneration().device;
-        HRESULT hr = EnsureD3DQuadResources(device, deviceGeneration);
-        if (FAILED(hr))
+        HRESULT hr = S_OK;
+        D3DQuadResources* quadResources = EnsureD3DQuadResources(backplate, device, hr);
+        if (!quadResources)
         {
-            return hr;
+            return FAILED(hr) ? hr : E_FAIL;
         }
+        D3DQuadResources& quad = *quadResources;
 
         const D2D1_SIZE_U logicalCs = backplate.ClientSize();
         D2D1_SIZE_U cs = backplate.RenderSurfaceSize();
@@ -504,15 +514,15 @@ namespace FD2D
         switch (srvDesc.ViewDimension)
         {
         case D3D11_SRV_DIMENSION_TEXTURE2D:
-            shader = g_quad.ps.Get();
+            shader = quad.ps.Get();
             break;
 
         case D3D11_SRV_DIMENSION_TEXTURE2DARRAY:
-            shader = g_quad.psArray.Get();
+            shader = quad.psArray.Get();
             break;
 
         case D3D11_SRV_DIMENSION_TEXTURECUBE:
-            shader = g_quad.psCube.Get();
+            shader = quad.psCube.Get();
             break;
 
         default:
@@ -631,7 +641,7 @@ namespace FD2D
             &destination,
             nullptr);
         context->OMSetDepthStencilState(
-            g_quad.depthDisabled.Get(),
+            quad.depthDisabled.Get(),
             0);
         const D3D11_VIEWPORT presentationViewport
         {
@@ -645,7 +655,7 @@ namespace FD2D
         context->RSSetViewports(
             1,
             &presentationViewport);
-        context->RSSetState(g_quad.rsScissor.Get());
+        context->RSSetState(quad.rsScissor.Get());
         context->RSSetScissorRects(1, &scissor);
 
         const auto toNdcX = [cs](float x)
@@ -711,7 +721,7 @@ namespace FD2D
             rotate(zoomed.right, zoomed.bottom, brx, bry);
 
             D3D11_MAPPED_SUBRESOURCE mapped {};
-            HRESULT mapHr = context->Map(g_quad.vb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+            HRESULT mapHr = context->Map(quad.vb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
             if (FAILED(mapHr))
             {
                 return mapHr;
@@ -721,23 +731,23 @@ namespace FD2D
             vertices[1] = { toNdcX(trx), toNdcY(try_), uMax, 0.0f };
             vertices[2] = { toNdcX(blx), toNdcY(bly), 0.0f, vMax };
             vertices[3] = { toNdcX(brx), toNdcY(bry), uMax, vMax };
-            context->Unmap(g_quad.vb.Get(), 0);
+            context->Unmap(quad.vb.Get(), 0);
 
             UINT stride = sizeof(QuadVertex);
             UINT offset = 0;
-            context->IASetInputLayout(g_quad.inputLayout.Get());
-            context->IASetVertexBuffers(0, 1, g_quad.vb.GetAddressOf(), &stride, &offset);
+            context->IASetInputLayout(quad.inputLayout.Get());
+            context->IASetVertexBuffers(0, 1, quad.vb.GetAddressOf(), &stride, &offset);
             context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-            context->VSSetShader(g_quad.vs.Get(), nullptr, 0);
+            context->VSSetShader(quad.vs.Get(), nullptr, 0);
             context->PSSetShader(shader, nullptr, 0);
             context->PSSetSamplers(0, 1, &sampler);
             context->PSSetShaderResources(0, 1, &source);
 
             float blendFactor[4] = {};
-            context->OMSetBlendState(g_quad.blend.Get(), blendFactor, 0xFFFFFFFF);
+            context->OMSetBlendState(quad.blend.Get(), blendFactor, 0xFFFFFFFF);
 
             D3D11_MAPPED_SUBRESOURCE mappedCb {};
-            mapHr = context->Map(g_quad.cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedCb);
+            mapHr = context->Map(quad.cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedCb);
             if (FAILED(mapHr))
             {
                 return mapHr;
@@ -747,9 +757,9 @@ namespace FD2D
             constants[1] = channelMode;
             constants[2] = encoding;
             constants[3] = usage;
-            context->Unmap(g_quad.cb.Get(), 0);
+            context->Unmap(quad.cb.Get(), 0);
 
-            ID3D11Buffer* cb = g_quad.cb.Get();
+            ID3D11Buffer* cb = quad.cb.Get();
             context->PSSetConstantBuffers(0, 1, &cb);
             context->Draw(4, 0);
 
@@ -771,20 +781,20 @@ namespace FD2D
             const float width = (std::max)(1.0f, dest.right - dest.left);
             const float height = (std::max)(1.0f, dest.bottom - dest.top);
             drawHr = drawRect(
-                g_quad.checkerSrv.Get(),
+                quad.checkerSrv.Get(),
                 dest,
                 width / 64.0f,
                 height / 64.0f,
-                g_quad.samplerWrap.Get(),
-                g_quad.ps.Get(),
+                quad.samplerWrap.Get(),
+                quad.ps.Get(),
                 0.0f,
                 0.0f,
                 0.0f);
         }
 
         ID3D11SamplerState* sampler = draw.highQualitySampling
-            ? g_quad.samplerLinear.Get()
-            : g_quad.samplerPoint.Get();
+            ? quad.samplerLinear.Get()
+            : quad.samplerPoint.Get();
         if (SUCCEEDED(drawHr))
         {
             drawHr = drawRect(
@@ -826,6 +836,7 @@ namespace FD2D
             (m_srv != nullptr);
 
         m_bitmap = std::move(bitmap);
+        m_bitmapStamp = m_bitmap ? CurrentTargetStamp() : GraphicsResourceStamp {};
         m_srv.Reset();
         m_srvWidth = 0;
         m_srvHeight = 0;
@@ -855,6 +866,7 @@ namespace FD2D
             (m_srvHeight != h);
 
         m_srv = std::move(srv);
+        m_srvStamp = m_srv ? CurrentDeviceStamp() : GraphicsResourceStamp {};
         m_srvWidth = w;
         m_srvHeight = h;
         m_bitmap.Reset();
@@ -934,41 +946,40 @@ namespace FD2D
         return false;
     }
 
-    void Image::OnGraphicsInvalidated(GraphicsInvalidationReason reason, const GraphicsGeneration& generation)
+    bool Image::DropStaleContent()
     {
-        switch (reason)
+        bool dropped = false;
+        if (m_bitmap && !(m_bitmapStamp == CurrentTargetStamp()))
         {
-        case GraphicsInvalidationReason::TargetRecreated:
-            // D2D bitmaps/brushes are target-bound; SRVs on the same D3D device remain valid.
             m_bitmap.Reset();
-            ResetCheckerBrushes();
-            Invalidate();
-            break;
-
-        case GraphicsInvalidationReason::DeviceLost:
-        case GraphicsInvalidationReason::RendererFallback:
-            m_bitmap.Reset();
+            dropped = true;
+        }
+        if (m_srv && !(m_srvStamp == CurrentDeviceStamp()))
+        {
             m_srv.Reset();
             m_srvWidth = 0;
             m_srvHeight = 0;
-            ResetCheckerBrushes();
-            ResetD3DQuadResources();
-            Invalidate();
-            break;
+            dropped = true;
+        }
+        return dropped;
+    }
 
-        case GraphicsInvalidationReason::Shutdown:
+    void Image::OnGraphicsInvalidated(GraphicsInvalidationReason reason, const GraphicsGeneration& generation)
+    {
+        if (reason == GraphicsInvalidationReason::Shutdown)
+        {
             // Teardown only - do not Invalidate/Render; the HWND may already be gone.
             m_bitmap.Reset();
             m_srv.Reset();
             m_srvWidth = 0;
             m_srvHeight = 0;
             ResetCheckerBrushes();
-            ResetD3DQuadResources();
-            break;
-
-        case GraphicsInvalidationReason::Resize:
-            // Simple swapchain resize keeps the same device resources.
-            break;
+        }
+        else if (DropStaleContent())
+        {
+            // The generations decide: a target-only recreation keeps the SRV,
+            // a device change drops it. The owner re-supplies content.
+            Invalidate();
         }
 
         Wnd::OnGraphicsInvalidated(reason, generation);
@@ -980,6 +991,9 @@ namespace FD2D
         {
             return;
         }
+
+        // Never draw content from a previous target or device.
+        (void)DropStaleContent();
 
         const D2D1_RECT_F clipRect = LayoutRect();
         target->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
@@ -1020,6 +1034,10 @@ namespace FD2D
 
                 if (m_drawState.alphaCheckerboardEnabled)
                 {
+                    if (RefreshTargetResourceStamp(m_checkerStamp))
+                    {
+                        ResetCheckerBrushes();
+                    }
                     if (!m_checkerLightBrush || !m_checkerDarkBrush)
                     {
                         (void)target->CreateSolidColorBrush(
@@ -1099,6 +1117,7 @@ namespace FD2D
 
     void Image::OnRenderD3D(ID3D11DeviceContext* context)
     {
+        (void)DropStaleContent();
         if (context && m_backplate && m_srv && m_srvWidth > 0 && m_srvHeight > 0)
         {
             ShaderResourceDraw draw;

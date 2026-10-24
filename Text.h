@@ -16,6 +16,10 @@ namespace FD2D
 
         Size Measure(Size available) override;
         void SetText(const std::wstring& text);
+        // Drops target-bound resources (the brush). Controls that embed a Text
+        // as a member - not attached to a backplate, so it cannot see the
+        // generations itself - call this when their own target stamp changes.
+        void ResetTargetResources();
         void SetColor(const D2D1_COLOR_F& color);
         void SetRect(const D2D1_RECT_F& rect);
         void SetFont(const std::wstring& familyName, FLOAT size = 16.0f);
@@ -72,6 +76,8 @@ namespace FD2D
         ClickHandler m_onClick {};
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brush {};
+        // Target generation the brushes were created under (see GraphicsResourceStamp).
+        GraphicsResourceStamp m_brushStamp {};
         Microsoft::WRL::ComPtr<IDWriteTextFormat> m_format {};
         Microsoft::WRL::ComPtr<IDWriteInlineObject> m_ellipsisSign {};
         Microsoft::WRL::ComPtr<IDWriteTextLayout> m_textLayout {};

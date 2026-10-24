@@ -61,6 +61,8 @@ namespace FD2D
         ValueChangedHandler m_changed {};
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brush {};
+        // Target generation the brushes were created under (see GraphicsResourceStamp).
+        GraphicsResourceStamp m_brushStamp {};
 
         static constexpr float kTrackHeight = 4.0f;
         static constexpr float kThumbRadius = 7.0f;

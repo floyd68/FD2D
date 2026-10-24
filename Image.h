@@ -57,6 +57,10 @@ namespace FD2D
     private:
         bool TryGetContentSize(D2D1_SIZE_F& outSize) const;
         void ResetCheckerBrushes();
+        // Drops content whose resource domain changed: the D2D bitmap on a new
+        // target generation, the SRV on a new device generation (an SRV survives
+        // target-only recreation). Returns true if anything was dropped.
+        bool DropStaleContent();
 
         // Strong refs to current content; D2D and D3D mutually exclusive.
         Microsoft::WRL::ComPtr<ID2D1Bitmap> m_bitmap {};
@@ -67,5 +71,10 @@ namespace FD2D
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_checkerLightBrush {};
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_checkerDarkBrush {};
+
+        // Generations the content and brushes were created under.
+        GraphicsResourceStamp m_bitmapStamp {};
+        GraphicsResourceStamp m_srvStamp {};
+        GraphicsResourceStamp m_checkerStamp {};
     };
 }
