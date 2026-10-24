@@ -81,6 +81,8 @@ namespace FD2D
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_dragDimBrush {};
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_dragOutlineBrush {};
+        // Target generation the brushes were created under (see GraphicsResourceStamp).
+        GraphicsResourceStamp m_brushStamp {};
     };
 }
 

@@ -623,6 +623,40 @@ namespace FD2D
         return m_backplate;
     }
 
+    GraphicsResourceStamp Wnd::CurrentTargetStamp() const
+    {
+        GraphicsResourceStamp stamp {};
+        stamp.owner = m_backplate;
+        stamp.generation = m_backplate ? m_backplate->GetGraphicsGeneration().target : 0;
+        stamp.valid = true;
+        return stamp;
+    }
+
+    GraphicsResourceStamp Wnd::CurrentDeviceStamp() const
+    {
+        GraphicsResourceStamp stamp {};
+        stamp.owner = m_backplate;
+        stamp.generation = m_backplate ? m_backplate->GetGraphicsGeneration().device : 0;
+        stamp.valid = true;
+        return stamp;
+    }
+
+    bool Wnd::RefreshTargetResourceStamp(GraphicsResourceStamp& stamp) const
+    {
+        const GraphicsResourceStamp current = CurrentTargetStamp();
+        const bool changed = !(stamp == current);
+        stamp = current;
+        return changed;
+    }
+
+    bool Wnd::RefreshDeviceResourceStamp(GraphicsResourceStamp& stamp) const
+    {
+        const GraphicsResourceStamp current = CurrentDeviceStamp();
+        const bool changed = !(stamp == current);
+        stamp = current;
+        return changed;
+    }
+
     void Wnd::Invalidate() const
     {
         if (m_backplate == nullptr)

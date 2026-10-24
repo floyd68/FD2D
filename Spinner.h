@@ -53,6 +53,8 @@ namespace FD2D
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brush {};
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_dimBrush {};
+        // Target generation the brushes were created under (see GraphicsResourceStamp).
+        GraphicsResourceStamp m_brushStamp {};
     };
 }
 

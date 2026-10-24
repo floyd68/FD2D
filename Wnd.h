@@ -25,6 +25,26 @@ namespace FD2D
         uint64_t renderer { 0 };
     };
 
+    // Which graphics resources a cached control resource was created for: the
+    // owning backplate and the generation it was created under. Resource domains:
+    // D2D brushes, bitmaps and other render-target resources follow the target
+    // generation (also bumped when the D2D device or HWND target is recreated);
+    // D3D resources and SRVs follow the device generation. DirectWrite formats
+    // and layouts are device-independent and follow neither.
+    struct GraphicsResourceStamp
+    {
+        const Backplate* owner { nullptr };
+        uint64_t generation { 0 };
+        bool valid { false };
+
+        bool operator==(const GraphicsResourceStamp& other) const
+        {
+            return valid == other.valid && owner == other.owner && generation == other.generation;
+        }
+    };
+
+    // Reasons describe what happened; GraphicsGeneration (and so
+    // GraphicsResourceStamp) is the authoritative key for resource validity.
     enum class GraphicsInvalidationReason
     {
         TargetRecreated,
@@ -212,6 +232,17 @@ namespace FD2D
 
     protected:
         Backplate* BackplateRef() const;
+
+        // Stamps for the current backplate and its target (D2D) or device (D3D)
+        // generation. An unattached control gets a stamp with no owner.
+        GraphicsResourceStamp CurrentTargetStamp() const;
+        GraphicsResourceStamp CurrentDeviceStamp() const;
+        // Returns true when resources created under `stamp` must be recreated
+        // (first use, another backplate, or a new generation) and records the
+        // current stamp. Call before using cached target- or device-bound
+        // resources in OnRender / OnRenderD3D.
+        bool RefreshTargetResourceStamp(GraphicsResourceStamp& stamp) const;
+        bool RefreshDeviceResourceStamp(GraphicsResourceStamp& stamp) const;
 
         // LayoutRect() as an FD2D::Rect (x/y/w/h).
         Rect BoundsRect() const;

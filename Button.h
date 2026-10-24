@@ -38,6 +38,8 @@ namespace FD2D
         bool m_pressed { false };
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brush {};
+        // Target generation the brushes were created under (see GraphicsResourceStamp).
+        GraphicsResourceStamp m_brushStamp {};
         Text m_label {};
         ClickHandler m_click {};
     };

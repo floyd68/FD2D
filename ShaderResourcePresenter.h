@@ -34,6 +34,4 @@ namespace FD2D
         Backplate& backplate,
         ID3D11ShaderResourceView* srv,
         const ShaderResourceDraw& draw);
-
-    void ResetShaderResourcePresenter();
 }

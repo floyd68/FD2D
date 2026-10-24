@@ -191,6 +191,11 @@ namespace FD2D
         }
     }
 
+    void Text::ResetTargetResources()
+    {
+        m_brush.Reset();
+    }
+
     void Text::EnsureResources(ID2D1RenderTarget* target)
     {
         if (target == nullptr)
@@ -198,6 +203,12 @@ namespace FD2D
             return;
         }
 
+        // Brushes belong to the render target that created them: recreate them
+        // after a target/device recreation or a move to another backplate.
+        if (RefreshTargetResourceStamp(m_brushStamp))
+        {
+            m_brush.Reset();
+        }
         if (!m_brush)
         {
             target->CreateSolidColorBrush(m_color, &m_brush);

@@ -342,6 +342,15 @@ namespace FD2D
         const auto& rect = LayoutRect();
 
         // Create brushes
+        // Brushes belong to the render target that created them: recreate them
+        // after a target/device recreation or a move to another backplate.
+        if (RefreshTargetResourceStamp(m_brushStamp))
+        {
+            m_brushNormal.Reset();
+            m_brushHoverOverlay.Reset();
+            m_brushDrag.Reset();
+            m_brushGrip.Reset();
+        }
         if (!m_brushNormal)
         {
             target->CreateSolidColorBrush(D2D1::ColorF(0.3f, 0.3f, 0.3f, 0.5f), &m_brushNormal);

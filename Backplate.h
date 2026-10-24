@@ -139,7 +139,17 @@ namespace FD2D
         std::shared_ptr<AsyncRedrawToken> GetAsyncRedrawToken() const;
 
         // Monotonic graphics resource generations (device / target / renderer backend).
+        // These, not GraphicsInvalidationReason, decide resource validity: target
+        // for D2D resources, device for D3D resources and SRVs.
         GraphicsGeneration GetGraphicsGeneration() const { return m_graphicsGeneration; }
+
+        // Per-device state shared by the controls of this backplate (for example
+        // the Image quad pipeline), keyed by an address-unique key. Entries are
+        // dropped whenever this backplate discards its device, so they never
+        // outlive the device they were created on, and backplates never share or
+        // evict each other's entries.
+        std::shared_ptr<void> DeviceCacheEntry(const void* key) const;
+        void SetDeviceCacheEntry(const void* key, std::shared_ptr<void> entry);
 
         // Animation scheduling (spinner / cross-fade): avoids busy WM_PAINT loops.
         void RequestAnimationFrame();
@@ -206,6 +216,9 @@ namespace FD2D
         bool ClearRectD3D(const D2D1_RECT_F& rect, const D2D1_COLOR_F& color);
 
     private:
+        // Windowless tests drive generation changes and device discards directly.
+        friend struct BackplateTestAccess;
+
         static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
         bool RegisterClass(const WindowOptions& options);
         HRESULT Subclass(HWND windowHandle);
@@ -305,6 +318,7 @@ namespace FD2D
         AsyncRedrawSignal m_asyncRedrawSignal {};
         std::shared_ptr<AsyncRedrawToken::ControlBlock> m_asyncRedrawControl {};
         GraphicsGeneration m_graphicsGeneration {};
+        std::unordered_map<const void*, std::shared_ptr<void>> m_deviceCache {};
 
         std::atomic<unsigned long long> m_lastAnimationRequestMs { 0 };
         std::atomic<unsigned long long> m_lastAnimationTickMs { 0 };

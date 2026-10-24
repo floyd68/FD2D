@@ -246,6 +246,13 @@ namespace FD2D
         }
 
         // While dragging: add subtle feedback on both panes (dim + outline).
+        // Brushes belong to the render target that created them: recreate them
+        // after a target/device recreation or a move to another backplate.
+        if (RefreshTargetResourceStamp(m_brushStamp))
+        {
+            m_dragDimBrush.Reset();
+            m_dragOutlineBrush.Reset();
+        }
         if (!m_dragDimBrush)
         {
             (void)target->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.06f), &m_dragDimBrush);

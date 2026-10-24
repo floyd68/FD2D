@@ -34,6 +34,18 @@ FD2D uses a modern **Measure/Arrange** pass:
 
 The goal is to avoid hard-coded absolute positioning in user code.
 
+## Graphics resources and invalidation
+
+`Backplate::GetGraphicsGeneration()` returns monotonic `device`, `target`, and `renderer` generations; they, not `GraphicsInvalidationReason`, decide whether a cached resource is still valid:
+
+- D2D brushes, bitmaps and other render-target resources follow the **target** generation (FD2D also bumps it when it recreates the HWND render target or the D2D device).
+- D3D resources and SRVs follow the **device** generation; an SRV survives a target-only recreation.
+- DirectWrite text formats and layouts are device-independent and are rebuilt only when text, font or size changes.
+
+Controls record a `GraphicsResourceStamp` (backplate + generation) with each cached resource and call `RefreshTargetResourceStamp` / `RefreshDeviceResourceStamp` before using it. A control that embeds another control as a member (for example a `Text` label) resets the member's resources from its own stamp, because the member is not attached to the backplate.
+
+Any failed `EndDraw` (primary or offscreen copy) bumps the target generation and schedules a new frame; `D2DERR_RECREATE_TARGET` on the D3D11 device context and device-removed errors recreate the whole device (device and target generations). Per-device state shared by controls (such as the `Image` quad pipeline) lives in `Backplate::DeviceCacheEntry`, owned by each backplate and cleared when its device is discarded.
+
 ## Building
 
 ### Static library (default)

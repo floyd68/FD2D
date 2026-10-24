@@ -216,6 +216,24 @@ namespace FD2D
         }
     }
 
+    std::shared_ptr<void> Backplate::DeviceCacheEntry(const void* key) const
+    {
+        const auto it = m_deviceCache.find(key);
+        return it != m_deviceCache.end() ? it->second : nullptr;
+    }
+
+    void Backplate::SetDeviceCacheEntry(const void* key, std::shared_ptr<void> entry)
+    {
+        if (entry)
+        {
+            m_deviceCache[key] = std::move(entry);
+        }
+        else
+        {
+            m_deviceCache.erase(key);
+        }
+    }
+
     void Backplate::ScheduleNextFrame()
     {
         if (m_window != nullptr && IsWindow(m_window))
@@ -2057,6 +2075,8 @@ namespace FD2D
     void Backplate::DiscardDeviceResources()
     {
         DiscardD2DTargets();
+        // Per-device control state goes with the device.
+        m_deviceCache.clear();
 
         if (m_d3dContext)
         {
@@ -2603,6 +2623,18 @@ namespace FD2D
                 ScheduleNextFrame();
                 return;
             }
+            if (FAILED(hr))
+            {
+                // Any other failure (for example a resource from another domain)
+                // leaves the frame undrawn: rebuild the target-bound resources and
+                // render again rather than waiting for an unrelated invalidation.
+                FD2D_LOG_INFO("[Graphics] D2D EndDraw failed hr=0x{:08X}; recreating target resources",
+                    static_cast<unsigned>(hr));
+                m_offscreenRT.Reset();
+                InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, false, true, false);
+                ScheduleNextFrame();
+                return;
+            }
 
             // Copy offscreen buffer to window if double-buffering is active
             if (useOffscreenThisFrame && m_offscreenRT)
@@ -2627,6 +2659,15 @@ namespace FD2D
                     if (hr == D2DERR_RECREATE_TARGET)
                     {
                         m_hwndRenderTarget.Reset();
+                        m_offscreenRT.Reset();
+                        InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, false, true, false);
+                        ScheduleNextFrame();
+                        return;
+                    }
+                    if (FAILED(hr))
+                    {
+                        FD2D_LOG_INFO("[Graphics] D2D EndDraw (offscreen copy) failed hr=0x{:08X}; recreating target resources",
+                            static_cast<unsigned>(hr));
                         m_offscreenRT.Reset();
                         InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, false, true, false);
                         ScheduleNextFrame();
@@ -2838,11 +2879,30 @@ namespace FD2D
             // Release the D2D target immediately so the swapchain backbuffer isn't held.
             DiscardD2DTargets();
 
-            // Device lost -> full recreate next frame. Otherwise, just recreate targets.
+            // Device lost -> full recreate next frame.
             if (HandleDeviceLostHr(hr, "D2D EndDraw"))
             {
                 return;
             }
+            if (hr == D2DERR_RECREATE_TARGET)
+            {
+                // On a device context this means the D2D device is unusable:
+                // recreate the whole device stack (new device and target generations).
+                LogDeviceRemovedReason(hr, "D2D EndDraw (recreate target)");
+                DiscardDeviceResources();
+                InvalidateGraphics(GraphicsInvalidationReason::DeviceLost, true, true, false);
+                ScheduleNextFrame();
+                return;
+            }
+
+            // Other failures: the targets were discarded above; recreate them with
+            // a new target generation (so cached D2D resources are rebuilt) and
+            // render the frame again instead of presenting a partial one.
+            FD2D_LOG_INFO("[Graphics] D2D EndDraw failed hr=0x{:08X}; recreating targets",
+                static_cast<unsigned>(hr));
+            InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, false, true, false);
+            ScheduleNextFrame();
+            return;
         }
 
         // Detach target before Present for clean interop.

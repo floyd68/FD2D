@@ -61,6 +61,8 @@ namespace FD2D
         D2D1_COLOR_F m_dropdownBackground { 0.10f, 0.10f, 0.12f, 0.75f };
 
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_brush {};
+        // Target generation the brushes were created under (see GraphicsResourceStamp).
+        GraphicsResourceStamp m_brushStamp {};
 
         static constexpr float kItemHeight = 22.0f;
         static constexpr float kArrowWidth = 18.0f;
