@@ -142,6 +142,19 @@ namespace FD2D
         Invalidate();
     }
 
+    void ScrollView::ShiftScrollX(float delta)
+    {
+        if (!m_enableHScroll || delta == 0.0f)
+        {
+            return;
+        }
+        m_scrollX = (std::max)(0.0f, m_scrollX + delta);
+        m_targetScrollX = (std::max)(0.0f, m_targetScrollX + delta);
+        ClampScroll();
+        ClampTargetScroll();
+        Invalidate();
+    }
+
     void ScrollView::SetScrollStep(float step)
     {
         m_scrollStep = (std::max)(1.0f, step);
