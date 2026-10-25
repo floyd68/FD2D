@@ -7,6 +7,7 @@ add_executable(FD2DTests
     AsyncRedrawDispatchTests.cpp
     AsyncRedrawSignalTests.cpp
     ImageTransformTests.cpp
+    ScrollViewTests.cpp
     GraphicsGenerationTests.cpp
 )
 
@@ -50,5 +51,6 @@ add_test(NAME FD2D.AsyncRedrawSignal COMMAND FD2DTests AsyncRedrawSignal_)
 add_test(NAME FD2D.AsyncRedrawDispatch COMMAND FD2DTests AsyncRedrawDispatch_)
 add_test(NAME FD2D.ImageTransform COMMAND FD2DTests ImageTransform_)
 add_test(NAME FD2D.GraphicsGeneration COMMAND FD2DTests GraphicsGeneration_)
+add_test(NAME FD2D.ScrollView COMMAND FD2DTests ScrollViewShift_)
 # Safety net only: every wait inside the tests is bounded.
-set_tests_properties(FD2D.AsyncRedrawSignal FD2D.AsyncRedrawDispatch FD2D.ImageTransform FD2D.GraphicsGeneration PROPERTIES TIMEOUT 120)
+set_tests_properties(FD2D.AsyncRedrawSignal FD2D.AsyncRedrawDispatch FD2D.ImageTransform FD2D.GraphicsGeneration FD2D.ScrollView PROPERTIES TIMEOUT 120)

@@ -33,6 +33,14 @@ namespace FD2D
 
         void SetScrollX(float x);
         float ScrollX() const { return m_scrollX; }
+        // Where a smooth scroll in progress is heading (ScrollX() when idle).
+        float TargetScrollX() const { return m_targetScrollX; }
+
+        // Moves the current and the target horizontal offset by `delta`
+        // (clamped to the scrollable range). Use it to compensate content that
+        // changed size before the viewport: unlike SetScrollX, a smooth scroll in
+        // progress keeps running towards the shifted target.
+        void ShiftScrollX(float delta);
 
         void SetScrollStep(float step);
         float ScrollStep() const { return m_scrollStep; }
