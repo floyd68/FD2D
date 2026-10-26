@@ -1883,16 +1883,8 @@ namespace FD2D
         return S_OK;
     }
 
-    HRESULT Backplate::CreateRenderTarget()
+    HRESULT Backplate::CreateDeviceStack(D3D_DRIVER_TYPE driverType)
     {
-        DiscardDeviceResources();
-        InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, true, true, false);
-
-        if (m_window == nullptr)
-        {
-            return E_INVALIDARG;
-        }
-
         // --- Create D3D11 device (BGRA required for D2D interop) ---
         UINT deviceFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 #if defined(_DEBUG)
@@ -1910,7 +1902,7 @@ namespace FD2D
         D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_0;
         HRESULT hr = D3D11CreateDevice(
             nullptr,
-            D3D_DRIVER_TYPE_HARDWARE,
+            driverType,
             nullptr,
             deviceFlags,
             featureLevels,
@@ -1925,7 +1917,7 @@ namespace FD2D
             deviceFlags &= ~D3D11_CREATE_DEVICE_DEBUG;
             hr = D3D11CreateDevice(
                 nullptr,
-                D3D_DRIVER_TYPE_HARDWARE,
+                driverType,
                 nullptr,
                 deviceFlags,
                 featureLevels,
@@ -1997,6 +1989,25 @@ namespace FD2D
             // Direct2D 1.0: Use default (LINEAR), which is already set
         }
 
+        return S_OK;
+    }
+
+    HRESULT Backplate::CreateRenderTarget()
+    {
+        DiscardDeviceResources();
+        InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, true, true, false);
+
+        if (m_window == nullptr)
+        {
+            return E_INVALIDARG;
+        }
+
+        HRESULT hr = CreateDeviceStack(D3D_DRIVER_TYPE_HARDWARE);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
         // Update title bar info after render target is created
         UpdateTitleBarInfo();
 
@@ -2005,6 +2016,13 @@ namespace FD2D
         m_size = D2D1::SizeU(clientRect.right - clientRect.left, clientRect.bottom - clientRect.top);
 
         // --- Create swap chain for the window ---
+        Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+        hr = m_d3dDevice.As(&dxgiDevice);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
         Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
         hr = dxgiDevice->GetAdapter(&adapter);
         if (FAILED(hr))

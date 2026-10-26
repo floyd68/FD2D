@@ -223,6 +223,9 @@ namespace FD2D
         bool RegisterClass(const WindowOptions& options);
         HRESULT Subclass(HWND windowHandle);
         HRESULT CreateRenderTarget();
+        // Creates the D3D11 device/context (BGRA support) and the D2D device and
+        // context on it, with the backplate's default D2D rendering settings.
+        HRESULT CreateDeviceStack(D3D_DRIVER_TYPE driverType);
         HRESULT CreateRenderTargetD2D();
         HRESULT EnsureRenderTargetD2D();
         HRESULT RecreateSwapChainTargets();
