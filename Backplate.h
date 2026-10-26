@@ -128,6 +128,22 @@ namespace FD2D
             UINT& height,
             UINT& stride);
 
+        // Windowless render mode (for tests): no window, swap chain, Present or
+        // hardware GPU. Creates a WARP D3D11 device (BGRA support) with a D2D
+        // device/context on it and renders into an offscreen BGRA8 texture of
+        // round(logical size * dpiScale) pixels. Layout uses the logical size;
+        // LogicalToRenderScale() maps it to the surface, as on the windowed
+        // path. Render() then runs the same layout, D3D pass and D2D pass, in
+        // the same order, into that texture, and ReadComposedPixels() reads the
+        // composed frame. Call it on a backplate without a window, before or
+        // after adding children; calling it again re-creates the device stack
+        // at the new size (new device and target generations). Nothing renders
+        // implicitly in this mode (Wnd::Invalidate() is a no-op without a
+        // window): each Render() call draws exactly one frame unless a
+        // re-entrant Render() request asks for another.
+        HRESULT InitializeWindowless(UINT logicalWidth, UINT logicalHeight, float dpiScale = 1.0f);
+        bool IsWindowless() const { return m_windowless; }
+
         // Cross-thread redraw signaling without PostMessage:
         // worker thread calls RequestAsyncRedraw() -> signals event (coalesced)
         // UI thread waits on AsyncRedrawEvent() and calls ProcessAsyncRedraw().
@@ -226,6 +242,7 @@ namespace FD2D
         // Creates the D3D11 device/context (BGRA support) and the D2D device and
         // context on it, with the backplate's default D2D rendering settings.
         HRESULT CreateDeviceStack(D3D_DRIVER_TYPE driverType);
+        HRESULT CreateWindowlessRenderTarget();
         HRESULT CreateRenderTargetD2D();
         HRESULT EnsureRenderTargetD2D();
         HRESULT RecreateSwapChainTargets();
@@ -311,6 +328,11 @@ namespace FD2D
         ID3D11RenderTargetView* m_activeD3DRenderTarget { nullptr };       // Current-frame D3D target (swapchain or offscreen)
         
         bool m_useOffscreenBuffer { true };
+
+        // Windowless render mode (InitializeWindowless): the offscreen texture
+        // is the only target, sized m_windowlessSurfaceSize pixels.
+        bool m_windowless { false };
+        D2D1_SIZE_U m_windowlessSurfaceSize { 0, 0 };
 
         std::unordered_map<std::wstring, std::shared_ptr<Wnd>> m_children {};
         std::vector<std::shared_ptr<Wnd>> m_childrenOrdered {};

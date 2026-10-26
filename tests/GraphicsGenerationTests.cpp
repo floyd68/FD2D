@@ -1,4 +1,5 @@
 #include "TestHarness.h"
+#include "WindowlessTestSupport.h"
 
 #include "Backplate.h"
 #include "Button.h"
@@ -287,4 +288,56 @@ FD2D_TEST(GraphicsGeneration_DeviceCacheIsPerBackplateAndClearedWithDevice)
     FD2D_CHECK(first.DeviceCacheEntry(&kKey) == nullptr);
     FD2D_CHECK(second.DeviceCacheEntry(&kKey) == entryB);
     FD2D_CHECK(entryA.use_count() == 1);
+}
+
+FD2D_TEST(GraphicsGeneration_WindowlessRenderAfterDeviceLost)
+{
+    FD2DWindowlessTest::ComScope com;
+    FD2DWindowlessTest::CoreScope core;
+    FD2D::Backplate backplate(L"generation-test");
+    backplate.SetClearColor(D2D1::ColorF(0.0f, 0.0f, 0.0f, 1.0f));
+    auto d3d = std::make_shared<FD2DWindowlessTest::ClearRectD3DWnd>(
+        L"d3d", D2D1::RectF(0.0f, 0.0f, 16.0f, 16.0f), D2D1::ColorF(1.0f, 0.0f, 0.0f, 1.0f));
+    auto d2d = std::make_shared<FD2DWindowlessTest::FillRectD2DWnd>(
+        L"d2d", D2D1::RectF(8.0f, 0.0f, 24.0f, 16.0f), D2D1::ColorF(0.0f, 0.0f, 1.0f, 0.6f));
+    FD2D_REQUIRE(SUCCEEDED(backplate.InitializeWindowless(32, 16)));
+    FD2D_REQUIRE(backplate.AddWnd(d3d));
+    FD2D_REQUIRE(backplate.AddWnd(d2d));
+
+    const auto checkFrame = [&backplate](const char* label)
+    {
+        FD2DWindowlessTest::Frame frame;
+        const HRESULT hr = frame.Read(backplate, D2D1::RectF(0.0f, 0.0f, 32.0f, 16.0f));
+        std::printf("  %s: read 0x%08X\n", label, static_cast<unsigned>(hr));
+        FD2D_REQUIRE(SUCCEEDED(hr));
+        FD2D_CHECK(frame.Near(4, 8, FD2DWindowlessTest::Bgra { 0, 0, 255, 255 }));
+        FD2D_CHECK(frame.Near(12, 8, FD2DWindowlessTest::Bgra { 153, 0, 102, 255 }));
+        FD2D_CHECK(frame.Near(20, 8, FD2DWindowlessTest::Bgra { 153, 0, 0, 255 }));
+        FD2D_CHECK(frame.Near(28, 8, FD2DWindowlessTest::Bgra { 0, 0, 0, 255 }));
+    };
+
+    backplate.Render();
+    checkFrame("first frame");
+    FD2D_CHECK(d2d->BrushesCreated() == 1);
+    const FD2D::GraphicsGeneration before = backplate.GetGraphicsGeneration();
+
+    // Device loss: the device stack and the composed frame are gone.
+    BackplateTestAccess::DeviceLost(backplate);
+    FD2D_CHECK(backplate.D3DDevice() == nullptr);
+    std::vector<std::uint8_t> pixels;
+    UINT width = 0;
+    UINT height = 0;
+    UINT stride = 0;
+    FD2D_CHECK(backplate.ReadComposedPixels(D2D1::RectF(0.0f, 0.0f, 32.0f, 16.0f), pixels, width, height, stride) == E_NOINTERFACE);
+
+    // The next render re-creates a WARP device stack under new generations, the
+    // D2D child rebuilds its brush for it, and the frame composes as before.
+    backplate.Render();
+    FD2D_CHECK(backplate.D3DDevice() != nullptr);
+    FD2D_CHECK(backplate.IsWindowless());
+    FD2D_CHECK(backplate.GetGraphicsGeneration().device > before.device);
+    FD2D_CHECK(backplate.GetGraphicsGeneration().target > before.target);
+    FD2D_CHECK(d3d->LastClearSucceeded());
+    FD2D_CHECK(d2d->BrushesCreated() == 2);
+    checkFrame("after device loss");
 }

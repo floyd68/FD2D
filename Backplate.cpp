@@ -1734,6 +1734,17 @@ namespace FD2D
 
     HRESULT Backplate::EnsureRenderTarget()
     {
+        // Windowless test mode: device stack only; the offscreen texture is the
+        // target (created by Render()). No swap chain and no D2D-only fallback.
+        if (m_windowless)
+        {
+            if (!m_d3dDevice || !m_d3dContext || !m_d2dDevice || !m_d2dContext)
+            {
+                return CreateWindowlessRenderTarget();
+            }
+            return S_OK;
+        }
+
         // D2D-only path (compatibility renderer)
         if (m_rendererId == L"d2d_hwndrt")
         {
@@ -1990,6 +2001,44 @@ namespace FD2D
         }
 
         return S_OK;
+    }
+
+    HRESULT Backplate::InitializeWindowless(UINT logicalWidth, UINT logicalHeight, float dpiScale)
+    {
+        if (m_window != nullptr)
+        {
+            return HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
+        }
+        if (logicalWidth == 0 || logicalHeight == 0 || !std::isfinite(dpiScale) || dpiScale <= 0.0f)
+        {
+            return E_INVALIDARG;
+        }
+
+        const auto toSurface = [dpiScale](UINT logical)
+        {
+            const long pixels = std::lround(static_cast<double>(logical) * static_cast<double>(dpiScale));
+            return static_cast<UINT>((std::max)(1L, pixels));
+        };
+
+        m_windowless = true;
+        m_rendererId.clear();
+        m_size = D2D1::SizeU(logicalWidth, logicalHeight);
+        m_windowlessSurfaceSize = D2D1::SizeU(toSurface(logicalWidth), toSurface(logicalHeight));
+        m_renderSurfaceSize = m_windowlessSurfaceSize;
+        m_logicalToRenderScale = D2D1::SizeF(
+            static_cast<float>(m_windowlessSurfaceSize.width) / static_cast<float>(logicalWidth),
+            static_cast<float>(m_windowlessSurfaceSize.height) / static_cast<float>(logicalHeight));
+        m_layoutDirty = true;
+        return CreateWindowlessRenderTarget();
+    }
+
+    HRESULT Backplate::CreateWindowlessRenderTarget()
+    {
+        // Same generation handling as CreateRenderTarget: a new device stack is a
+        // new device and target generation.
+        DiscardDeviceResources();
+        InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, true, true, false);
+        return CreateDeviceStack(D3D_DRIVER_TYPE_WARP);
     }
 
     HRESULT Backplate::CreateRenderTarget()
@@ -2376,7 +2425,7 @@ namespace FD2D
         {
             return E_NOINTERFACE;
         }
-        if (!m_useOffscreenBuffer ||
+        if ((!m_useOffscreenBuffer && !m_windowless) ||
             m_inSizeMove ||
             !m_offscreenTexture)
         {
@@ -2499,7 +2548,7 @@ namespace FD2D
             return;
         }
 
-        if (!m_window || !IsWindow(m_window))
+        if (!m_windowless && (!m_window || !IsWindow(m_window)))
         {
             return;
         }
@@ -2551,6 +2600,15 @@ namespace FD2D
                     return;
                 }
 
+                // Windowless mode: the surface is the logical size times the DPI scale.
+                if (m_windowless)
+                {
+                    m_logicalToRenderScale = D2D1::SizeF(
+                        static_cast<float>(surfaceW) / static_cast<float>(m_size.width),
+                        static_cast<float>(surfaceH) / static_cast<float>(m_size.height));
+                    return;
+                }
+
                 // While resize resources are deferred, keep layout in logical client size
                 // but render into the previous surface by applying a coordinate scale.
                 if (m_inSizeMove &&
@@ -2583,7 +2641,7 @@ namespace FD2D
             if (FAILED(hrEnsure))
             {
                 // If D3D path failed, try automatic fallback to D2D-only once.
-                if (m_rendererId != L"d2d_hwndrt" && SUCCEEDED(FallbackToD2DOnly(hrEnsure)))
+                if (!m_windowless && m_rendererId != L"d2d_hwndrt" && SUCCEEDED(FallbackToD2DOnly(hrEnsure)))
                 {
                     // Continue rendering with D2D-only below.
                 }
@@ -2714,16 +2772,18 @@ namespace FD2D
         }
         else
         {
-        // Create D3D11 off-screen resources if enabled
-        const bool useOffscreenThisFrame = m_useOffscreenBuffer && !m_inSizeMove;
+        // Create D3D11 off-screen resources if enabled (always in windowless mode,
+        // where the off-screen texture is the only target).
+        const bool useOffscreenThisFrame = m_windowless || (m_useOffscreenBuffer && !m_inSizeMove);
         if (useOffscreenThisFrame && m_d3dDevice && m_size.width > 0 && m_size.height > 0)
         {
             if (!m_offscreenTexture || !m_offscreenRTV)
             {
                 // Create off-screen texture
+                const D2D1_SIZE_U offscreenSize = m_windowless ? m_windowlessSurfaceSize : m_size;
                 D3D11_TEXTURE2D_DESC texDesc = {};
-                texDesc.Width = m_size.width;
-                texDesc.Height = m_size.height;
+                texDesc.Width = offscreenSize.width;
+                texDesc.Height = offscreenSize.height;
                 texDesc.MipLevels = 1;
                 texDesc.ArraySize = 1;
                 texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -2828,7 +2888,7 @@ namespace FD2D
         // D2D pass (UI overlays)
         bool d2dOk = true;
         // Ensure we have a valid target for the UI pass.
-        if (!m_d2dTargetBitmap || !m_rtv)
+        if (!m_windowless && (!m_d2dTargetBitmap || !m_rtv))
         {
             (void)RecreateSwapChainTargets();
         }
@@ -2839,6 +2899,11 @@ namespace FD2D
         {
             // Use the D2D view of the offscreen texture (already has D3D content)
             d2dRenderTarget = m_offscreenD2DTarget.Get();
+        }
+        if (m_windowless && d2dRenderTarget == nullptr)
+        {
+            // The off-screen texture could not be created: no frame to compose.
+            return;
         }
 
         // We detach the target after each frame; ensure it is set for this draw.
