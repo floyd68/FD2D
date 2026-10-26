@@ -144,6 +144,14 @@ namespace FD2D
         HRESULT InitializeWindowless(UINT logicalWidth, UINT logicalHeight, float dpiScale = 1.0f);
         bool IsWindowless() const { return m_windowless; }
 
+        // Test hook: runs once per frame of the D3D backend (windowed or
+        // windowless), after the D3D pass (every OnRenderD3D) and before the
+        // D2D pass (every OnRender) of the same frame. ActiveD3DRenderTarget()
+        // is null while it runs. A Render() request from inside it is deferred
+        // like any re-entrant request. Pass an empty function to remove it.
+        // The D2D-only backend has no D3D pass and never calls it.
+        void SetBetweenPassesHook(std::function<void()> hook) { m_betweenPassesHook = std::move(hook); }
+
         // Cross-thread redraw signaling without PostMessage:
         // worker thread calls RequestAsyncRedraw() -> signals event (coalesced)
         // UI thread waits on AsyncRedrawEvent() and calls ProcessAsyncRedraw().
@@ -333,6 +341,7 @@ namespace FD2D
         // is the only target, sized m_windowlessSurfaceSize pixels.
         bool m_windowless { false };
         D2D1_SIZE_U m_windowlessSurfaceSize { 0, 0 };
+        std::function<void()> m_betweenPassesHook {};
 
         std::unordered_map<std::wstring, std::shared_ptr<Wnd>> m_children {};
         std::vector<std::shared_ptr<Wnd>> m_childrenOrdered {};

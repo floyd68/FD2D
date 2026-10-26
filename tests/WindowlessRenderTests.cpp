@@ -8,6 +8,7 @@
 
 #include <cstdio>
 #include <memory>
+#include <string>
 #include <vector>
 
 // Backplate windowless render mode: a WARP device and an offscreen BGRA8
@@ -172,4 +173,69 @@ FD2D_TEST(WindowlessRender_ReinitializeResizesTarget)
     FD2D_CHECK(frame.width == 128);
     FD2D_CHECK(frame.height == 96);
     CheckColumns(frame, 2.0f);
+}
+
+FD2D_TEST(WindowlessRender_BetweenPassesHookRunsAfterD3DBeforeD2D)
+{
+    Scene scene;
+    FD2D_REQUIRE(scene.Create(1.0f));
+    FD2D::Backplate& backplate = scene.backplate;
+
+    std::vector<std::string> events;
+    scene.d3d->SetOnRender([&events]() { events.push_back("d3d"); });
+    scene.d2d->SetOnRender([&events]() { events.push_back("d2d"); });
+    bool activeTargetClearedInHook = true;
+    backplate.SetBetweenPassesHook([&]()
+    {
+        events.push_back("hook");
+        activeTargetClearedInHook = activeTargetClearedInHook && backplate.ActiveD3DRenderTarget() == nullptr;
+        // Changed between the passes: reaches this frame's D2D pass, but only
+        // the next frame's D3D pass.
+        scene.d3d->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f));
+        scene.d2d->SetColor(D2D1::ColorF(0.0f, 1.0f, 0.0f, 0.6f));
+    });
+
+    backplate.Render();
+    FD2D_CHECK((events == std::vector<std::string> { "d3d", "hook", "d2d" }));
+    FD2D_CHECK(activeTargetClearedInHook);
+
+    // Same frame: D3D content from before the hook (red), D2D content from after
+    // it (60% green).
+    Frame frame;
+    FD2D_REQUIRE(SUCCEEDED(frame.Read(backplate, D2D1::RectF(0.0f, 0.0f, 64.0f, 48.0f))));
+    frame.Print("  hook frame", 24);
+    FD2D_CHECK(frame.Near(8, 24, kRed));
+    FD2D_CHECK(frame.Near(24, 24, Bgra { 0, 153, 102, 255 }));
+    FD2D_CHECK(frame.Near(40, 24, Bgra { 0, 153, 0, 255 }));
+    FD2D_CHECK(frame.Near(56, 24, kBlack));
+
+    // The next frame's D3D pass sees the hook's change (white under 60% green).
+    events.clear();
+    backplate.Render();
+    FD2D_CHECK((events == std::vector<std::string> { "d3d", "hook", "d2d" }));
+    FD2D_REQUIRE(SUCCEEDED(frame.Read(backplate, D2D1::RectF(0.0f, 0.0f, 64.0f, 48.0f))));
+    FD2D_CHECK(frame.Near(8, 24, Bgra { 255, 255, 255, 255 }));
+    FD2D_CHECK(frame.Near(24, 24, Bgra { 102, 255, 102, 255 }));
+
+    // A Render() request from the hook is deferred to a second frame of the
+    // same Render() call, which runs the passes in the same order again.
+    events.clear();
+    bool requested = false;
+    backplate.SetBetweenPassesHook([&]()
+    {
+        events.push_back("hook");
+        if (!requested)
+        {
+            requested = true;
+            backplate.Render();
+        }
+    });
+    backplate.Render();
+    FD2D_CHECK((events == std::vector<std::string> { "d3d", "hook", "d2d", "d3d", "hook", "d2d" }));
+
+    // Removed: frames run without it.
+    events.clear();
+    backplate.SetBetweenPassesHook({});
+    backplate.Render();
+    FD2D_CHECK((events == std::vector<std::string> { "d3d", "d2d" }));
 }

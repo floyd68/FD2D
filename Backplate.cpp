@@ -2885,6 +2885,14 @@ namespace FD2D
             m_activeD3DRenderTarget = nullptr;
         }
 
+        // Test hook between the D3D and D2D passes of this frame. Called through
+        // a copy so the hook may replace or clear itself.
+        if (m_betweenPassesHook)
+        {
+            const std::function<void()> hook = m_betweenPassesHook;
+            hook();
+        }
+
         // D2D pass (UI overlays)
         bool d2dOk = true;
         // Ensure we have a valid target for the UI pass.
