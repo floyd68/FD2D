@@ -239,3 +239,63 @@ FD2D_TEST(WindowlessRender_BetweenPassesHookRunsAfterD3DBeforeD2D)
     backplate.Render();
     FD2D_CHECK((events == std::vector<std::string> { "d3d", "d2d" }));
 }
+
+FD2D_TEST(WindowlessRender_BetweenPassesHookKeepsMutableState)
+{
+    Scene scene;
+    FD2D_REQUIRE(scene.Create(1.0f));
+    FD2D::Backplate& backplate = scene.backplate;
+
+    // A one-shot flag held in the hook's own (mutable) capture asks for one
+    // deferred frame. The hook must see its own update on the next call:
+    // exactly two calls, and Render() returns. The external cap stops the
+    // re-entrant requests if the state is lost, so a failure cannot hang.
+    int calls = 0;
+    backplate.SetBetweenPassesHook([&backplate, &calls, once = false]() mutable
+    {
+        ++calls;
+        if (!once && calls < 8)
+        {
+            once = true;
+            backplate.Render();
+        }
+    });
+    backplate.Render();
+    std::printf("  one-shot hook calls: %d\n", calls);
+    FD2D_CHECK(calls == 2);
+    FD2D_CHECK(scene.d3d->Frames() == 2);
+    FD2D_CHECK(scene.d2d->Frames() == 2);
+
+    // The state persists across Render() calls too.
+    backplate.Render();
+    FD2D_CHECK(calls == 3);
+}
+
+FD2D_TEST(WindowlessRender_BetweenPassesHookCanReplaceOrClearItself)
+{
+    Scene scene;
+    FD2D_REQUIRE(scene.Create(1.0f));
+    FD2D::Backplate& backplate = scene.backplate;
+
+    std::vector<std::string> events;
+    // Replaces itself while running; the replacement runs from the next frame.
+    backplate.SetBetweenPassesHook([&backplate, &events, tag = std::string("first")]()
+    {
+        events.push_back(tag);
+        backplate.SetBetweenPassesHook([&backplate, &events, tag = std::string("second")]()
+        {
+            events.push_back(tag);
+            // Clears itself while running (its captures stay alive until it returns).
+            backplate.SetBetweenPassesHook({});
+            events.push_back(tag + " cleared");
+        });
+        // Still alive after being replaced.
+        events.push_back(tag + " replaced");
+    });
+
+    backplate.Render();
+    backplate.Render();
+    backplate.Render();
+    FD2D_CHECK((events == std::vector<std::string> { "first", "first replaced", "second", "second cleared" }));
+    FD2D_CHECK(scene.d2d->Frames() == 3);
+}

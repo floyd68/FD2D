@@ -2032,6 +2032,13 @@ namespace FD2D
         return CreateWindowlessRenderTarget();
     }
 
+    void Backplate::SetBetweenPassesHook(std::function<void()> hook)
+    {
+        m_betweenPassesHook = hook
+            ? std::make_shared<std::function<void()>>(std::move(hook))
+            : nullptr;
+    }
+
     HRESULT Backplate::CreateWindowlessRenderTarget()
     {
         // Same generation handling as CreateRenderTarget: a new device stack is a
@@ -2886,11 +2893,12 @@ namespace FD2D
         }
 
         // Test hook between the D3D and D2D passes of this frame. Called through
-        // a copy so the hook may replace or clear itself.
+        // a local reference to the stored object (not a copy of the callable), so
+        // its mutable state persists and it may replace or clear itself.
         if (m_betweenPassesHook)
         {
-            const std::function<void()> hook = m_betweenPassesHook;
-            hook();
+            const std::shared_ptr<std::function<void()>> hook = m_betweenPassesHook;
+            (*hook)();
         }
 
         // D2D pass (UI overlays)

@@ -150,7 +150,9 @@ namespace FD2D
         // is null while it runs. A Render() request from inside it is deferred
         // like any re-entrant request. Pass an empty function to remove it.
         // The D2D-only backend has no D3D pass and never calls it.
-        void SetBetweenPassesHook(std::function<void()> hook) { m_betweenPassesHook = std::move(hook); }
+        // The hook object persists across calls, so state in a mutable capture
+        // carries from one frame to the next.
+        void SetBetweenPassesHook(std::function<void()> hook);
 
         // Cross-thread redraw signaling without PostMessage:
         // worker thread calls RequestAsyncRedraw() -> signals event (coalesced)
@@ -341,7 +343,8 @@ namespace FD2D
         // is the only target, sized m_windowlessSurfaceSize pixels.
         bool m_windowless { false };
         D2D1_SIZE_U m_windowlessSurfaceSize { 0, 0 };
-        std::function<void()> m_betweenPassesHook {};
+        // Shared so a running hook stays alive when it replaces or clears itself.
+        std::shared_ptr<std::function<void()>> m_betweenPassesHook {};
 
         std::unordered_map<std::wstring, std::shared_ptr<Wnd>> m_children {};
         std::vector<std::shared_ptr<Wnd>> m_childrenOrdered {};
