@@ -128,6 +128,32 @@ namespace FD2D
             UINT& height,
             UINT& stride);
 
+        // Windowless render mode (for tests): no window, swap chain, Present or
+        // hardware GPU. Creates a WARP D3D11 device (BGRA support) with a D2D
+        // device/context on it and renders into an offscreen BGRA8 texture of
+        // round(logical size * dpiScale) pixels. Layout uses the logical size;
+        // LogicalToRenderScale() maps it to the surface, as on the windowed
+        // path. Render() then runs the same layout, D3D pass and D2D pass, in
+        // the same order, into that texture, and ReadComposedPixels() reads the
+        // composed frame. Call it on a backplate without a window, before or
+        // after adding children; calling it again re-creates the device stack
+        // at the new size (new device and target generations). Nothing renders
+        // implicitly in this mode (Wnd::Invalidate() is a no-op without a
+        // window): each Render() call draws exactly one frame unless a
+        // re-entrant Render() request asks for another.
+        HRESULT InitializeWindowless(UINT logicalWidth, UINT logicalHeight, float dpiScale = 1.0f);
+        bool IsWindowless() const { return m_windowless; }
+
+        // Test hook: runs once per frame of the D3D backend (windowed or
+        // windowless), after the D3D pass (every OnRenderD3D) and before the
+        // D2D pass (every OnRender) of the same frame. ActiveD3DRenderTarget()
+        // is null while it runs. A Render() request from inside it is deferred
+        // like any re-entrant request. Pass an empty function to remove it.
+        // The D2D-only backend has no D3D pass and never calls it.
+        // The hook object persists across calls, so state in a mutable capture
+        // carries from one frame to the next.
+        void SetBetweenPassesHook(std::function<void()> hook);
+
         // Cross-thread redraw signaling without PostMessage:
         // worker thread calls RequestAsyncRedraw() -> signals event (coalesced)
         // UI thread waits on AsyncRedrawEvent() and calls ProcessAsyncRedraw().
@@ -223,6 +249,10 @@ namespace FD2D
         bool RegisterClass(const WindowOptions& options);
         HRESULT Subclass(HWND windowHandle);
         HRESULT CreateRenderTarget();
+        // Creates the D3D11 device/context (BGRA support) and the D2D device and
+        // context on it, with the backplate's default D2D rendering settings.
+        HRESULT CreateDeviceStack(D3D_DRIVER_TYPE driverType);
+        HRESULT CreateWindowlessRenderTarget();
         HRESULT CreateRenderTargetD2D();
         HRESULT EnsureRenderTargetD2D();
         HRESULT RecreateSwapChainTargets();
@@ -308,6 +338,13 @@ namespace FD2D
         ID3D11RenderTargetView* m_activeD3DRenderTarget { nullptr };       // Current-frame D3D target (swapchain or offscreen)
         
         bool m_useOffscreenBuffer { true };
+
+        // Windowless render mode (InitializeWindowless): the offscreen texture
+        // is the only target, sized m_windowlessSurfaceSize pixels.
+        bool m_windowless { false };
+        D2D1_SIZE_U m_windowlessSurfaceSize { 0, 0 };
+        // Shared so a running hook stays alive when it replaces or clears itself.
+        std::shared_ptr<std::function<void()>> m_betweenPassesHook {};
 
         std::unordered_map<std::wstring, std::shared_ptr<Wnd>> m_children {};
         std::vector<std::shared_ptr<Wnd>> m_childrenOrdered {};
