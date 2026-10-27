@@ -469,3 +469,61 @@ FD2D_TEST(BackplateHoverToast_TooltipAndToastShareTheTimer)
     const Canvas::Counts counts = scene.ReadCounts();
     FD2D_CHECK(counts.tooltip > 400 && counts.toast == 0);
 }
+
+namespace
+{
+    // A second tooltip target over the right half of the client area (added
+    // after TooltipWnd, so it is hit first there).
+    class RightHalfTooltipWnd : public FD2DWindowlessTest::FillRectD2DWnd
+    {
+    public:
+        RightHalfTooltipWnd()
+            : FillRectD2DWnd(L"tip2", D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f), D2D1::ColorF(0.0f, 0.5f, 0.0f, 1.0f))
+        {
+        }
+
+        void Arrange(FD2D::Rect finalRect) override
+        {
+            FD2D::Wnd::Arrange({ finalRect.x + finalRect.w * 0.5f, finalRect.y, finalRect.w * 0.5f, finalRect.h });
+        }
+
+        std::wstring TooltipText() const override { return L"Second tooltip"; }
+    };
+}
+
+FD2D_TEST(BackplateHoverToast_MovingToAnotherTargetErasesTheShownTooltip)
+{
+    TimerScene scene;
+    FD2D_REQUIRE(scene.Create());
+    FD2D::Backplate& backplate = scene.backplate;
+    FD2D_REQUIRE(backplate.AddWnd(std::make_shared<RightHalfTooltipWnd>()));
+    backplate.Render();
+
+    // The first target's tooltip is showing.
+    BackplateTestAccess::HoverAt(backplate, POINT { 20, 20 });
+    int animatedWakes = 0;
+    FD2D_REQUIRE(scene.PumpUntil([&]() { return BackplateTestAccess::TooltipShown(backplate); }, 3000, animatedWakes));
+    Canvas::Counts counts = scene.ReadCounts();
+    FD2D_REQUIRE(counts.tooltip > 400);
+    const int framesShown = scene.tip->Frames();
+
+    // Straight onto the second target (another non-empty tooltip): its dwell
+    // starts, and the first tooltip is erased right away, not at the end of
+    // the new dwell.
+    BackplateTestAccess::HoverAt(backplate, POINT { 120, 20 });
+    FD2D_CHECK(!BackplateTestAccess::TooltipShown(backplate));
+    FD2D_CHECK(BackplateTestAccess::HoverToastTimerDueMs(backplate) != 0);
+    scene.Settle(100, animatedWakes);
+    counts = scene.ReadCounts();
+    std::printf("  100 ms after moving to the second target: tooltip fill %d px, frames %d (%d when shown)\n",
+        counts.tooltip, scene.tip->Frames(), framesShown);
+    FD2D_CHECK(counts.tooltip == 0);
+    FD2D_CHECK(scene.tip->Frames() == framesShown + 1);
+
+    // Its own tooltip follows at its deadline.
+    FD2D_REQUIRE(scene.PumpUntil([&]() { return BackplateTestAccess::TooltipShown(backplate); }, 3000, animatedWakes));
+    counts = scene.ReadCounts();
+    FD2D_CHECK(counts.tooltip > 400);
+    FD2D_CHECK(scene.tip->Frames() == framesShown + 2);
+    FD2D_CHECK(animatedWakes == 0);
+}

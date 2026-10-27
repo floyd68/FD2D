@@ -840,9 +840,12 @@ namespace FD2D
         {
             FD2D_LOG_INFO("[Tooltip] dwell started ({}ms)", kTooltipDwellMs);
         }
-        if (m_hoverTip.empty() && wasShown && m_window != nullptr)
+        if (wasShown)
         {
-            InvalidateRect(m_window, nullptr, FALSE); // erase the tooltip that was showing
+            // Erase the tooltip that was showing now, also when the cursor
+            // moved straight onto another tooltip target: nothing else
+            // renders until that target's dwell deadline.
+            RenderOrInvalidate();
         }
     }
 
