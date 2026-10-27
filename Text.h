@@ -53,6 +53,9 @@ namespace FD2D
         bool OnInputEvent(const InputEvent& event) override;
 
     private:
+        // Tests inspect the cached brush and layout.
+        friend struct TextTestAccess;
+
         void EnsureResources(ID2D1RenderTarget* target);
         void EnsureFormat();
         void EnsureNaturalSize();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Wnd.h"
+#include <wrl/client.h>
 
 namespace FD2D
 {
@@ -102,6 +103,11 @@ namespace FD2D
         // cached after Arrange
         Size m_viewportSize { 0.0f, 0.0f };
         Size m_contentSize { 0.0f, 0.0f };
+
+        // Scrollbar brush, recolored per fill and created once per target
+        // generation (see GraphicsResourceStamp).
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_barBrush {};
+        GraphicsResourceStamp m_barBrushStamp {};
     };
 }
 

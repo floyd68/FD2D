@@ -1,4 +1,5 @@
 #include "TestHarness.h"
+#include "BackplateTestAccess.h"
 #include "WindowlessTestSupport.h"
 
 #include "Backplate.h"
@@ -7,6 +8,7 @@
 #include "CheckBox.h"
 #include "ComboBox.h"
 #include "Image.h"
+#include "ScrollView.h"
 #include "Slider.h"
 #include "Spinner.h"
 #include "Splitter.h"
@@ -30,23 +32,6 @@
 // (D2DERR_WRONG_FACTORY at EndDraw), exactly like stale resources after a
 // real recreation. The backplate's generations are changed through
 // BackplateTestAccess, as Backplate itself does on recreation.
-
-namespace FD2D
-{
-    struct BackplateTestAccess
-    {
-        static void TargetRecreated(Backplate& backplate)
-        {
-            backplate.InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, false, true, false);
-        }
-
-        static void DeviceLost(Backplate& backplate)
-        {
-            backplate.DiscardDeviceResources();
-            backplate.InvalidateGraphics(GraphicsInvalidationReason::DeviceLost, true, true, false);
-        }
-    };
-}
 
 using Microsoft::WRL::ComPtr;
 using FD2D::BackplateTestAccess;
@@ -139,6 +124,32 @@ namespace
         }
     };
 
+    // Content larger than its ScrollView's viewport, so both scrollbars show.
+    class OversizeContent : public FD2D::Wnd
+    {
+    public:
+        OversizeContent()
+            : FD2D::Wnd(L"content")
+        {
+        }
+
+        FD2D::Size Measure(FD2D::Size) override
+        {
+            m_desired = { 400.0f, 400.0f };
+            return m_desired;
+        }
+    };
+
+    std::shared_ptr<FD2D::Wnd> MakeScrollViewWithBars()
+    {
+        auto scroll = std::make_shared<FD2D::ScrollView>(L"scroll");
+        scroll->SetScrollBarsVisible(true);
+        scroll->SetContent(std::make_shared<OversizeContent>());
+        scroll->Measure({ 48.0f, 48.0f });
+        scroll->Arrange({ 0.0f, 0.0f, 48.0f, 48.0f });
+        return scroll;
+    }
+
     struct ControlCase
     {
         const char* name;
@@ -155,6 +166,8 @@ namespace
             { "Slider", []() { return std::shared_ptr<FD2D::Wnd>(std::make_shared<FD2D::Slider>(L"slider")); } },
             { "Spinner", []() { auto c = std::make_shared<FD2D::Spinner>(L"spinner"); c->SetActive(true); return std::shared_ptr<FD2D::Wnd>(c); } },
             { "Splitter", []() { return std::shared_ptr<FD2D::Wnd>(std::make_shared<FD2D::Splitter>(L"splitter")); } },
+            // Scrollbars only; the content draws nothing.
+            { "ScrollView", []() { return MakeScrollViewWithBars(); } },
         };
     }
 

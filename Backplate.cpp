@@ -196,6 +196,8 @@ namespace FD2D
         if (bumpTarget)
         {
             ++m_graphicsGeneration.target;
+            // Target-bound; the tooltip/toast text layouts are not.
+            m_tipBrush.Reset();
         }
         if (bumpRenderer)
         {
@@ -735,11 +737,9 @@ namespace FD2D
             return;
         }
 
-        // Advance tooltip dwell / toast expiry first: it re-arms the animation
-        // while a tooltip is pending or a toast is showing, so these keep
-        // ticking even when nothing else animates.
-        AdvanceHoverToast(nowMs);
-
+        // The tooltip dwell and the toast expiry are not animations: they wait
+        // on the hover/toast timer (ScheduleHoverToastTimer), so a pending
+        // deadline does not render unchanged frames here.
         if (!HasActiveAnimation(nowMs))
         {
             return;
@@ -834,13 +834,18 @@ namespace FD2D
         m_hoverTip = std::move(tip);
         m_hoverSinceMs = Util::NowMs();
         m_tipShown = false;
+        // Arms the dwell deadline for a new tip (or drops the old one).
+        ScheduleHoverToastTimer(m_hoverSinceMs);
         if (!m_hoverTip.empty())
         {
-            RequestAnimationFrame(); // drive the dwell timer via ProcessAnimationTick
+            FD2D_LOG_INFO("[Tooltip] dwell started ({}ms)", kTooltipDwellMs);
         }
-        else if (wasShown && m_window != nullptr)
+        if (wasShown)
         {
-            InvalidateRect(m_window, nullptr, FALSE); // erase the tooltip that was showing
+            // Erase the tooltip that was showing now, also when the cursor
+            // moved straight onto another tooltip target: nothing else
+            // renders until that target's dwell deadline.
+            RenderOrInvalidate();
         }
     }
 
@@ -849,6 +854,7 @@ namespace FD2D
         m_hoverWnd = nullptr;
         m_hoverTip.clear();
         m_hoverSinceMs = 0;
+        ScheduleHoverToastTimer(Util::NowMs());
         if (m_tipShown)
         {
             m_tipShown = false;
@@ -861,9 +867,11 @@ namespace FD2D
 
     void Backplate::ShowToast(const std::wstring& text)
     {
+        const unsigned long long nowMs = Util::NowMs();
         m_toastText = text;
-        m_toastExpireMs = Util::NowMs() + kToastDurationMs;
-        RequestAnimationFrame();
+        m_toastExpireMs = nowMs + kToastDurationMs;
+        ScheduleHoverToastTimer(nowMs);
+        FD2D_LOG_INFO("[Toast] shown, expires in {}ms", kToastDurationMs);
         if (m_window != nullptr)
         {
             InvalidateRect(m_window, nullptr, FALSE);
@@ -898,42 +906,115 @@ namespace FD2D
         return ok;
     }
 
-    void Backplate::AdvanceHoverToast(unsigned long long nowMs)
+    bool Backplate::AdvanceHoverToast(unsigned long long nowMs)
     {
-        bool needAnim = false;
+        bool changed = false;
 
-        // Tooltip dwell: once elapsed, flip m_tipShown so the next render (this
-        // tick's Render, since animation is active) paints it. Keep re-arming
-        // the animation until then.
+        // Tooltip dwell: once elapsed, flip m_tipShown so the next render
+        // paints it.
+        if (m_hoverWnd != nullptr && !m_hoverTip.empty() && !m_tipShown &&
+            nowMs - m_hoverSinceMs >= kTooltipDwellMs)
+        {
+            m_tipShown = true;
+            m_tipAnchor = m_hoverPt;
+            changed = true;
+        }
+
+        // Toast expiry: clear it (the next render erases it).
+        if (!m_toastText.empty() && nowMs >= m_toastExpireMs)
+        {
+            m_toastText.clear();
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    unsigned long long Backplate::NextHoverToastDeadline() const
+    {
+        unsigned long long deadline = 0;
         if (m_hoverWnd != nullptr && !m_hoverTip.empty() && !m_tipShown)
         {
-            if (nowMs - m_hoverSinceMs >= kTooltipDwellMs)
-            {
-                m_tipShown = true;
-                m_tipAnchor = m_hoverPt;
-            }
-            else
-            {
-                needAnim = true;
-            }
+            deadline = m_hoverSinceMs + kTooltipDwellMs;
+        }
+        if (!m_toastText.empty() && (deadline == 0 || m_toastExpireMs < deadline))
+        {
+            deadline = m_toastExpireMs;
+        }
+        return deadline;
+    }
+
+    void Backplate::ScheduleHoverToastTimer(unsigned long long nowMs)
+    {
+        if (m_window == nullptr)
+        {
+            m_hoverToastTimerDueMs = 0;
+            return;
         }
 
-        // Toast expiry: clear it (one more render this tick erases it).
-        if (!m_toastText.empty())
+        const unsigned long long deadline = NextHoverToastDeadline();
+        if (deadline == 0)
         {
-            if (nowMs >= m_toastExpireMs)
+            if (m_hoverToastTimerDueMs != 0)
             {
-                m_toastText.clear();
+                KillTimer(m_window, kHoverToastTimerId);
+                m_hoverToastTimerDueMs = 0;
             }
-            else
-            {
-                needAnim = true;
-            }
+            return;
+        }
+        if (deadline == m_hoverToastTimerDueMs)
+        {
+            return; // already armed for it
         }
 
-        if (needAnim)
+        // Used as a one-shot: OnHoverToastTimer kills it, then re-arms it for
+        // the next deadline, if any.
+        const unsigned long long delayMs = (deadline > nowMs) ? (deadline - nowMs) : 1ULL;
+        const UINT elapse = static_cast<UINT>((std::min)(delayMs, 0x7FFFFFFFULL));
+        m_hoverToastTimerDueMs = (SetTimer(m_window, kHoverToastTimerId, elapse, nullptr) != 0) ? deadline : 0ULL;
+    }
+
+    void Backplate::OnHoverToastTimer(unsigned long long nowMs)
+    {
+        if (m_window != nullptr)
         {
-            RequestAnimationFrame();
+            KillTimer(m_window, kHoverToastTimerId);
+        }
+        m_hoverToastTimerDueMs = 0;
+
+        const bool tipWasShown = m_tipShown;
+        const bool toastWasShown = !m_toastText.empty();
+        const bool changed = AdvanceHoverToast(nowMs);
+        if (m_tipShown && !tipWasShown)
+        {
+            FD2D_LOG_INFO("[Tooltip] shown after {}ms", nowMs - m_hoverSinceMs);
+        }
+        if (toastWasShown && m_toastText.empty())
+        {
+            FD2D_LOG_INFO("[Toast] expired");
+        }
+        // The next deadline, or the same one again if the timer fired early.
+        ScheduleHoverToastTimer(nowMs);
+        if (changed)
+        {
+            RenderOrInvalidate();
+        }
+    }
+
+    void Backplate::RenderOrInvalidate()
+    {
+        if (m_window == nullptr || !IsWindow(m_window))
+        {
+            return;
+        }
+        if (m_inSizeMove || m_isRendering || IsDeferringRender())
+        {
+            InvalidateRect(m_window, nullptr, FALSE);
+        }
+        else
+        {
+            NoteRenderTrigger(RenderTrigger::Invalidate);
+            Render();
         }
     }
 
@@ -1009,18 +1090,25 @@ namespace FD2D
             (void)m_tipFormat->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
         }
 
+        if (!m_tipBrush)
+        {
+            (void)target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &m_tipBrush);
+            if (!m_tipBrush)
+            {
+                return;
+            }
+        }
+
         const float clientW = static_cast<float>(m_size.width);
         const float clientH = static_cast<float>(m_size.height);
         constexpr float padX = 9.0f;
         constexpr float padY = 5.0f;
 
-        auto drawBox = [&](const std::wstring& text, float boxLeft, float boxTop,
+        auto drawBox = [&](IDWriteTextLayout* layout, float boxLeft, float boxTop,
                            bool clampBelowRightOfCursor, const D2D1_COLOR_F& bg,
                            const D2D1_COLOR_F& border, const D2D1_COLOR_F& fg)
         {
-            Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
-            if (FAILED(dwrite->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()),
-                m_tipFormat.Get(), 100000.0f, 100000.0f, &layout)) || !layout)
+            if (layout == nullptr)
             {
                 return;
             }
@@ -1043,25 +1131,19 @@ namespace FD2D
 
             const D2D1_ROUNDED_RECT rr {
                 D2D1::RectF(boxLeft, boxTop, boxLeft + boxW, boxTop + boxH), 4.0f, 4.0f };
-            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
-            if (SUCCEEDED(target->CreateSolidColorBrush(bg, &brush)))
-            {
-                target->FillRoundedRectangle(rr, brush.Get());
-            }
-            if (SUCCEEDED(target->CreateSolidColorBrush(border, &brush)))
-            {
-                target->DrawRoundedRectangle(rr, brush.Get(), 1.0f);
-            }
-            if (SUCCEEDED(target->CreateSolidColorBrush(fg, &brush)))
-            {
-                target->DrawTextLayout(D2D1::Point2F(boxLeft + padX, boxTop + padY),
-                    layout.Get(), brush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
-            }
+            m_tipBrush->SetColor(bg);
+            target->FillRoundedRectangle(rr, m_tipBrush.Get());
+            m_tipBrush->SetColor(border);
+            target->DrawRoundedRectangle(rr, m_tipBrush.Get(), 1.0f);
+            m_tipBrush->SetColor(fg);
+            target->DrawTextLayout(D2D1::Point2F(boxLeft + padX, boxTop + padY),
+                layout, m_tipBrush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
         };
 
         if (hasHover)
         {
-            drawBox(m_hoverTip, static_cast<float>(m_tipAnchor.x) + 12.0f,
+            drawBox(EnsureTipLayout(m_tipLayout, m_tipLayoutText, m_hoverTip),
+                    static_cast<float>(m_tipAnchor.x) + 12.0f,
                     static_cast<float>(m_tipAnchor.y) + 20.0f, true,
                     D2D1::ColorF(0.12f, 0.12f, 0.14f, 0.97f),
                     D2D1::ColorF(0.42f, 0.44f, 0.50f, 1.0f),
@@ -1070,10 +1152,8 @@ namespace FD2D
         if (hasToast)
         {
             // Centered near the bottom of the window.
-            Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
-            if (SUCCEEDED(dwrite->CreateTextLayout(m_toastText.c_str(),
-                static_cast<UINT32>(m_toastText.size()), m_tipFormat.Get(),
-                100000.0f, 100000.0f, &layout)) && layout)
+            IDWriteTextLayout* layout = EnsureTipLayout(m_toastLayout, m_toastLayoutText, m_toastText);
+            if (layout != nullptr)
             {
                 DWRITE_TEXT_METRICS m {};
                 if (SUCCEEDED(layout->GetMetrics(&m)))
@@ -1081,13 +1161,39 @@ namespace FD2D
                     const float boxW = m.width + padX * 2.0f;
                     const float left = (clientW - boxW) * 0.5f;
                     const float top = clientH - (m.height + padY * 2.0f) - 24.0f;
-                    drawBox(m_toastText, left, top, false,
+                    drawBox(layout, left, top, false,
                             D2D1::ColorF(0.16f, 0.34f, 0.58f, 0.97f),
                             D2D1::ColorF(0.30f, 0.55f, 0.85f, 1.0f),
                             D2D1::ColorF(0.97f, 0.98f, 1.0f, 1.0f));
                 }
             }
         }
+    }
+
+    IDWriteTextLayout* Backplate::EnsureTipLayout(
+        Microsoft::WRL::ComPtr<IDWriteTextLayout>& layout,
+        std::wstring& layoutText,
+        const std::wstring& text)
+    {
+        if (layout && layoutText == text)
+        {
+            return layout.Get();
+        }
+        layout.Reset();
+        layoutText.clear();
+        IDWriteFactory* dwrite = Core::DWriteFactory();
+        if (dwrite == nullptr || !m_tipFormat)
+        {
+            return nullptr;
+        }
+        if (FAILED(dwrite->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()),
+            m_tipFormat.Get(), 100000.0f, 100000.0f, &layout)) || !layout)
+        {
+            layout.Reset();
+            return nullptr;
+        }
+        layoutText = text;
+        return layout.Get();
     }
 
     LRESULT CALLBACK Backplate::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -1273,6 +1379,12 @@ namespace FD2D
 
         case WM_TIMER:
         {
+            if (wParam == kHoverToastTimerId)
+            {
+                OnHoverToastTimer(Util::NowMs());
+                result = 0;
+                return true;
+            }
             if (m_placeAutosaveTimerId != 0 && wParam == m_placeAutosaveTimerId)
             {
                 // Avoid synchronous placement persistence during interactive resize.
@@ -1309,6 +1421,11 @@ namespace FD2D
             {
                 KillTimer(m_window, m_placeAutosaveTimerId);
                 m_placeAutosaveTimerId = 0;
+            }
+            if (m_window != nullptr && m_hoverToastTimerDueMs != 0)
+            {
+                KillTimer(m_window, kHoverToastTimerId);
+                m_hoverToastTimerDueMs = 0;
             }
             // HWND is about to become invalid; clear before any late Invalidate/Render.
             m_window = nullptr;

@@ -8,6 +8,7 @@ namespace FD2D
     {
         SetContentMargin(8.0f, 2.0f);
         SetContentAlign(AlignH::Start, AlignV::Center);
+        m_text.SetText(SelectedText());
     }
 
     ComboBox::ComboBox(const std::wstring& name)
@@ -15,6 +16,7 @@ namespace FD2D
     {
         SetContentMargin(8.0f, 2.0f);
         SetContentAlign(AlignH::Start, AlignV::Center);
+        m_text.SetText(SelectedText());
     }
 
     Size ComboBox::Measure(Size available)
@@ -45,6 +47,21 @@ namespace FD2D
         {
             m_selectedIndex = m_items.empty() ? -1 : 0;
         }
+
+        // Popup item texts: created once per item set, reused by every render.
+        m_itemTexts.clear();
+        m_itemTexts.reserve(m_items.size());
+        for (const auto& item : m_items)
+        {
+            auto text = std::make_unique<Text>();
+            text->SetText(item);
+            m_itemTexts.push_back(std::move(text));
+        }
+
+        if (SyncSelectedText())
+        {
+            NotifyContentLayoutChanged();
+        }
     }
 
     void ComboBox::SetSelectedIndex(int index, bool notify)
@@ -55,11 +72,29 @@ namespace FD2D
         }
         bool changed = (index != m_selectedIndex);
         m_selectedIndex = index;
+        const bool boundsChanged = SyncSelectedText();
         if (changed && notify && m_changed)
         {
             m_changed(m_selectedIndex);
         }
-        Invalidate();
+        if (boundsChanged)
+        {
+            // Re-measure and re-arrange: the box's text rect follows the
+            // text's measured size. RequestLayout also renders.
+            NotifyContentLayoutChanged();
+        }
+        else
+        {
+            Invalidate();
+        }
+    }
+
+    bool ComboBox::SyncSelectedText()
+    {
+        const Size before = m_text.Measure({ 0.0f, 0.0f });
+        m_text.SetText(SelectedText());
+        const Size after = m_text.Measure({ 0.0f, 0.0f });
+        return before.w != after.w || before.h != after.h;
     }
 
     std::wstring ComboBox::SelectedText() const
@@ -260,7 +295,13 @@ namespace FD2D
         if (RefreshTargetResourceStamp(m_brushStamp))
         {
             m_brush.Reset();
-            m_text.ResetTargetResources();  // embedded, not attached: driven from here
+            // Embedded, not attached: driven from here. Their DirectWrite
+            // layouts are device-independent and kept.
+            m_text.ResetTargetResources();
+            for (const auto& itemText : m_itemTexts)
+            {
+                itemText->ResetTargetResources();
+            }
         }
         if (!m_brush)
         {
@@ -285,7 +326,6 @@ namespace FD2D
         m_brush->SetColor(active ? D2D1::ColorF(0.26f, 0.55f, 0.96f, 0.90f) : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.16f));
         target->DrawRoundedRectangle(rr, m_brush.Get(), 1.0f);
 
-        m_text.SetText(SelectedText());
         m_text.OnRender(target);
 
         // Chevron glyph, accent-tinted while active.
@@ -322,7 +362,7 @@ namespace FD2D
         m_brush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.16f));
         target->DrawRoundedRectangle(ddr, m_brush.Get(), 1.0f);
 
-        int visible = (std::min)(kMaxVisibleItems, static_cast<int>(m_items.size()));
+        int visible = (std::min)(kMaxVisibleItems, static_cast<int>(m_itemTexts.size()));
         for (int i = 0; i < visible; ++i)
         {
             D2D1_RECT_F itemRect = ItemRect(static_cast<size_t>(i));
@@ -334,8 +374,7 @@ namespace FD2D
                 target->FillRoundedRectangle(D2D1::RoundedRect(hi, 3.0f, 3.0f), m_brush.Get());
             }
 
-            Text itemText;
-            itemText.SetText(m_items[static_cast<size_t>(i)]);
+            Text& itemText = *m_itemTexts[static_cast<size_t>(i)];
             Size itemTextSize = itemText.Measure({ 0.0f, 0.0f });
             Rect itemBounds = FromD2D(itemRect);
             Thickness itemMargin = m_contentMargin;

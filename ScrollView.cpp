@@ -451,22 +451,34 @@ namespace FD2D
         // content, for whichever enabled axis actually overflows.
         if (m_showScrollBars)
         {
-            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
+            D2D1_RECT_F hTrack {}, hThumb {}, vTrack {}, vThumb {};
+            const bool hasH = HScrollBarRects(hTrack, hThumb);
+            const bool hasV = VScrollBarRects(vTrack, vThumb);
+            if ((hasH || hasV) && RefreshTargetResourceStamp(m_barBrushStamp))
+            {
+                m_barBrush.Reset();
+            }
+            if ((hasH || hasV) && !m_barBrush)
+            {
+                (void)target->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.06f), &m_barBrush);
+            }
             auto drawBar = [&](const D2D1_RECT_F& tr, const D2D1_RECT_F& th, bool active)
             {
+                if (!m_barBrush)
+                {
+                    return;
+                }
                 const float r = 0.5f * (std::min)(th.right - th.left, th.bottom - th.top);
-                if (SUCCEEDED(target->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.06f), &brush)))
-                    target->FillRoundedRectangle(D2D1::RoundedRect(tr, r, r), brush.Get());
-                const D2D1_COLOR_F c = active ? D2D1::ColorF(0.56f, 0.61f, 0.70f, 0.95f)
-                                              : D2D1::ColorF(0.42f, 0.45f, 0.52f, 0.85f);
-                if (SUCCEEDED(target->CreateSolidColorBrush(c, &brush)))
-                    target->FillRoundedRectangle(D2D1::RoundedRect(th, r, r), brush.Get());
+                m_barBrush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.06f));
+                target->FillRoundedRectangle(D2D1::RoundedRect(tr, r, r), m_barBrush.Get());
+                m_barBrush->SetColor(active ? D2D1::ColorF(0.56f, 0.61f, 0.70f, 0.95f)
+                                            : D2D1::ColorF(0.42f, 0.45f, 0.52f, 0.85f));
+                target->FillRoundedRectangle(D2D1::RoundedRect(th, r, r), m_barBrush.Get());
             };
-            D2D1_RECT_F track {}, thumb {};
-            if (HScrollBarRects(track, thumb))
-                drawBar(track, thumb, m_barDragAxis == 0 || m_barHover);
-            if (VScrollBarRects(track, thumb))
-                drawBar(track, thumb, m_barDragAxis == 1);
+            if (hasH)
+                drawBar(hTrack, hThumb, m_barDragAxis == 0 || m_barHover);
+            if (hasV)
+                drawBar(vTrack, vThumb, m_barDragAxis == 1);
         }
     }
 
