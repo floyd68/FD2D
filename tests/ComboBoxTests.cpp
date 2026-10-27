@@ -44,6 +44,8 @@ namespace FD2D
             }
             return out;
         }
+
+        static D2D1_RECT_F TextRect(const ComboBox& combo) { return combo.m_text.LayoutRect(); }
     };
 }
 
@@ -205,4 +207,42 @@ FD2D_TEST(ComboBox_TargetGenerationResetsPopupItemBrushesKeepsLayouts)
     {
         FD2D_CHECK(TextTestAccess::Layout(*items[i]) == layouts[i].Get());
     }
+}
+
+FD2D_TEST(ComboBox_SelectionChangingTextBoundsRequestsLayout)
+{
+    FD2DWindowlessTest::ComScope com;
+    FD2DWindowlessTest::CoreScope core; // DirectWrite measures the text
+    FD2D::Backplate backplate(L"combo-test");
+    auto combo = std::make_shared<FD2D::ComboBox>(L"combo");
+    combo->SetItems({ L"a", L"a much longer item", L"a much longer item" });
+    FD2D_REQUIRE(backplate.AddWnd(combo));
+    combo->SetSelectedIndex(0);
+    combo->Measure({ 300.0f, 100.0f });
+    combo->Arrange({ 0.0f, 0.0f, 300.0f, 22.0f });
+    const D2D1_RECT_F shortRect = ComboBoxTestAccess::TextRect(*combo);
+
+    // Longer text: a layout request, and the next layout pass widens the
+    // text rect to the new text.
+    BackplateTestAccess::ClearLayoutDirty(backplate);
+    combo->SetSelectedIndex(1);
+    FD2D_CHECK(combo->SelectedText() == L"a much longer item");
+    FD2D_CHECK(BackplateTestAccess::LayoutDirty(backplate));
+    combo->Measure({ 300.0f, 100.0f });
+    combo->Arrange({ 0.0f, 0.0f, 300.0f, 22.0f });
+    const D2D1_RECT_F longRect = ComboBoxTestAccess::TextRect(*combo);
+    std::printf("  text rect width %.1f -> %.1f\n", shortRect.right - shortRect.left, longRect.right - longRect.left);
+    FD2D_CHECK(longRect.right - longRect.left > shortRect.right - shortRect.left + 20.0f);
+
+    // Same text (another item with equal text), or the same item: no request.
+    BackplateTestAccess::ClearLayoutDirty(backplate);
+    combo->SetSelectedIndex(2);
+    FD2D_CHECK(!BackplateTestAccess::LayoutDirty(backplate));
+    combo->SetSelectedIndex(2);
+    FD2D_CHECK(!BackplateTestAccess::LayoutDirty(backplate));
+
+    // A new item set that changes the selected text requests layout too.
+    combo->SetItems({ L"x" });
+    FD2D_CHECK(combo->SelectedText() == L"x");
+    FD2D_CHECK(BackplateTestAccess::LayoutDirty(backplate));
 }

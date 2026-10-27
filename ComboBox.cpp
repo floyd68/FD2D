@@ -8,6 +8,7 @@ namespace FD2D
     {
         SetContentMargin(8.0f, 2.0f);
         SetContentAlign(AlignH::Start, AlignV::Center);
+        m_text.SetText(SelectedText());
     }
 
     ComboBox::ComboBox(const std::wstring& name)
@@ -15,6 +16,7 @@ namespace FD2D
     {
         SetContentMargin(8.0f, 2.0f);
         SetContentAlign(AlignH::Start, AlignV::Center);
+        m_text.SetText(SelectedText());
     }
 
     Size ComboBox::Measure(Size available)
@@ -55,6 +57,11 @@ namespace FD2D
             text->SetText(item);
             m_itemTexts.push_back(std::move(text));
         }
+
+        if (SyncSelectedText())
+        {
+            NotifyContentLayoutChanged();
+        }
     }
 
     void ComboBox::SetSelectedIndex(int index, bool notify)
@@ -65,11 +72,29 @@ namespace FD2D
         }
         bool changed = (index != m_selectedIndex);
         m_selectedIndex = index;
+        const bool boundsChanged = SyncSelectedText();
         if (changed && notify && m_changed)
         {
             m_changed(m_selectedIndex);
         }
-        Invalidate();
+        if (boundsChanged)
+        {
+            // Re-measure and re-arrange: the box's text rect follows the
+            // text's measured size. RequestLayout also renders.
+            NotifyContentLayoutChanged();
+        }
+        else
+        {
+            Invalidate();
+        }
+    }
+
+    bool ComboBox::SyncSelectedText()
+    {
+        const Size before = m_text.Measure({ 0.0f, 0.0f });
+        m_text.SetText(SelectedText());
+        const Size after = m_text.Measure({ 0.0f, 0.0f });
+        return before.w != after.w || before.h != after.h;
     }
 
     std::wstring ComboBox::SelectedText() const
@@ -301,7 +326,6 @@ namespace FD2D
         m_brush->SetColor(active ? D2D1::ColorF(0.26f, 0.55f, 0.96f, 0.90f) : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.16f));
         target->DrawRoundedRectangle(rr, m_brush.Get(), 1.0f);
 
-        m_text.SetText(SelectedText());
         m_text.OnRender(target);
 
         // Chevron glyph, accent-tinted while active.

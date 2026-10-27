@@ -53,6 +53,9 @@ namespace FD2D
         D2D1_RECT_F DropdownRect() const;
         void Close();
         void EnsureBrush(ID2D1RenderTarget* target);
+        // Puts SelectedText() into the box's Text. Returns true when that
+        // changed its measured size (the box needs a new layout).
+        bool SyncSelectedText();
 
         std::vector<std::wstring> m_items {};
         int m_selectedIndex { -1 };

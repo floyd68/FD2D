@@ -71,6 +71,10 @@ namespace FD2D
         // The deadline the hover/toast timer is armed for (0 = not armed).
         static unsigned long long HoverToastTimerDueMs(const Backplate& backplate) { return backplate.m_hoverToastTimerDueMs; }
 
+        // Layout requests (Backplate::RequestLayout) mark the layout dirty.
+        static bool LayoutDirty(const Backplate& backplate) { return backplate.m_layoutDirty; }
+        static void ClearLayoutDirty(Backplate& backplate) { backplate.m_layoutDirty = false; }
+
         static ID2D1SolidColorBrush* TipBrush(const Backplate& backplate) { return backplate.m_tipBrush.Get(); }
         static IDWriteTextLayout* TooltipLayout(const Backplate& backplate) { return backplate.m_tipLayout.Get(); }
         static IDWriteTextLayout* ToastLayout(const Backplate& backplate) { return backplate.m_toastLayout.Get(); }
