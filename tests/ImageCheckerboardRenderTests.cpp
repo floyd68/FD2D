@@ -230,29 +230,36 @@ FD2D_TEST(ImageCheckerboard_HighZoomDrawsOnlyTheVisibleTiles)
     }
 }
 
-// Fractional geometry, as laid out in the app: a layout rect with fractional
-// edges and odd, fractional dimensions puts the rotation center off the pixel
-// grid, so at 90/180/270 degrees the tile edges land between pixel centers
-// (and a fractional pan moves destRect off the grid too). The original
-// per-tile fills antialias those edges; the tile oracle at pixel centers
-// cannot express that, so this compares with the original rendering:
-// LegacyCheckerboardWnd draws the old loop (one antialiased FillRectangle per
-// 8 px tile over destRect, under the same clip and rotation) in a second
-// backplate of the same size.
+// Fractional geometry and device scale, as in the app: a layout rect with
+// fractional edges and odd, fractional dimensions puts the rotation center off
+// the pixel grid, so at 90/180/270 degrees the tile edges land between pixel
+// centers (a fractional pan moves destRect off the grid too), and a display
+// scale of 125-200% maps each 8 DIP tile to 10-16 device pixels. The original
+// per-tile fills antialias edges off the grid and keep edges on it crisp; the
+// tile oracle at pixel centers cannot express the former, so these tests
+// compare with the original rendering: LegacyCheckerboardWnd draws the old
+// loop (one antialiased FillRectangle per 8 px tile over destRect, under the
+// same clip and rotation) in a second backplate of the same size and scale.
 
 namespace
 {
-    constexpr UINT kOddW = 129;
-    constexpr UINT kOddH = 97;
+    // Multiples of 4 DIPs, so the surface is a whole number of pixels at
+    // every tested scale.
+    constexpr UINT kLegacyW = 128;
+    constexpr UINT kLegacyH = 96;
     // 96.55 x 64.75, center (64.575, 47.975).
     const FD2D::Rect kFractionalLayout { 16.3f, 15.6f, 96.55f, 64.75f };
+    // 96 x 64 at (16, 16), center (64, 48): on the device pixel grid at every
+    // tested scale (multiples of 4 DIPs).
+    const FD2D::Rect kAlignedLayout { 16.0f, 16.0f, 96.0f, 64.0f };
 
-    // Places its one child at kFractionalLayout, whatever the backplate gives it.
-    class FractionalPlacement : public FD2D::Wnd
+    // Places its one child at a fixed rect, whatever the backplate gives it.
+    class FixedPlacement : public FD2D::Wnd
     {
     public:
-        FractionalPlacement()
+        explicit FixedPlacement(const FD2D::Rect& rect)
             : FD2D::Wnd(L"placement")
+            , m_rect(rect)
         {
         }
 
@@ -262,17 +269,19 @@ namespace
             m_layoutRect = FD2D::ToD2D(finalRect);
             for (auto& child : m_childrenOrdered)
             {
-                child->Arrange(kFractionalLayout);
+                child->Arrange(m_rect);
             }
         }
+
+    private:
+        FD2D::Rect m_rect {};
     };
 
     class LegacyCheckerboardWnd : public FD2D::Wnd
     {
     public:
-        explicit LegacyCheckerboardWnd(const FD2D::Image::DrawState& state)
+        LegacyCheckerboardWnd()
             : FD2D::Wnd(L"legacy")
-            , m_state(state)
         {
         }
 
@@ -329,23 +338,27 @@ namespace
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_dark {};
     };
 
-    struct OddScene
+    struct LegacyScene
     {
         FD2DWindowlessTest::ComScope com;
         FD2DWindowlessTest::CoreScope core;
         FD2D::Backplate imageBackplate { L"checkerboard-image" };
         FD2D::Backplate legacyBackplate { L"checkerboard-legacy" };
         std::shared_ptr<FD2D::Image> image { std::make_shared<FD2D::Image>(L"image") };
-        std::shared_ptr<LegacyCheckerboardWnd> legacy { std::make_shared<LegacyCheckerboardWnd>(FD2D::Image::DrawState {}) };
-        std::shared_ptr<FractionalPlacement> imagePlacement { std::make_shared<FractionalPlacement>() };
-        std::shared_ptr<FractionalPlacement> legacyPlacement { std::make_shared<FractionalPlacement>() };
+        std::shared_ptr<LegacyCheckerboardWnd> legacy { std::make_shared<LegacyCheckerboardWnd>() };
+        FD2D::Rect layout {};
+        float scale { 1.0f };
 
-        bool Create()
+        bool Create(const FD2D::Rect& layoutRect, float dpiScale)
         {
+            layout = layoutRect;
+            scale = dpiScale;
+            auto imagePlacement = std::make_shared<FixedPlacement>(layout);
+            auto legacyPlacement = std::make_shared<FixedPlacement>(layout);
             imageBackplate.SetClearColor(D2D1::ColorF(0.0f, 0.0f, 0.0f, 1.0f));
             legacyBackplate.SetClearColor(D2D1::ColorF(0.0f, 0.0f, 0.0f, 1.0f));
-            if (FAILED(imageBackplate.InitializeWindowless(kOddW, kOddH, 1.0f)) ||
-                FAILED(legacyBackplate.InitializeWindowless(kOddW, kOddH, 1.0f)) ||
+            if (FAILED(imageBackplate.InitializeWindowless(kLegacyW, kLegacyH, scale)) ||
+                FAILED(legacyBackplate.InitializeWindowless(kLegacyW, kLegacyH, scale)) ||
                 !imagePlacement->AddChild(image) || !legacyPlacement->AddChild(legacy) ||
                 !imageBackplate.AddWnd(imagePlacement) || !legacyBackplate.AddWnd(legacyPlacement))
             {
@@ -372,20 +385,22 @@ namespace
 
         struct Result
         {
-            int interior { 0 };        // pixels whose footprint lies in one tile
-            int interiorWrong { 0 };   // ... where the image is not that tile's color
-            int legacyWrong { 0 };     // ... where the original rendering is not (sanity)
-            int seam { 0 };            // pixels whose footprint crosses a tile edge
-            int seamOutOfRange { 0 };  // ... where the image is not a light/dark mix
-            int seamOffCoverage { 0 }; // ... where it is not the area-weighted mix
+            int interior { 0 };         // device pixels whose footprint lies in one tile
+            int interiorWrong { 0 };    // ... where the image is not that tile's color
+            int interiorVsLegacy { 0 }; // ... where image and original differ by more than 1
+            int legacyWrong { 0 };      // ... where the original is not the tile's color (sanity)
+            int seam { 0 };             // device pixels whose footprint crosses a tile edge
+            int seamOutOfRange { 0 };   // ... where the image is not a light/dark mix
+            int seamOffCoverage { 0 };  // ... where it is not the area-weighted mix
             int maxCoverageDiff { 0 };
-            int seamDiffers { 0 };     // ... where image and original differ by more than 3
+            int seamDiffers { 0 };      // ... where image and original differ by more than 3
             int maxSeamDiff { 0 };
             bool ok { false };
         };
 
-        // Renders both with `state` and classifies every pixel that lies fully
-        // inside the clip by its footprint mapped into the pre-rotation frame.
+        // Renders both with `state` and classifies every device pixel that
+        // lies fully inside the clip by its footprint mapped back into the
+        // image's pre-rotation frame (DIPs).
         Result Compare(const FD2D::Image::DrawState& state)
         {
             Result result;
@@ -395,24 +410,31 @@ namespace
             legacyBackplate.Render();
             Frame actual;
             Frame expected;
-            const D2D1_RECT_F all = D2D1::RectF(0.0f, 0.0f, static_cast<float>(kOddW), static_cast<float>(kOddH));
-            if (FAILED(actual.Read(imageBackplate, all)) || FAILED(expected.Read(legacyBackplate, all)))
+            const D2D1_RECT_F all = D2D1::RectF(0.0f, 0.0f, static_cast<float>(kLegacyW), static_cast<float>(kLegacyH));
+            if (FAILED(actual.Read(imageBackplate, all)) || FAILED(expected.Read(legacyBackplate, all)) ||
+                actual.width != expected.width || actual.height != expected.height)
             {
                 return result;
             }
 
-            const D2D1_RECT_F layout = FD2D::ToD2D(kFractionalLayout);
-            D2D1_RECT_F dest = FD2D::Util::ComputeAspectFitRect(layout, kContent, state.rotationQuarters);
+            const D2D1_RECT_F layoutRect = FD2D::ToD2D(layout);
+            D2D1_RECT_F dest = FD2D::Util::ComputeAspectFitRect(layoutRect, kContent, state.rotationQuarters);
             dest = FD2D::Util::ApplyZoomPanToRect(dest, state.zoomScale, state.panX, state.panY);
             const double startX = std::floor(static_cast<double>(dest.left) / 8.0) * 8.0;
             const double startY = std::floor(static_cast<double>(dest.top) / 8.0) * 8.0;
+            // Pre-rotation DIPs -> device pixels: rotation, then the scale.
             D2D1::Matrix3x2F inverse = D2D1::Matrix3x2F::Rotation(
                 static_cast<float>(state.rotationQuarters) * 90.0f,
-                D2D1::Point2F((layout.left + layout.right) * 0.5f, (layout.top + layout.bottom) * 0.5f));
+                D2D1::Point2F((layoutRect.left + layoutRect.right) * 0.5f, (layoutRect.top + layoutRect.bottom) * 0.5f)) *
+                D2D1::Matrix3x2F::Scale(scale, scale);
             if (!inverse.Invert())
             {
                 return result;
             }
+            const double clipL = static_cast<double>(layoutRect.left) * scale;
+            const double clipT = static_cast<double>(layoutRect.top) * scale;
+            const double clipR = static_cast<double>(layoutRect.right) * scale;
+            const double clipB = static_cast<double>(layoutRect.bottom) * scale;
 
             const auto close = [](const Bgra& a, const Bgra& b, int tolerance)
             {
@@ -420,17 +442,17 @@ namespace
                     std::abs(a.r - b.r) <= tolerance && std::abs(a.a - b.a) <= tolerance;
             };
 
-            for (UINT y = 0; y < kOddH; ++y)
+            for (UINT y = 0; y < actual.height; ++y)
             {
-                for (UINT x = 0; x < kOddW; ++x)
+                for (UINT x = 0; x < actual.width; ++x)
                 {
                     const float px = static_cast<float>(x);
                     const float py = static_cast<float>(y);
-                    if (px < layout.left || px + 1.0f > layout.right || py < layout.top || py + 1.0f > layout.bottom)
+                    if (px < clipL - 1e-3 || px + 1.0 > clipR + 1e-3 || py < clipT - 1e-3 || py + 1.0 > clipB + 1e-3)
                     {
                         continue; // on or outside the clip edge
                     }
-                    // Pre-rotation bounds of the pixel square (exact for quarter turns).
+                    // Pre-rotation bounds of the device pixel square (exact for quarter turns).
                     const D2D1_POINT_2F c0 = inverse.TransformPoint(D2D1::Point2F(px, py));
                     const D2D1_POINT_2F c1 = inverse.TransformPoint(D2D1::Point2F(px + 1.0f, py + 1.0f));
                     const double minX = (std::min)(c0.x, c1.x);
@@ -457,53 +479,58 @@ namespace
                             }
                             ++result.interiorWrong;
                         }
+                        if (!close(a, e, 1))
+                        {
+                            ++result.interiorVsLegacy;
+                        }
                         if (!close(e, color, 1))
                         {
                             ++result.legacyWrong;
                         }
+                        continue;
                     }
-                    else
+
+                    ++result.seam;
+                    const bool mix = a.a >= 254 && a.g >= kDark.g - 1 && a.g <= kLight.g + 1 &&
+                        a.r == a.g && a.b == a.g;
+                    if (!mix)
                     {
-                        ++result.seam;
-                        const bool mix = a.a >= 254 && a.g >= kDark.g - 1 && a.g <= kLight.g + 1 &&
-                            a.r == a.g && a.b == a.g;
-                        if (!mix)
+                        ++result.seamOutOfRange;
+                    }
+                    // Area-weighted mix of the tiles under the pixel (a box
+                    // filter, as antialiased tile edges would give).
+                    const double footprint = (maxX - minX) * (maxY - minY);
+                    double expectedLevel = 0.0;
+                    for (double i = i0; i <= i1; i += 1.0)
+                    {
+                        const double x0 = (std::max)(minX, startX + 8.0 * i);
+                        const double x1 = (std::min)(maxX, startX + 8.0 * (i + 1.0));
+                        for (double j = j0; j <= j1; j += 1.0)
                         {
-                            ++result.seamOutOfRange;
+                            const double y0 = (std::max)(minY, startY + 8.0 * j);
+                            const double y1 = (std::min)(maxY, startY + 8.0 * (j + 1.0));
+                            const double area = (std::max)(0.0, x1 - x0) * (std::max)(0.0, y1 - y0);
+                            const bool dark = (static_cast<long long>(i + j) & 1) != 0;
+                            expectedLevel += area * (dark ? kDark.g : kLight.g);
                         }
-                        // Area-weighted mix of the tiles under the pixel (a box
-                        // filter, as antialiased tile edges would give).
-                        double expectedLevel = 0.0;
-                        for (double i = i0; i <= i1; i += 1.0)
+                    }
+                    expectedLevel /= footprint;
+                    const int coverageDiff = std::abs(static_cast<int>(std::lround(expectedLevel)) - a.g);
+                    result.maxCoverageDiff = (std::max)(result.maxCoverageDiff, coverageDiff);
+                    if (coverageDiff > 4)
+                    {
+                        if (result.seamOffCoverage < 3)
                         {
-                            const double x0 = (std::max)(minX, startX + 8.0 * i);
-                            const double x1 = (std::min)(maxX, startX + 8.0 * (i + 1.0));
-                            for (double j = j0; j <= j1; j += 1.0)
-                            {
-                                const double y0 = (std::max)(minY, startY + 8.0 * j);
-                                const double y1 = (std::min)(maxY, startY + 8.0 * (j + 1.0));
-                                const double area = (std::max)(0.0, x1 - x0) * (std::max)(0.0, y1 - y0);
-                                const bool dark = (static_cast<long long>(i + j) & 1) != 0;
-                                expectedLevel += area * (dark ? kDark.g : kLight.g);
-                            }
+                            std::printf("    seam (%u, %u): image %3u, area-weighted %3.0f, original %3u\n",
+                                x, y, a.g, expectedLevel, e.g);
                         }
-                        const int coverageDiff = std::abs(static_cast<int>(std::lround(expectedLevel)) - a.g);
-                        result.maxCoverageDiff = (std::max)(result.maxCoverageDiff, coverageDiff);
-                        if (coverageDiff > 4)
-                        {
-                            if (result.seamOffCoverage < 3)
-                            {
-                                std::printf("    seam (%u, %u): image %3u, area-weighted %3.0f, original %3u\n",
-                                    x, y, a.g, expectedLevel, e.g);
-                            }
-                            ++result.seamOffCoverage;
-                        }
-                        const int d = std::abs(a.g - e.g);
-                        result.maxSeamDiff = (std::max)(result.maxSeamDiff, d);
-                        if (d > 3)
-                        {
-                            ++result.seamDiffers;
-                        }
+                        ++result.seamOffCoverage;
+                    }
+                    const int d = std::abs(a.g - e.g);
+                    result.maxSeamDiff = (std::max)(result.maxSeamDiff, d);
+                    if (d > 3)
+                    {
+                        ++result.seamDiffers;
                     }
                 }
             }
@@ -511,52 +538,75 @@ namespace
             return result;
         }
     };
-}
-
-FD2D_TEST(ImageCheckerboard_FractionalGeometryKeepsTilePhase)
-{
-    OddScene scene;
-    FD2D_REQUIRE(scene.Create());
 
     // Zoomed past the layout (the tiles cover the whole clip), with whole and
     // fractional pans: destRect.left/top are fractional and, for the larger
     // pans, negative.
-    const Case cases[] = {
+    const Case kLegacyCases[] = {
         { 5.06f, 0.0f, 0.0f },
         { 5.06f, 13.3f, -7.6f },
         { 2.5f, -3.25f, 5.75f },
         { 40.0f, -250.5f, 133.25f },
     };
-    for (int quarters = 0; quarters < 4; ++quarters)
+
+    // Runs every case at every rotation; returns the number of failing ones.
+    int CheckAgainstLegacy(const FD2D::Rect& layout, float scale, const char* label)
     {
-        for (const auto& c : cases)
+        LegacyScene scene;
+        if (!scene.Create(layout, scale))
         {
-            FD2D::Image::DrawState state {};
-            state.zoomScale = c.zoom;
-            state.panX = c.panX;
-            state.panY = c.panY;
-            state.rotationQuarters = quarters;
-            state.highQualitySampling = false;
-            state.alphaCheckerboardEnabled = true;
-            const OddScene::Result r = scene.Compare(state);
-            std::printf("  rotation %3d zoom %5.2f pan (%7.2f, %7.2f): interior %d (wrong %d, original wrong %d), "
-                "seam %d (not a mix %d, off the area-weighted mix %d (max %d), differ from original %d (max %d))\n",
-                quarters * 90, c.zoom, c.panX, c.panY, r.interior, r.interiorWrong, r.legacyWrong,
-                r.seam, r.seamOutOfRange, r.seamOffCoverage, r.maxCoverageDiff, r.seamDiffers, r.maxSeamDiff);
-            FD2D_REQUIRE(r.ok);
-            FD2D_CHECK(r.interior > 3000);
-            // The tile phase and colors: every pixel inside one tile has that
-            // tile's color, as in the original rendering.
-            FD2D_CHECK(r.interiorWrong == 0);
-            FD2D_CHECK(r.legacyWrong == 0);
-            // Pixels across a tile edge are the area-weighted mix of the tiles
-            // under them: tile edges keep their sub-pixel position under any
-            // rotation instead of snapping to a whole pixel. (The original
-            // per-tile fills also let the background show through where two
-            // antialiased tile edges meet, which darkens those seams; that is
-            // not reproduced.)
-            FD2D_CHECK(r.seamOutOfRange == 0);
-            FD2D_CHECK(r.seamOffCoverage == 0);
+            std::printf("  %s scale %.2f: setup failed\n", label, scale);
+            return 1;
         }
+        int failures = 0;
+        for (int quarters = 0; quarters < 4; ++quarters)
+        {
+            for (const auto& c : kLegacyCases)
+            {
+                FD2D::Image::DrawState state {};
+                state.zoomScale = c.zoom;
+                state.panX = c.panX;
+                state.panY = c.panY;
+                state.rotationQuarters = quarters;
+                state.highQualitySampling = false;
+                state.alphaCheckerboardEnabled = true;
+                const LegacyScene::Result r = scene.Compare(state);
+                // Interior: the tile phase and colors, exactly as the original.
+                // Seams: the area-weighted mix of the tiles under the pixel, so
+                // a tile edge keeps its sub-pixel position under any rotation
+                // and scale. (The original fills also let the background show
+                // through where two antialiased tile edges meet, which darkens
+                // those seams; that is not reproduced.)
+                const bool pass = r.ok && r.interior > 3000 && r.interiorWrong == 0 && r.interiorVsLegacy == 0 &&
+                    r.legacyWrong == 0 && r.seamOutOfRange == 0 && r.seamOffCoverage == 0;
+                std::printf("  %s scale %.2f rotation %3d zoom %5.2f pan (%7.2f, %7.2f): interior %d (wrong %d, vs original %d, "
+                    "original wrong %d), seam %d (not a mix %d, off the area-weighted mix %d (max %d), differ from original %d (max %d))%s\n",
+                    label, scale, quarters * 90, c.zoom, c.panX, c.panY, r.interior, r.interiorWrong, r.interiorVsLegacy,
+                    r.legacyWrong, r.seam, r.seamOutOfRange, r.seamOffCoverage, r.maxCoverageDiff, r.seamDiffers,
+                    r.maxSeamDiff, pass ? "" : "  FAILED");
+                if (!pass)
+                {
+                    ++failures;
+                }
+            }
+        }
+        return failures;
+    }
+}
+
+FD2D_TEST(ImageCheckerboard_FractionalGeometryKeepsTilePhase)
+{
+    FD2D_CHECK(CheckAgainstLegacy(kFractionalLayout, 1.0f, "fractional") == 0);
+}
+
+FD2D_TEST(ImageCheckerboard_DeviceScaleKeepsTileEdges)
+{
+    // Common display scales: each 8 DIP tile is 10, 12, 14 or 16 device
+    // pixels. Tile edges on the device pixel grid (aligned layout) stay crisp;
+    // edges off it (fractional layout and pans) are area-weighted mixes.
+    for (float scale : { 1.25f, 1.5f, 1.75f, 2.0f })
+    {
+        FD2D_CHECK(CheckAgainstLegacy(kAlignedLayout, scale, "aligned") == 0);
+        FD2D_CHECK(CheckAgainstLegacy(kFractionalLayout, scale, "fractional") == 0);
     }
 }
