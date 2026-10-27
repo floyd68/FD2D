@@ -192,8 +192,15 @@ namespace FD2D
         bool HasActiveAnimation(unsigned long long nowMs) const;
         void ProcessAnimationTick(unsigned long long nowMs);
 
-        // Force layout recalculation on next render.
+        // Force layout recalculation on next render (and request that render).
         void RequestLayout();
+        // Runs a requested layout pass now, without rendering; returns true
+        // when it did. Layout requests are coalesced with the next render, so
+        // input that arrives before that render would hit-test the previous
+        // arrangement: the backplate calls this before it routes an input
+        // message or a file drag/drop. Code that needs arranged bounds right
+        // after a change can call it too. No-op while rendering.
+        bool LayoutIfPending();
 
         // Transient notification banner (e.g. "Path copied to clipboard"),
         // drawn over the UI near the bottom of the window and auto-dismissed

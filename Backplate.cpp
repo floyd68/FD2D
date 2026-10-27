@@ -608,6 +608,8 @@ namespace FD2D
 
     bool Backplate::HandleFileDragOver(const std::wstring& path, const POINT& ptClient)
     {
+        LayoutIfPending();
+
         // OLE calls DragOver on every mouse-move during a drag (many times/sec).
         // Clearing stale visuals and setting the new one each call Invalidate().
         // Invalidations are coalesced, so this whole update ("clear old, set
@@ -664,6 +666,8 @@ namespace FD2D
 
     bool Backplate::HandleFileDropPaths(const std::vector<std::wstring>& paths, const POINT& ptClient)
     {
+        LayoutIfPending();
+
         if (paths.empty())
         {
             return false;
@@ -1409,6 +1413,10 @@ namespace FD2D
 
         if (isInputMessage)
         {
+            // Hit tests below and in the controls read arranged bounds: a
+            // layout request since the last frame is arranged first.
+            LayoutIfPending();
+
             InputEvent inputEvent {};
             inputEvent.type = inputType;
             inputEvent.button = ToMouseButton(message, wParam);
@@ -3269,6 +3277,16 @@ namespace FD2D
         }
 
         m_layoutDirty = false;
+    }
+
+    bool Backplate::LayoutIfPending()
+    {
+        if (!m_layoutDirty || m_isRendering)
+        {
+            return false;
+        }
+        Layout();
+        return true;
     }
 
     void Backplate::Show(int nCmdShow)

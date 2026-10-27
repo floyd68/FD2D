@@ -192,6 +192,66 @@ FD2D_TEST(CoalescedRender_ExplicitRenderThenReadComposedPixelsReadsTheCurrentFra
     FD2D_CHECK(a->Frames() == 2);
 }
 
+namespace
+{
+    // Counts its layout passes and the input it receives, and records
+    // whether it was arranged at its current size when the input arrived.
+    class LayoutProbe : public FD2D::Wnd
+    {
+    public:
+        LayoutProbe()
+            : FD2D::Wnd(L"layout-probe")
+        {
+        }
+
+        void Arrange(FD2D::Rect finalRect) override
+        {
+            ++arranges;
+            FD2D::Wnd::Arrange({ finalRect.x, finalRect.y, width, finalRect.h });
+        }
+
+        bool OnInputEvent(const FD2D::InputEvent& event) override
+        {
+            (void)event;
+            const D2D1_RECT_F r = LayoutRect();
+            arrangedWidthAtInput = r.right - r.left;
+            return true;
+        }
+
+        float width { 10.0f };
+        int arranges { 0 };
+        float arrangedWidthAtInput { -1.0f };
+    };
+}
+
+FD2D_TEST(CoalescedRender_InputAfterALayoutRequestSeesTheArrangedTree)
+{
+    Scene scene;
+    FD2D_REQUIRE(scene.Create());
+    auto probe = std::make_shared<LayoutProbe>();
+    FD2D_REQUIRE(scene.backplate.AddWnd(probe));
+    scene.backplate.Render();
+    const int arranges = probe->arranges;
+
+    // A layout change is only requested; input that arrives before the
+    // coalesced render is routed against the new arrangement, without a frame.
+    probe->width = 40.0f;
+    scene.backplate.RequestLayout();
+    FD2D_CHECK(probe->arranges == arranges);
+    LRESULT result = 0;
+    FD2D_CHECK(BackplateTestAccess::HandleMessage(scene.backplate, nullptr, WM_KEYDOWN, 'A', 0, result));
+    std::printf("  input after a layout request: arranged width %.0f, %d layout pass(es), render pending %d\n",
+        probe->arrangedWidthAtInput, probe->arranges - arranges, scene.backplate.IsRenderPending() ? 1 : 0);
+    FD2D_CHECK(probe->arrangedWidthAtInput == 40.0f);
+    FD2D_CHECK(probe->arranges == arranges + 1);
+    FD2D_CHECK(!BackplateTestAccess::LayoutDirty(scene.backplate));
+    FD2D_CHECK(scene.backplate.IsRenderPending());
+
+    // The render then draws without another layout pass.
+    FD2D_CHECK(scene.backplate.RenderIfPending());
+    FD2D_CHECK(probe->arranges == arranges + 1);
+}
+
 FD2D_TEST(CoalescedRender_FileDragOverAndLeaveEndInOneRenderWithTheFinalOverlay)
 {
     Scene scene;
