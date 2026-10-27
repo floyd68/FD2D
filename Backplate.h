@@ -283,6 +283,12 @@ namespace FD2D
             ID2D1RenderTarget* target,
             bool drawHover,
             bool drawToast);
+        // Returns `layout`, rebuilt from m_tipFormat only when `text` differs
+        // from `layoutText` (the text it was built for).
+        IDWriteTextLayout* EnsureTipLayout(
+            Microsoft::WRL::ComPtr<IDWriteTextLayout>& layout,
+            std::wstring& layoutText,
+            const std::wstring& text);
         bool HasActiveOverlay(OverlayLayer layer) const;
         bool RouteOverlayInput(const InputEvent& event, OverlayLayer layer);
         void RenderOverlayLayer(ID2D1RenderTarget* target, OverlayLayer layer);
@@ -395,8 +401,17 @@ namespace FD2D
         // Transient toast banner text + its expiry time (0 = none).
         std::wstring m_toastText {};
         unsigned long long m_toastExpireMs { 0 };
-        // Lazily created DWrite format for tooltip/toast text.
+        // Lazily created DWrite format for tooltip/toast text, and the text
+        // layouts built from it, rebuilt only when their text changes. DirectWrite
+        // objects are device-independent and survive target/device recreation.
         Microsoft::WRL::ComPtr<IDWriteTextFormat> m_tipFormat {};
+        Microsoft::WRL::ComPtr<IDWriteTextLayout> m_tipLayout {};
+        std::wstring m_tipLayoutText {};
+        Microsoft::WRL::ComPtr<IDWriteTextLayout> m_toastLayout {};
+        std::wstring m_toastLayoutText {};
+        // Tooltip/toast brush (recolored per fill), created on the current
+        // target and reset by InvalidateGraphics on a new target generation.
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_tipBrush {};
 
         D2D1_COLOR_F m_clearColor { 0.09f, 0.09f, 0.10f, 1.0f };
         D2D1_SIZE_U m_renderSurfaceSize { 0, 0 };

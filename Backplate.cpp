@@ -196,6 +196,8 @@ namespace FD2D
         if (bumpTarget)
         {
             ++m_graphicsGeneration.target;
+            // Target-bound; the tooltip/toast text layouts are not.
+            m_tipBrush.Reset();
         }
         if (bumpRenderer)
         {
@@ -1009,18 +1011,25 @@ namespace FD2D
             (void)m_tipFormat->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
         }
 
+        if (!m_tipBrush)
+        {
+            (void)target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &m_tipBrush);
+            if (!m_tipBrush)
+            {
+                return;
+            }
+        }
+
         const float clientW = static_cast<float>(m_size.width);
         const float clientH = static_cast<float>(m_size.height);
         constexpr float padX = 9.0f;
         constexpr float padY = 5.0f;
 
-        auto drawBox = [&](const std::wstring& text, float boxLeft, float boxTop,
+        auto drawBox = [&](IDWriteTextLayout* layout, float boxLeft, float boxTop,
                            bool clampBelowRightOfCursor, const D2D1_COLOR_F& bg,
                            const D2D1_COLOR_F& border, const D2D1_COLOR_F& fg)
         {
-            Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
-            if (FAILED(dwrite->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()),
-                m_tipFormat.Get(), 100000.0f, 100000.0f, &layout)) || !layout)
+            if (layout == nullptr)
             {
                 return;
             }
@@ -1043,25 +1052,19 @@ namespace FD2D
 
             const D2D1_ROUNDED_RECT rr {
                 D2D1::RectF(boxLeft, boxTop, boxLeft + boxW, boxTop + boxH), 4.0f, 4.0f };
-            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
-            if (SUCCEEDED(target->CreateSolidColorBrush(bg, &brush)))
-            {
-                target->FillRoundedRectangle(rr, brush.Get());
-            }
-            if (SUCCEEDED(target->CreateSolidColorBrush(border, &brush)))
-            {
-                target->DrawRoundedRectangle(rr, brush.Get(), 1.0f);
-            }
-            if (SUCCEEDED(target->CreateSolidColorBrush(fg, &brush)))
-            {
-                target->DrawTextLayout(D2D1::Point2F(boxLeft + padX, boxTop + padY),
-                    layout.Get(), brush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
-            }
+            m_tipBrush->SetColor(bg);
+            target->FillRoundedRectangle(rr, m_tipBrush.Get());
+            m_tipBrush->SetColor(border);
+            target->DrawRoundedRectangle(rr, m_tipBrush.Get(), 1.0f);
+            m_tipBrush->SetColor(fg);
+            target->DrawTextLayout(D2D1::Point2F(boxLeft + padX, boxTop + padY),
+                layout, m_tipBrush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
         };
 
         if (hasHover)
         {
-            drawBox(m_hoverTip, static_cast<float>(m_tipAnchor.x) + 12.0f,
+            drawBox(EnsureTipLayout(m_tipLayout, m_tipLayoutText, m_hoverTip),
+                    static_cast<float>(m_tipAnchor.x) + 12.0f,
                     static_cast<float>(m_tipAnchor.y) + 20.0f, true,
                     D2D1::ColorF(0.12f, 0.12f, 0.14f, 0.97f),
                     D2D1::ColorF(0.42f, 0.44f, 0.50f, 1.0f),
@@ -1070,10 +1073,8 @@ namespace FD2D
         if (hasToast)
         {
             // Centered near the bottom of the window.
-            Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
-            if (SUCCEEDED(dwrite->CreateTextLayout(m_toastText.c_str(),
-                static_cast<UINT32>(m_toastText.size()), m_tipFormat.Get(),
-                100000.0f, 100000.0f, &layout)) && layout)
+            IDWriteTextLayout* layout = EnsureTipLayout(m_toastLayout, m_toastLayoutText, m_toastText);
+            if (layout != nullptr)
             {
                 DWRITE_TEXT_METRICS m {};
                 if (SUCCEEDED(layout->GetMetrics(&m)))
@@ -1081,13 +1082,39 @@ namespace FD2D
                     const float boxW = m.width + padX * 2.0f;
                     const float left = (clientW - boxW) * 0.5f;
                     const float top = clientH - (m.height + padY * 2.0f) - 24.0f;
-                    drawBox(m_toastText, left, top, false,
+                    drawBox(layout, left, top, false,
                             D2D1::ColorF(0.16f, 0.34f, 0.58f, 0.97f),
                             D2D1::ColorF(0.30f, 0.55f, 0.85f, 1.0f),
                             D2D1::ColorF(0.97f, 0.98f, 1.0f, 1.0f));
                 }
             }
         }
+    }
+
+    IDWriteTextLayout* Backplate::EnsureTipLayout(
+        Microsoft::WRL::ComPtr<IDWriteTextLayout>& layout,
+        std::wstring& layoutText,
+        const std::wstring& text)
+    {
+        if (layout && layoutText == text)
+        {
+            return layout.Get();
+        }
+        layout.Reset();
+        layoutText.clear();
+        IDWriteFactory* dwrite = Core::DWriteFactory();
+        if (dwrite == nullptr || !m_tipFormat)
+        {
+            return nullptr;
+        }
+        if (FAILED(dwrite->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()),
+            m_tipFormat.Get(), 100000.0f, 100000.0f, &layout)) || !layout)
+        {
+            layout.Reset();
+            return nullptr;
+        }
+        layoutText = text;
+        return layout.Get();
     }
 
     LRESULT CALLBACK Backplate::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
