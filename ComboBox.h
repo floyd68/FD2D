@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 #include "Wnd.h"
@@ -43,6 +44,9 @@ namespace FD2D
         bool OnOverlayInput(const InputEvent& event, OverlayLayer layer) override;
 
     private:
+        // Tests inspect the popup item texts.
+        friend struct ComboBoxTestAccess;
+
         bool HitTestBox(const POINT& pt) const;
         bool HitTestDropdown(const POINT& pt) const;
         D2D1_RECT_F ItemRect(size_t index) const;
@@ -57,6 +61,10 @@ namespace FD2D
         bool m_hoveredBox { false };
 
         Text m_text {};
+        // One Text per item, created by SetItems and reused by every popup
+        // render. Like m_text they are not in the child tree, so EnsureBrush
+        // resets their brushes on a new target generation (layouts are kept).
+        std::vector<std::unique_ptr<Text>> m_itemTexts {};
         SelectionChangedHandler m_changed {};
         D2D1_COLOR_F m_dropdownBackground { 0.10f, 0.10f, 0.12f, 0.75f };
 

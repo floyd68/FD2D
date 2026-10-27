@@ -45,6 +45,16 @@ namespace FD2D
         {
             m_selectedIndex = m_items.empty() ? -1 : 0;
         }
+
+        // Popup item texts: created once per item set, reused by every render.
+        m_itemTexts.clear();
+        m_itemTexts.reserve(m_items.size());
+        for (const auto& item : m_items)
+        {
+            auto text = std::make_unique<Text>();
+            text->SetText(item);
+            m_itemTexts.push_back(std::move(text));
+        }
     }
 
     void ComboBox::SetSelectedIndex(int index, bool notify)
@@ -260,7 +270,13 @@ namespace FD2D
         if (RefreshTargetResourceStamp(m_brushStamp))
         {
             m_brush.Reset();
-            m_text.ResetTargetResources();  // embedded, not attached: driven from here
+            // Embedded, not attached: driven from here. Their DirectWrite
+            // layouts are device-independent and kept.
+            m_text.ResetTargetResources();
+            for (const auto& itemText : m_itemTexts)
+            {
+                itemText->ResetTargetResources();
+            }
         }
         if (!m_brush)
         {
@@ -322,7 +338,7 @@ namespace FD2D
         m_brush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.16f));
         target->DrawRoundedRectangle(ddr, m_brush.Get(), 1.0f);
 
-        int visible = (std::min)(kMaxVisibleItems, static_cast<int>(m_items.size()));
+        int visible = (std::min)(kMaxVisibleItems, static_cast<int>(m_itemTexts.size()));
         for (int i = 0; i < visible; ++i)
         {
             D2D1_RECT_F itemRect = ItemRect(static_cast<size_t>(i));
@@ -334,8 +350,7 @@ namespace FD2D
                 target->FillRoundedRectangle(D2D1::RoundedRect(hi, 3.0f, 3.0f), m_brush.Get());
             }
 
-            Text itemText;
-            itemText.SetText(m_items[static_cast<size_t>(i)]);
+            Text& itemText = *m_itemTexts[static_cast<size_t>(i)];
             Size itemTextSize = itemText.Measure({ 0.0f, 0.0f });
             Rect itemBounds = FromD2D(itemRect);
             Thickness itemMargin = m_contentMargin;
