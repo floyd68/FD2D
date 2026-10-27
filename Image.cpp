@@ -880,12 +880,18 @@ namespace FD2D
         {
             return false;
         }
+        // Linear sampling: one texel per pixel, so a tile edge that lands
+        // between pixel centers (a rotation around a center off the pixel
+        // grid, fractional layout or pan) gives the area-weighted mix of the
+        // two tiles, as the antialiased per-tile fills did, instead of
+        // snapping the edge to a whole pixel. Edges on the pixel grid stay
+        // crisp.
         (void)target->CreateBitmapBrush(
             pattern.Get(),
             D2D1::BitmapBrushProperties(
                 D2D1_EXTEND_MODE_WRAP,
                 D2D1_EXTEND_MODE_WRAP,
-                D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR),
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR),
             &m_checkerBrush);
         return m_checkerBrush != nullptr;
     }
