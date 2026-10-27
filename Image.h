@@ -55,11 +55,14 @@ namespace FD2D
         void OnGraphicsInvalidated(GraphicsInvalidationReason reason, const GraphicsGeneration& generation) override;
 
     private:
+        // Tests inspect the cached checkerboard brush.
+        friend struct ImageTestAccess;
+
         bool TryGetContentSize(D2D1_SIZE_F& outSize) const;
         void ResetCheckerBrushes();
         // The cached two-tile checkerboard pattern brush (see OnRender), with
-        // `texelsPerTile` texels per 8 DIP tile.
-        bool EnsureCheckerBrush(ID2D1RenderTarget* target, UINT texelsPerTile);
+        // texelsPerTile.width x texelsPerTile.height texels per 8 DIP tile.
+        bool EnsureCheckerBrush(ID2D1RenderTarget* target, D2D1_SIZE_U texelsPerTile);
         // Drops content whose resource domain changed: the D2D bitmap on a new
         // target generation, the SRV on a new device generation (an SRV survives
         // target-only recreation). Returns true if anything was dropped.
@@ -74,9 +77,11 @@ namespace FD2D
 
         // 16x16 DIP wrap-sampled bitmap brush: one light and one dark 8 DIP
         // tile per row, alternating per row, at about one texel per device
-        // pixel (m_checkerTexelsPerTile texels per tile).
+        // pixel along each axis (m_checkerTexelsX x m_checkerTexelsY texels
+        // per tile; both are the cache key).
         Microsoft::WRL::ComPtr<ID2D1BitmapBrush> m_checkerBrush {};
-        UINT m_checkerTexelsPerTile { 0 };
+        UINT m_checkerTexelsX { 0 };
+        UINT m_checkerTexelsY { 0 };
 
         // Generations the content and brushes were created under.
         GraphicsResourceStamp m_bitmapStamp {};

@@ -844,27 +844,40 @@ namespace FD2D
 
     namespace
     {
-        // Texels per 8 DIP checkerboard tile for about one texel per device
-        // pixel: the target DPI and the scale of the incoming transform (the
-        // backplate's logical-to-render scale during live resize, a parent's
-        // scale) map DIPs to device pixels. 8 DIPs are a whole number of
-        // pixels at 100/125/150/175/200%; otherwise the nearest count.
-        UINT CheckerTexelsPerTile(ID2D1RenderTarget* target, const D2D1::Matrix3x2F& incoming)
+        UINT TexelsForDeviceLength(double deviceLength)
+        {
+            const double texels = std::round(static_cast<double>(kCheckerTile) * deviceLength);
+            return static_cast<UINT>((std::min)(256.0, (std::max)(1.0, texels)));
+        }
+
+        // Texels per 8 DIP checkerboard tile along the pattern's x and y axes
+        // (the image's pre-rotation frame) for about one texel per device
+        // pixel. `drawTransform` is the transform the pattern is drawn under:
+        // the image's rotation, then the incoming transform (a parent's scale,
+        // the backplate's per-axis logical-to-render scale during live
+        // resize); the target DPI then maps each device axis on its own. At
+        // 90/270 degrees the pattern's x axis runs along the device y axis.
+        // 8 DIPs are a whole number of pixels at 100/125/150/175/200%;
+        // otherwise the nearest count.
+        D2D1_SIZE_U CheckerTexelsPerTile(ID2D1RenderTarget* target, const D2D1::Matrix3x2F& drawTransform)
         {
             FLOAT dpiX = 96.0f;
             FLOAT dpiY = 96.0f;
             target->GetDpi(&dpiX, &dpiY);
-            const double transformScale = std::sqrt(
-                static_cast<double>(incoming._11) * incoming._11 + static_cast<double>(incoming._12) * incoming._12);
-            const double deviceScale = transformScale * (dpiX > 0.0f ? dpiX / 96.0 : 1.0);
-            const double texels = std::round(static_cast<double>(kCheckerTile) * deviceScale);
-            return static_cast<UINT>((std::min)(256.0, (std::max)(1.0, texels)));
+            const double sx = dpiX > 0.0f ? dpiX / 96.0 : 1.0;
+            const double sy = dpiY > 0.0f ? dpiY / 96.0 : 1.0;
+            // Row vectors: the pattern's unit x axis maps to (_11, _12), its
+            // unit y axis to (_21, _22), before the DPI scale.
+            const double xAxis = std::hypot(drawTransform._11 * sx, drawTransform._12 * sy);
+            const double yAxis = std::hypot(drawTransform._21 * sx, drawTransform._22 * sy);
+            return D2D1::SizeU(TexelsForDeviceLength(xAxis), TexelsForDeviceLength(yAxis));
         }
     }
 
-    bool Image::EnsureCheckerBrush(ID2D1RenderTarget* target, UINT texelsPerTile)
+    bool Image::EnsureCheckerBrush(ID2D1RenderTarget* target, D2D1_SIZE_U texelsPerTile)
     {
-        if (RefreshTargetResourceStamp(m_checkerStamp) || m_checkerTexelsPerTile != texelsPerTile)
+        if (RefreshTargetResourceStamp(m_checkerStamp) ||
+            m_checkerTexelsX != texelsPerTile.width || m_checkerTexelsY != texelsPerTile.height)
         {
             ResetCheckerBrushes();
         }
@@ -873,32 +886,35 @@ namespace FD2D
             return true;
         }
 
-        // One pattern period: 2 x 2 tiles of texelsPerTile texels each, light
-        // at (0, 0) and (1, 1). The bitmap DPI makes the period 16 x 16 DIPs
-        // (one tile 8 DIPs) whatever the texel count, so each texel is about
-        // one device pixel.
-        const UINT kTile = texelsPerTile;
-        const UINT kPeriod = kTile * 2u;
-        const FLOAT patternDpi = 96.0f * static_cast<FLOAT>(kTile) / kCheckerTile;
+        // One pattern period: 2 x 2 tiles of tileX x tileY texels, light at
+        // (0, 0) and (1, 1). The bitmap DPI (per axis) makes the period 16 x 16
+        // DIPs (one tile 8 DIPs) whatever the texel counts, so each texel is
+        // about one device pixel along each axis.
+        const UINT tileX = texelsPerTile.width;
+        const UINT tileY = texelsPerTile.height;
+        const UINT periodX = tileX * 2u;
+        const UINT periodY = tileY * 2u;
+        const FLOAT patternDpiX = 96.0f * static_cast<FLOAT>(tileX) / kCheckerTile;
+        const FLOAT patternDpiY = 96.0f * static_cast<FLOAT>(tileY) / kCheckerTile;
         const uint32_t light = OpaqueGrayBgra(kCheckerLight);
         const uint32_t dark = OpaqueGrayBgra(kCheckerDark);
-        std::vector<uint32_t> pixels(static_cast<size_t>(kPeriod) * kPeriod);
-        for (UINT y = 0; y < kPeriod; ++y)
+        std::vector<uint32_t> pixels(static_cast<size_t>(periodX) * periodY);
+        for (UINT y = 0; y < periodY; ++y)
         {
-            for (UINT x = 0; x < kPeriod; ++x)
+            for (UINT x = 0; x < periodX; ++x)
             {
-                const bool isDark = (((x / kTile) + (y / kTile)) & 1u) != 0;
-                pixels[static_cast<size_t>(y) * kPeriod + x] = isDark ? dark : light;
+                const bool isDark = (((x / tileX) + (y / tileY)) & 1u) != 0;
+                pixels[static_cast<size_t>(y) * periodX + x] = isDark ? dark : light;
             }
         }
 
         Microsoft::WRL::ComPtr<ID2D1Bitmap> pattern;
         const D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
             D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
-            patternDpi,
-            patternDpi);
+            patternDpiX,
+            patternDpiY);
         if (FAILED(target->CreateBitmap(
-                D2D1::SizeU(kPeriod, kPeriod), pixels.data(), kPeriod * 4u, &props, &pattern)) ||
+                D2D1::SizeU(periodX, periodY), pixels.data(), periodX * 4u, &props, &pattern)) ||
             !pattern)
         {
             return false;
@@ -916,7 +932,8 @@ namespace FD2D
                 D2D1_EXTEND_MODE_WRAP,
                 D2D1_BITMAP_INTERPOLATION_MODE_LINEAR),
             &m_checkerBrush);
-        m_checkerTexelsPerTile = m_checkerBrush ? texelsPerTile : 0;
+        m_checkerTexelsX = m_checkerBrush ? tileX : 0;
+        m_checkerTexelsY = m_checkerBrush ? tileY : 0;
         return m_checkerBrush != nullptr;
     }
 
@@ -1136,8 +1153,10 @@ namespace FD2D
                         m_drawState.rotationQuarters);
                     const Util::CheckerboardTiles tiles =
                         Util::ComputeCheckerboardTiles(destRect, visibleRect, kCheckerTile);
+                    D2D1::Matrix3x2F drawTransform;
+                    target->GetTransform(&drawTransform);
                     if (!tiles.Empty() &&
-                        EnsureCheckerBrush(target, CheckerTexelsPerTile(target, incomingTransform)))
+                        EnsureCheckerBrush(target, CheckerTexelsPerTile(target, drawTransform)))
                     {
                         const D2D1_POINT_2F origin = tiles.PatternOrigin();
                         m_checkerBrush->SetTransform(D2D1::Matrix3x2F::Translation(origin.x, origin.y));

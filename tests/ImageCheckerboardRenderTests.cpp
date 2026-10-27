@@ -253,7 +253,9 @@ namespace
     // tested scale (multiples of 4 DIPs).
     const FD2D::Rect kAlignedLayout { 16.0f, 16.0f, 96.0f, 64.0f };
 
-    // Places its one child at a fixed rect, whatever the backplate gives it.
+    // Places its one child at a fixed rect, whatever the backplate gives it,
+    // and draws it under an extra Scale(scaleX, scaleY) around the origin, as
+    // a parent (or the backplate's per-axis live-resize scale) does.
     class FixedPlacement : public FD2D::Wnd
     {
     public:
@@ -261,6 +263,21 @@ namespace
             : FD2D::Wnd(L"placement")
             , m_rect(rect)
         {
+        }
+
+        void SetScale(float scaleX, float scaleY)
+        {
+            m_scaleX = scaleX;
+            m_scaleY = scaleY;
+        }
+
+        void OnRender(ID2D1RenderTarget* target) override
+        {
+            D2D1::Matrix3x2F previous;
+            target->GetTransform(&previous);
+            target->SetTransform(D2D1::Matrix3x2F::Scale(m_scaleX, m_scaleY) * previous);
+            FD2D::Wnd::OnRender(target);
+            target->SetTransform(previous);
         }
 
         void Arrange(FD2D::Rect finalRect) override
@@ -275,6 +292,8 @@ namespace
 
     private:
         FD2D::Rect m_rect {};
+        float m_scaleX { 1.0f };
+        float m_scaleY { 1.0f };
     };
 
     class LegacyCheckerboardWnd : public FD2D::Wnd
@@ -346,15 +365,29 @@ namespace
         FD2D::Backplate legacyBackplate { L"checkerboard-legacy" };
         std::shared_ptr<FD2D::Image> image { std::make_shared<FD2D::Image>(L"image") };
         std::shared_ptr<LegacyCheckerboardWnd> legacy { std::make_shared<LegacyCheckerboardWnd>() };
+        std::shared_ptr<FixedPlacement> imagePlacement {};
+        std::shared_ptr<FixedPlacement> legacyPlacement {};
         FD2D::Rect layout {};
         float scale { 1.0f };
+        // The parent's (incoming) scale per axis, on top of the backplate's.
+        float incomingX { 1.0f };
+        float incomingY { 1.0f };
 
-        bool Create(const FD2D::Rect& layoutRect, float dpiScale)
+        void SetIncomingScale(float x, float y)
+        {
+            incomingX = x;
+            incomingY = y;
+            imagePlacement->SetScale(x, y);
+            legacyPlacement->SetScale(x, y);
+        }
+
+        bool Create(const FD2D::Rect& layoutRect, float dpiScale, float scaleX = 1.0f, float scaleY = 1.0f)
         {
             layout = layoutRect;
             scale = dpiScale;
-            auto imagePlacement = std::make_shared<FixedPlacement>(layout);
-            auto legacyPlacement = std::make_shared<FixedPlacement>(layout);
+            imagePlacement = std::make_shared<FixedPlacement>(layout);
+            legacyPlacement = std::make_shared<FixedPlacement>(layout);
+            SetIncomingScale(scaleX, scaleY);
             imageBackplate.SetClearColor(D2D1::ColorF(0.0f, 0.0f, 0.0f, 1.0f));
             legacyBackplate.SetClearColor(D2D1::ColorF(0.0f, 0.0f, 0.0f, 1.0f));
             if (FAILED(imageBackplate.InitializeWindowless(kLegacyW, kLegacyH, scale)) ||
@@ -422,19 +455,22 @@ namespace
             dest = FD2D::Util::ApplyZoomPanToRect(dest, state.zoomScale, state.panX, state.panY);
             const double startX = std::floor(static_cast<double>(dest.left) / 8.0) * 8.0;
             const double startY = std::floor(static_cast<double>(dest.top) / 8.0) * 8.0;
-            // Pre-rotation DIPs -> device pixels: rotation, then the scale.
+            // Pre-rotation DIPs -> device pixels: rotation, then the parent's
+            // per-axis scale, then the backplate's scale.
+            const double deviceX = static_cast<double>(scale) * incomingX;
+            const double deviceY = static_cast<double>(scale) * incomingY;
             D2D1::Matrix3x2F inverse = D2D1::Matrix3x2F::Rotation(
                 static_cast<float>(state.rotationQuarters) * 90.0f,
                 D2D1::Point2F((layoutRect.left + layoutRect.right) * 0.5f, (layoutRect.top + layoutRect.bottom) * 0.5f)) *
-                D2D1::Matrix3x2F::Scale(scale, scale);
+                D2D1::Matrix3x2F::Scale(static_cast<float>(deviceX), static_cast<float>(deviceY));
             if (!inverse.Invert())
             {
                 return result;
             }
-            const double clipL = static_cast<double>(layoutRect.left) * scale;
-            const double clipT = static_cast<double>(layoutRect.top) * scale;
-            const double clipR = static_cast<double>(layoutRect.right) * scale;
-            const double clipB = static_cast<double>(layoutRect.bottom) * scale;
+            const double clipL = static_cast<double>(layoutRect.left) * deviceX;
+            const double clipT = static_cast<double>(layoutRect.top) * deviceY;
+            const double clipR = static_cast<double>(layoutRect.right) * deviceX;
+            const double clipB = static_cast<double>(layoutRect.bottom) * deviceY;
 
             const auto close = [](const Bgra& a, const Bgra& b, int tolerance)
             {
@@ -550,10 +586,11 @@ namespace
     };
 
     // Runs every case at every rotation; returns the number of failing ones.
-    int CheckAgainstLegacy(const FD2D::Rect& layout, float scale, const char* label)
+    int CheckAgainstLegacy(const FD2D::Rect& layout, float scale, const char* label,
+        float incomingX = 1.0f, float incomingY = 1.0f)
     {
         LegacyScene scene;
-        if (!scene.Create(layout, scale))
+        if (!scene.Create(layout, scale, incomingX, incomingY))
         {
             std::printf("  %s scale %.2f: setup failed\n", label, scale);
             return 1;
@@ -579,9 +616,9 @@ namespace
                 // those seams; that is not reproduced.)
                 const bool pass = r.ok && r.interior > 3000 && r.interiorWrong == 0 && r.interiorVsLegacy == 0 &&
                     r.legacyWrong == 0 && r.seamOutOfRange == 0 && r.seamOffCoverage == 0;
-                std::printf("  %s scale %.2f rotation %3d zoom %5.2f pan (%7.2f, %7.2f): interior %d (wrong %d, vs original %d, "
+                std::printf("  %s scale %.2f x (%.2f, %.2f) rotation %3d zoom %5.2f pan (%7.2f, %7.2f): interior %d (wrong %d, vs original %d, "
                     "original wrong %d), seam %d (not a mix %d, off the area-weighted mix %d (max %d), differ from original %d (max %d))%s\n",
-                    label, scale, quarters * 90, c.zoom, c.panX, c.panY, r.interior, r.interiorWrong, r.interiorVsLegacy,
+                    label, scale, incomingX, incomingY, quarters * 90, c.zoom, c.panX, c.panY, r.interior, r.interiorWrong, r.interiorVsLegacy,
                     r.legacyWrong, r.seam, r.seamOutOfRange, r.seamOffCoverage, r.maxCoverageDiff, r.seamDiffers,
                     r.maxSeamDiff, pass ? "" : "  FAILED");
                 if (!pass)
@@ -609,4 +646,67 @@ FD2D_TEST(ImageCheckerboard_DeviceScaleKeepsTileEdges)
         FD2D_CHECK(CheckAgainstLegacy(kAlignedLayout, scale, "aligned") == 0);
         FD2D_CHECK(CheckAgainstLegacy(kFractionalLayout, scale, "fractional") == 0);
     }
+}
+
+FD2D_TEST(ImageCheckerboard_AnisotropicScaleKeepsTileEdges)
+{
+    // A parent (or the backplate's deferred live-resize scale) can scale the
+    // two axes differently. Each axis of the pattern gets its own device
+    // resolution: at 90/270 degrees the pattern's x axis runs along the
+    // device y axis.
+    const float scales[][2] = { { 0.75f, 1.0f }, { 1.0f, 1.5f }, { 1.25f, 1.75f } };
+    for (const auto& s : scales)
+    {
+        FD2D_CHECK(CheckAgainstLegacy(kAlignedLayout, 1.0f, "aligned", s[0], s[1]) == 0);
+        FD2D_CHECK(CheckAgainstLegacy(kFractionalLayout, 1.0f, "fractional", s[0], s[1]) == 0);
+    }
+}
+
+namespace FD2D
+{
+    struct ImageTestAccess
+    {
+        static ID2D1BitmapBrush* CheckerBrush(const Image& image) { return image.m_checkerBrush.Get(); }
+        static D2D1_SIZE_U CheckerTexelsPerTile(const Image& image)
+        {
+            return D2D1::SizeU(image.m_checkerTexelsX, image.m_checkerTexelsY);
+        }
+    };
+}
+
+FD2D_TEST(ImageCheckerboard_HeightOnlyScaleChangeRebuildsBrush)
+{
+    LegacyScene scene;
+    FD2D_REQUIRE(scene.Create(kAlignedLayout, 1.0f));
+    FD2D::Image::DrawState state {};
+    state.zoomScale = 5.06f;
+    state.alphaCheckerboardEnabled = true;
+    state.highQualitySampling = false;
+
+    FD2D_REQUIRE(scene.Compare(state).ok);
+    const Microsoft::WRL::ComPtr<ID2D1BitmapBrush> unscaled = FD2D::ImageTestAccess::CheckerBrush(*scene.image);
+    D2D1_SIZE_U texels = FD2D::ImageTestAccess::CheckerTexelsPerTile(*scene.image);
+    std::printf("  scale (1, 1): %u x %u texels per tile\n", texels.width, texels.height);
+    FD2D_REQUIRE(unscaled != nullptr);
+    FD2D_CHECK(texels.width == 8 && texels.height == 8);
+
+    // Same scale: the brush is kept.
+    FD2D_REQUIRE(scene.Compare(state).ok);
+    FD2D_CHECK(FD2D::ImageTestAccess::CheckerBrush(*scene.image) == unscaled.Get());
+
+    // Height only: rebuilt with more texels down, the same across.
+    scene.SetIncomingScale(1.0f, 1.5f);
+    const LegacyScene::Result r = scene.Compare(state);
+    texels = FD2D::ImageTestAccess::CheckerTexelsPerTile(*scene.image);
+    std::printf("  scale (1, 1.5): %u x %u texels per tile, interior wrong %d\n", texels.width, texels.height, r.interiorWrong);
+    FD2D_CHECK(FD2D::ImageTestAccess::CheckerBrush(*scene.image) != unscaled.Get());
+    FD2D_CHECK(texels.width == 8 && texels.height == 12);
+    FD2D_CHECK(r.ok && r.interiorWrong == 0);
+
+    // Rotated 90 degrees, the pattern's x axis runs down the device.
+    state.rotationQuarters = 1;
+    FD2D_REQUIRE(scene.Compare(state).ok);
+    texels = FD2D::ImageTestAccess::CheckerTexelsPerTile(*scene.image);
+    std::printf("  scale (1, 1.5), rotated 90: %u x %u texels per tile\n", texels.width, texels.height);
+    FD2D_CHECK(texels.width == 12 && texels.height == 8);
 }
