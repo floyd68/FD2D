@@ -44,6 +44,33 @@ namespace FD2D
             backplate.DrawHoverAndToast(target, false, true);
         }
 
+        // Gives a backplate (in windowless render mode) a hidden window for
+        // timers and nothing else; Backplate's own window-bound requests
+        // (Render on a timer, SetTimer) then work as in the app. Pass nullptr
+        // to detach it before the window is destroyed.
+        static void SetWindow(Backplate& backplate, HWND window)
+        {
+            backplate.m_window = window;
+        }
+
+        static bool HandleMessage(Backplate& backplate, HWND window, UINT message, WPARAM wParam, LPARAM lParam, LRESULT& result)
+        {
+            return backplate.HandleMessage(window, message, wParam, lParam, result);
+        }
+
+        // The hover bookkeeping a WM_MOUSEMOVE at `pt` runs.
+        static void HoverAt(Backplate& backplate, POINT pt)
+        {
+            backplate.UpdateHoverTarget(pt);
+        }
+
+        static bool TooltipShown(const Backplate& backplate) { return backplate.m_tipShown; }
+        static bool ToastShown(const Backplate& backplate) { return !backplate.m_toastText.empty(); }
+        static unsigned long long ToastExpireMs(const Backplate& backplate) { return backplate.m_toastExpireMs; }
+        static unsigned long long HoverSinceMs(const Backplate& backplate) { return backplate.m_hoverSinceMs; }
+        // The deadline the hover/toast timer is armed for (0 = not armed).
+        static unsigned long long HoverToastTimerDueMs(const Backplate& backplate) { return backplate.m_hoverToastTimerDueMs; }
+
         static ID2D1SolidColorBrush* TipBrush(const Backplate& backplate) { return backplate.m_tipBrush.Get(); }
         static IDWriteTextLayout* TooltipLayout(const Backplate& backplate) { return backplate.m_tipLayout.Get(); }
         static IDWriteTextLayout* ToastLayout(const Backplate& backplate) { return backplate.m_toastLayout.Get(); }

@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <string>
 
 // Backplate's hover tooltip and toast (drawn by Backplate::DrawHoverAndToast,
@@ -217,4 +218,254 @@ FD2D_TEST(BackplateHoverToast_TargetRecreationRecreatesBrushKeepsLayouts)
     FD2D_CHECK(SUCCEEDED(fx.a.DrawHoverAndToast(backplate)));
     FD2D_CHECK(BackplateTestAccess::ToastLayout(backplate) != toastLayout.Get());
     FD2D_CHECK(BackplateTestAccess::TooltipLayout(backplate) == tooltipLayout.Get());
+}
+
+// Deadlines: the tooltip dwell (500 ms) and the toast expiry (1800 ms) wait
+// on Backplate's per-window timer, not on animation frames. A windowless
+// backplate gets a hidden window that forwards its messages to the backplate;
+// the pump below runs ProcessAnimationTick after every wake, as
+// Application::RunMessageLoop does, so an animation request would render.
+
+namespace
+{
+    // Counts frames and offers a tooltip everywhere.
+    class TooltipWnd : public FD2DWindowlessTest::FillRectD2DWnd
+    {
+    public:
+        TooltipWnd()
+            : FillRectD2DWnd(L"tip", D2D1::RectF(0.0f, 0.0f, 8.0f, 8.0f), D2D1::ColorF(0.0f, 0.5f, 0.0f, 1.0f))
+        {
+        }
+
+        std::wstring TooltipText() const override { return L"Tooltip text"; }
+    };
+
+    LRESULT CALLBACK ForwardingWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+    {
+        auto* backplate = reinterpret_cast<FD2D::Backplate*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        LRESULT result = 0;
+        if (backplate != nullptr && BackplateTestAccess::HandleMessage(*backplate, hwnd, message, wParam, lParam, result))
+        {
+            return result;
+        }
+        return DefWindowProcW(hwnd, message, wParam, lParam);
+    }
+
+    // Windowless backplate + hidden message window + a frame-counting child.
+    struct TimerScene
+    {
+        FD2DWindowlessTest::ComScope com;
+        FD2DWindowlessTest::CoreScope core;
+        FD2D::Backplate backplate { L"hover-toast-timer-test" };
+        std::shared_ptr<TooltipWnd> tip { std::make_shared<TooltipWnd>() };
+        HWND window { nullptr };
+
+        bool Create()
+        {
+            WNDCLASSEXW wc { sizeof(WNDCLASSEXW) };
+            wc.lpfnWndProc = ForwardingWndProc;
+            wc.hInstance = GetModuleHandleW(nullptr);
+            wc.lpszClassName = L"FD2DHoverToastTestWindow";
+            (void)RegisterClassExW(&wc); // may already exist from an earlier test
+            window = CreateWindowExW(0, wc.lpszClassName, L"", WS_POPUP, 0, 0, kCanvasW, kCanvasH,
+                nullptr, nullptr, wc.hInstance, nullptr);
+            if (window == nullptr ||
+                FAILED(backplate.InitializeWindowless(kCanvasW, kCanvasH, 1.0f)) ||
+                !backplate.AddWnd(tip))
+            {
+                return false;
+            }
+            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&backplate));
+            BackplateTestAccess::SetWindow(backplate, window);
+            backplate.Render(); // lays out the child over the whole client area
+            return tip->Frames() == 1;
+        }
+
+        ~TimerScene()
+        {
+            if (window != nullptr)
+            {
+                // Detach first: the backplate never sees this window's WM_DESTROY.
+                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+                BackplateTestAccess::SetWindow(backplate, nullptr);
+                DestroyWindow(window);
+            }
+        }
+
+        // Pumps messages (and animation ticks, like RunMessageLoop) until
+        // done() or timeoutMs. Counts the wakes that saw an active animation.
+        template <typename Done>
+        bool PumpUntil(Done done, unsigned long long timeoutMs, int& animatedWakes)
+        {
+            const unsigned long long start = GetTickCount64();
+            while (!done())
+            {
+                if (GetTickCount64() - start >= timeoutMs)
+                {
+                    return false;
+                }
+                (void)MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_ALLINPUT);
+                MSG msg {};
+                while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+                {
+                    if (msg.message != WM_QUIT)
+                    {
+                        TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                }
+                const unsigned long long now = GetTickCount64();
+                if (backplate.HasActiveAnimation(now))
+                {
+                    ++animatedWakes;
+                }
+                backplate.ProcessAnimationTick(now);
+            }
+            return true;
+        }
+
+        void Settle(unsigned long long ms, int& animatedWakes)
+        {
+            (void)PumpUntil([]() { return false; }, ms, animatedWakes);
+        }
+
+        Canvas::Counts ReadCounts()
+        {
+            Canvas::Counts counts;
+            FD2DWindowlessTest::Frame frame;
+            if (FAILED(frame.Read(backplate, D2D1::RectF(0.0f, 0.0f, kCanvasW, kCanvasH))))
+            {
+                return counts;
+            }
+            for (UINT y = 0; y < frame.height; ++y)
+            {
+                for (UINT x = 0; x < frame.width; ++x)
+                {
+                    const auto p = frame.At(x, y);
+                    if (p.r >= 22 && p.r <= 38 && p.g >= 22 && p.g <= 38 && p.b >= 27 && p.b <= 43)
+                    {
+                        ++counts.tooltip;
+                    }
+                    if (p.r >= 32 && p.r <= 48 && p.g >= 76 && p.g <= 92 && p.b >= 135 && p.b <= 151)
+                    {
+                        ++counts.toast;
+                    }
+                    if (p.r >= 200 && p.g >= 200 && p.b >= 200)
+                    {
+                        ++counts.text;
+                    }
+                }
+            }
+            return counts;
+        }
+    };
+}
+
+FD2D_TEST(BackplateHoverToast_TooltipDwellWaitsOnTimer)
+{
+    TimerScene scene;
+    FD2D_REQUIRE(scene.Create());
+    FD2D::Backplate& backplate = scene.backplate;
+
+    // Hover over the control: the dwell is a timer deadline, not an animation.
+    BackplateTestAccess::HoverAt(backplate, POINT { 20, 20 });
+    const unsigned long long since = BackplateTestAccess::HoverSinceMs(backplate);
+    FD2D_CHECK(!BackplateTestAccess::TooltipShown(backplate));
+    FD2D_CHECK(!backplate.HasActiveAnimation(GetTickCount64()));
+    FD2D_CHECK(BackplateTestAccess::HoverToastTimerDueMs(backplate) == since + 500);
+
+    // Nothing renders while waiting; the timer at the deadline shows the
+    // tooltip and renders exactly one frame.
+    int animatedWakes = 0;
+    const bool shown = scene.PumpUntil([&]() { return BackplateTestAccess::TooltipShown(backplate); }, 3000, animatedWakes);
+    const unsigned long long waitedMs = GetTickCount64() - since;
+    std::printf("  tooltip shown %d after %llu ms, frames %d (1 before), animated wakes %d\n",
+        shown ? 1 : 0, waitedMs, scene.tip->Frames(), animatedWakes);
+    FD2D_REQUIRE(shown);
+    FD2D_CHECK(waitedMs >= 450); // timer granularity
+    FD2D_CHECK(scene.tip->Frames() == 2);
+    FD2D_CHECK(animatedWakes == 0);
+    const Canvas::Counts counts = scene.ReadCounts();
+    std::printf("  frame: tooltip fill %d px, text %d px\n", counts.tooltip, counts.text);
+    FD2D_CHECK(counts.tooltip > 400 && counts.text > 10);
+
+    // Then idle: no timer, no frames.
+    FD2D_CHECK(BackplateTestAccess::HoverToastTimerDueMs(backplate) == 0);
+    scene.Settle(300, animatedWakes);
+    FD2D_CHECK(scene.tip->Frames() == 2);
+    FD2D_CHECK(animatedWakes == 0);
+
+    // Leaving the control (no tooltip there) drops a pending dwell.
+    BackplateTestAccess::HoverAt(backplate, POINT { 500, 500 });
+    BackplateTestAccess::HoverAt(backplate, POINT { 30, 30 });
+    FD2D_CHECK(BackplateTestAccess::HoverToastTimerDueMs(backplate) != 0);
+    BackplateTestAccess::HoverAt(backplate, POINT { 500, 500 });
+    FD2D_CHECK(BackplateTestAccess::HoverToastTimerDueMs(backplate) == 0);
+}
+
+FD2D_TEST(BackplateHoverToast_ToastExpiryWaitsOnTimer)
+{
+    TimerScene scene;
+    FD2D_REQUIRE(scene.Create());
+    FD2D::Backplate& backplate = scene.backplate;
+
+    backplate.ShowToast(L"Toast text");
+    const unsigned long long expire = BackplateTestAccess::ToastExpireMs(backplate);
+    FD2D_CHECK(!backplate.HasActiveAnimation(GetTickCount64()));
+    FD2D_CHECK(BackplateTestAccess::HoverToastTimerDueMs(backplate) == expire);
+    // ShowToast invalidates the window; the hidden window gets no WM_PAINT,
+    // so paint that frame here.
+    backplate.Render();
+    FD2D_CHECK(scene.tip->Frames() == 2);
+    Canvas::Counts counts = scene.ReadCounts();
+    std::printf("  toast frame: toast fill %d px, text %d px\n", counts.toast, counts.text);
+    FD2D_CHECK(counts.toast > 400 && counts.text > 10);
+
+    // Nothing renders until the expiry; then one frame erases the toast.
+    int animatedWakes = 0;
+    const bool expired = scene.PumpUntil([&]() { return !BackplateTestAccess::ToastShown(backplate); }, 5000, animatedWakes);
+    const long long lateMs = static_cast<long long>(GetTickCount64()) - static_cast<long long>(expire);
+    std::printf("  toast expired %d (%lld ms after its deadline), frames %d (2 before), animated wakes %d\n",
+        expired ? 1 : 0, lateMs, scene.tip->Frames(), animatedWakes);
+    FD2D_REQUIRE(expired);
+    FD2D_CHECK(lateMs >= -50); // timer granularity
+    FD2D_CHECK(scene.tip->Frames() == 3);
+    FD2D_CHECK(animatedWakes == 0);
+    counts = scene.ReadCounts();
+    FD2D_CHECK(counts.toast == 0);
+
+    FD2D_CHECK(BackplateTestAccess::HoverToastTimerDueMs(backplate) == 0);
+    scene.Settle(300, animatedWakes);
+    FD2D_CHECK(scene.tip->Frames() == 3);
+}
+
+FD2D_TEST(BackplateHoverToast_TooltipAndToastShareTheTimer)
+{
+    TimerScene scene;
+    FD2D_REQUIRE(scene.Create());
+    FD2D::Backplate& backplate = scene.backplate;
+
+    // Toast first, then a hover: the timer is armed for the earlier deadline
+    // (the dwell), then for the toast expiry.
+    backplate.ShowToast(L"Toast text");
+    backplate.Render();
+    BackplateTestAccess::HoverAt(backplate, POINT { 20, 20 });
+    const unsigned long long dwellDue = BackplateTestAccess::HoverSinceMs(backplate) + 500;
+    const unsigned long long expire = BackplateTestAccess::ToastExpireMs(backplate);
+    FD2D_CHECK(BackplateTestAccess::HoverToastTimerDueMs(backplate) == dwellDue);
+
+    int animatedWakes = 0;
+    FD2D_REQUIRE(scene.PumpUntil([&]() { return BackplateTestAccess::TooltipShown(backplate); }, 3000, animatedWakes));
+    FD2D_CHECK(BackplateTestAccess::ToastShown(backplate));
+    FD2D_CHECK(BackplateTestAccess::HoverToastTimerDueMs(backplate) == expire);
+    FD2D_CHECK(scene.tip->Frames() == 3);
+
+    FD2D_REQUIRE(scene.PumpUntil([&]() { return !BackplateTestAccess::ToastShown(backplate); }, 5000, animatedWakes));
+    FD2D_CHECK(BackplateTestAccess::TooltipShown(backplate));
+    FD2D_CHECK(BackplateTestAccess::HoverToastTimerDueMs(backplate) == 0);
+    std::printf("  frames %d (4 expected), animated wakes %d\n", scene.tip->Frames(), animatedWakes);
+    FD2D_CHECK(scene.tip->Frames() == 4);
+    FD2D_CHECK(animatedWakes == 0);
+    const Canvas::Counts counts = scene.ReadCounts();
+    FD2D_CHECK(counts.tooltip > 400 && counts.toast == 0);
 }

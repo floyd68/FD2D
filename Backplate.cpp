@@ -737,11 +737,9 @@ namespace FD2D
             return;
         }
 
-        // Advance tooltip dwell / toast expiry first: it re-arms the animation
-        // while a tooltip is pending or a toast is showing, so these keep
-        // ticking even when nothing else animates.
-        AdvanceHoverToast(nowMs);
-
+        // The tooltip dwell and the toast expiry are not animations: they wait
+        // on the hover/toast timer (ScheduleHoverToastTimer), so a pending
+        // deadline does not render unchanged frames here.
         if (!HasActiveAnimation(nowMs))
         {
             return;
@@ -836,11 +834,9 @@ namespace FD2D
         m_hoverTip = std::move(tip);
         m_hoverSinceMs = Util::NowMs();
         m_tipShown = false;
-        if (!m_hoverTip.empty())
-        {
-            RequestAnimationFrame(); // drive the dwell timer via ProcessAnimationTick
-        }
-        else if (wasShown && m_window != nullptr)
+        // Arms the dwell deadline for a new tip (or drops the old one).
+        ScheduleHoverToastTimer(m_hoverSinceMs);
+        if (m_hoverTip.empty() && wasShown && m_window != nullptr)
         {
             InvalidateRect(m_window, nullptr, FALSE); // erase the tooltip that was showing
         }
@@ -851,6 +847,7 @@ namespace FD2D
         m_hoverWnd = nullptr;
         m_hoverTip.clear();
         m_hoverSinceMs = 0;
+        ScheduleHoverToastTimer(Util::NowMs());
         if (m_tipShown)
         {
             m_tipShown = false;
@@ -863,9 +860,10 @@ namespace FD2D
 
     void Backplate::ShowToast(const std::wstring& text)
     {
+        const unsigned long long nowMs = Util::NowMs();
         m_toastText = text;
-        m_toastExpireMs = Util::NowMs() + kToastDurationMs;
-        RequestAnimationFrame();
+        m_toastExpireMs = nowMs + kToastDurationMs;
+        ScheduleHoverToastTimer(nowMs);
         if (m_window != nullptr)
         {
             InvalidateRect(m_window, nullptr, FALSE);
@@ -900,42 +898,105 @@ namespace FD2D
         return ok;
     }
 
-    void Backplate::AdvanceHoverToast(unsigned long long nowMs)
+    bool Backplate::AdvanceHoverToast(unsigned long long nowMs)
     {
-        bool needAnim = false;
+        bool changed = false;
 
-        // Tooltip dwell: once elapsed, flip m_tipShown so the next render (this
-        // tick's Render, since animation is active) paints it. Keep re-arming
-        // the animation until then.
+        // Tooltip dwell: once elapsed, flip m_tipShown so the next render
+        // paints it.
+        if (m_hoverWnd != nullptr && !m_hoverTip.empty() && !m_tipShown &&
+            nowMs - m_hoverSinceMs >= kTooltipDwellMs)
+        {
+            m_tipShown = true;
+            m_tipAnchor = m_hoverPt;
+            changed = true;
+        }
+
+        // Toast expiry: clear it (the next render erases it).
+        if (!m_toastText.empty() && nowMs >= m_toastExpireMs)
+        {
+            m_toastText.clear();
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    unsigned long long Backplate::NextHoverToastDeadline() const
+    {
+        unsigned long long deadline = 0;
         if (m_hoverWnd != nullptr && !m_hoverTip.empty() && !m_tipShown)
         {
-            if (nowMs - m_hoverSinceMs >= kTooltipDwellMs)
-            {
-                m_tipShown = true;
-                m_tipAnchor = m_hoverPt;
-            }
-            else
-            {
-                needAnim = true;
-            }
+            deadline = m_hoverSinceMs + kTooltipDwellMs;
+        }
+        if (!m_toastText.empty() && (deadline == 0 || m_toastExpireMs < deadline))
+        {
+            deadline = m_toastExpireMs;
+        }
+        return deadline;
+    }
+
+    void Backplate::ScheduleHoverToastTimer(unsigned long long nowMs)
+    {
+        if (m_window == nullptr)
+        {
+            m_hoverToastTimerDueMs = 0;
+            return;
         }
 
-        // Toast expiry: clear it (one more render this tick erases it).
-        if (!m_toastText.empty())
+        const unsigned long long deadline = NextHoverToastDeadline();
+        if (deadline == 0)
         {
-            if (nowMs >= m_toastExpireMs)
+            if (m_hoverToastTimerDueMs != 0)
             {
-                m_toastText.clear();
+                KillTimer(m_window, kHoverToastTimerId);
+                m_hoverToastTimerDueMs = 0;
             }
-            else
-            {
-                needAnim = true;
-            }
+            return;
+        }
+        if (deadline == m_hoverToastTimerDueMs)
+        {
+            return; // already armed for it
         }
 
-        if (needAnim)
+        // Used as a one-shot: OnHoverToastTimer kills it, then re-arms it for
+        // the next deadline, if any.
+        const unsigned long long delayMs = (deadline > nowMs) ? (deadline - nowMs) : 1ULL;
+        const UINT elapse = static_cast<UINT>((std::min)(delayMs, 0x7FFFFFFFULL));
+        m_hoverToastTimerDueMs = (SetTimer(m_window, kHoverToastTimerId, elapse, nullptr) != 0) ? deadline : 0ULL;
+    }
+
+    void Backplate::OnHoverToastTimer(unsigned long long nowMs)
+    {
+        if (m_window != nullptr)
         {
-            RequestAnimationFrame();
+            KillTimer(m_window, kHoverToastTimerId);
+        }
+        m_hoverToastTimerDueMs = 0;
+
+        const bool changed = AdvanceHoverToast(nowMs);
+        // The next deadline, or the same one again if the timer fired early.
+        ScheduleHoverToastTimer(nowMs);
+        if (changed)
+        {
+            RenderOrInvalidate();
+        }
+    }
+
+    void Backplate::RenderOrInvalidate()
+    {
+        if (m_window == nullptr || !IsWindow(m_window))
+        {
+            return;
+        }
+        if (m_inSizeMove || m_isRendering || IsDeferringRender())
+        {
+            InvalidateRect(m_window, nullptr, FALSE);
+        }
+        else
+        {
+            NoteRenderTrigger(RenderTrigger::Invalidate);
+            Render();
         }
     }
 
@@ -1300,6 +1361,12 @@ namespace FD2D
 
         case WM_TIMER:
         {
+            if (wParam == kHoverToastTimerId)
+            {
+                OnHoverToastTimer(Util::NowMs());
+                result = 0;
+                return true;
+            }
             if (m_placeAutosaveTimerId != 0 && wParam == m_placeAutosaveTimerId)
             {
                 // Avoid synchronous placement persistence during interactive resize.
@@ -1336,6 +1403,11 @@ namespace FD2D
             {
                 KillTimer(m_window, m_placeAutosaveTimerId);
                 m_placeAutosaveTimerId = 0;
+            }
+            if (m_window != nullptr && m_hoverToastTimerDueMs != 0)
+            {
+                KillTimer(m_window, kHoverToastTimerId);
+                m_hoverToastTimerDueMs = 0;
             }
             // HWND is about to become invalid; clear before any late Invalidate/Render.
             m_window = nullptr;
