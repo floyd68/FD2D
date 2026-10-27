@@ -13,6 +13,7 @@ add_executable(FD2DTests
     ComboBoxTests.cpp
     ScrollViewTests.cpp
     GraphicsGenerationTests.cpp
+    RenderStatsTests.cpp
     WindowlessTestSupport.h
     WindowlessRenderTests.cpp
 )
@@ -62,5 +63,6 @@ add_test(NAME FD2D.WindowlessRender COMMAND FD2DTests WindowlessRender_)
 add_test(NAME FD2D.ImageCheckerboard COMMAND FD2DTests ImageCheckerboard_)
 add_test(NAME FD2D.BackplateHoverToast COMMAND FD2DTests BackplateHoverToast_)
 add_test(NAME FD2D.ComboBox COMMAND FD2DTests ComboBox_)
+add_test(NAME FD2D.RenderStats COMMAND FD2DTests RenderStats_)
 # Safety net only: every wait inside the tests is bounded.
-set_tests_properties(FD2D.AsyncRedrawSignal FD2D.AsyncRedrawDispatch FD2D.ImageTransform FD2D.GraphicsGeneration FD2D.ScrollView FD2D.WindowlessRender FD2D.ImageCheckerboard FD2D.BackplateHoverToast FD2D.ComboBox PROPERTIES TIMEOUT 120)
+set_tests_properties(FD2D.AsyncRedrawSignal FD2D.AsyncRedrawDispatch FD2D.ImageTransform FD2D.GraphicsGeneration FD2D.ScrollView FD2D.WindowlessRender FD2D.ImageCheckerboard FD2D.BackplateHoverToast FD2D.ComboBox FD2D.RenderStats PROPERTIES TIMEOUT 120)

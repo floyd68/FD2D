@@ -15,6 +15,7 @@ target_sources(FD2D PRIVATE
     Image.cpp
     OverlayPanel.cpp
     Panel.cpp
+    RenderStats.cpp
     ScrollView.cpp
     Slider.cpp
     Spinner.cpp

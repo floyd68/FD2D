@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "AsyncRedrawSignal.h"
+#include "RenderStats.h"
 #include "Wnd.h"
 
 namespace FD2D
@@ -452,6 +453,14 @@ namespace FD2D
         int m_fpsWindowAsyncPendingFrames { 0 };
         double m_fpsWindowTotalMs { 0.0 };
         double m_fpsWindowMaxMs { 0.0 };
+
+        // Optional render instrumentation (RenderStats::Enabled(), off by
+        // default): per-window presents, presents per mouse move, frame time
+        // and input-to-present latency. The two fields below collect the
+        // Present wait and whether the frame reached Present, per Render().
+        RenderStats m_renderStats {};
+        double m_statsPresentWaitMs { 0.0 };
+        bool m_statsPresented { false };
     };
 }
 

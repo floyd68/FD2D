@@ -2,7 +2,9 @@
 #include "Core.h"
 #include "Util.h"
 #include "FD2DLog.h"
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <dxgi1_3.h>
 #include <string>
@@ -15,6 +17,13 @@
 
 namespace FD2D
 {
+    // High-resolution monotonic milliseconds (render instrumentation only).
+    static double SteadyNowMs()
+    {
+        return std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
     static bool IsDeviceRemovedHr(HRESULT hr)
     {
         return hr == DXGI_ERROR_DEVICE_REMOVED
@@ -1215,6 +1224,14 @@ namespace FD2D
 
         if (self != nullptr)
         {
+            if (message == WM_MOUSEMOVE && RenderStats::Enabled())
+            {
+                self->m_renderStats.OnMouseMove(
+                    static_cast<std::uint32_t>(GetMessageTime()),
+                    static_cast<std::uint32_t>(GetTickCount()),
+                    SteadyNowMs());
+            }
+
             LRESULT result = 0;
             if (self->HandleMessage(hWnd, message, wParam, lParam, result))
             {
@@ -2697,6 +2714,8 @@ namespace FD2D
         const RenderTrigger renderTrigger = m_pendingRenderTrigger;
         m_pendingRenderTrigger = RenderTrigger::Other;
         const bool asyncPendingAtStart = m_asyncRedrawSignal.IsPending();
+        m_statsPresentWaitMs = 0.0;
+        m_statsPresented = false;
 
         // Render loop: continue until no more render requests
         int renderLoopIterations = 0;
@@ -2891,6 +2910,8 @@ namespace FD2D
                 }
             }
             m_endDrawFailureStreak = 0;
+            // EndDraw of the HWND target is this backend's present.
+            m_statsPresented = true;
             
             // D2D-only path complete - continue to check if re-render needed
         }
@@ -3145,6 +3166,12 @@ namespace FD2D
         {
             const auto t_present = std::chrono::steady_clock::now();
             const HRESULT hrPresent = m_swapChain->Present(1, 0);
+            if (RenderStats::Enabled())
+            {
+                m_statsPresentWaitMs += std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - t_present).count();
+                m_statsPresented = m_statsPresented || SUCCEEDED(hrPresent);
+            }
             const auto presentMs = FD2D_ELAPSED_MS(t_present);
             if (presentMs > 30)
             {
@@ -3176,6 +3203,23 @@ namespace FD2D
         // period (e.g. right after startup while async work is still completing) shows up
         // as objective fps/frame-time numbers, broken down by what triggered each frame
         // and whether an async decode-completion redraw was pending at the time.
+        if (RenderStats::Enabled())
+        {
+            const double totalMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t_renderLoop).count();
+            const std::string line = m_renderStats.OnFrame(
+                (std::max)(0.0, totalMs - m_statsPresentWaitMs),
+                m_statsPresentWaitMs,
+                m_statsPresented,
+                static_cast<std::uint32_t>(GetTickCount()),
+                SteadyNowMs(),
+                Util::NowMs());
+            if (!line.empty())
+            {
+                FD2D_LOG_INFO("{} hwnd={}", line, static_cast<const void*>(m_window));
+            }
+        }
+
         {
             const double frameMs = static_cast<double>(FD2D_ELAPSED_MS(t_renderLoop));
             const unsigned long long nowMs = Util::NowMs();
