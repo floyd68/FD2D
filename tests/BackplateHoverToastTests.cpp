@@ -223,8 +223,9 @@ FD2D_TEST(BackplateHoverToast_TargetRecreationRecreatesBrushKeepsLayouts)
 // Deadlines: the tooltip dwell (500 ms) and the toast expiry (1800 ms) wait
 // on Backplate's per-window timer, not on animation frames. A windowless
 // backplate gets a hidden window that forwards its messages to the backplate;
-// the pump below runs ProcessAnimationTick after every wake, as
-// Application::RunMessageLoop does, so an animation request would render.
+// the pump below runs ProcessAnimationTick and then renders a pending
+// request after every wake, as Application::RunMessageLoop does, so an
+// animation request would render.
 
 namespace
 {
@@ -292,8 +293,9 @@ namespace
             }
         }
 
-        // Pumps messages (and animation ticks, like RunMessageLoop) until
-        // done() or timeoutMs. Counts the wakes that saw an active animation.
+        // Pumps messages (then the animation tick and the pending render, like
+        // RunMessageLoop) until done() or timeoutMs. Counts the wakes that saw
+        // an active animation.
         template <typename Done>
         bool PumpUntil(Done done, unsigned long long timeoutMs, int& animatedWakes)
         {
@@ -320,6 +322,7 @@ namespace
                     ++animatedWakes;
                 }
                 backplate.ProcessAnimationTick(now);
+                (void)backplate.RenderIfPending();
             }
             return true;
         }
@@ -413,8 +416,7 @@ FD2D_TEST(BackplateHoverToast_ToastExpiryWaitsOnTimer)
     const unsigned long long expire = BackplateTestAccess::ToastExpireMs(backplate);
     FD2D_CHECK(!backplate.HasActiveAnimation(GetTickCount64()));
     FD2D_CHECK(BackplateTestAccess::HoverToastTimerDueMs(backplate) == expire);
-    // ShowToast invalidates the window; the hidden window gets no WM_PAINT,
-    // so paint that frame here.
+    // ShowToast requests a render; paint that frame here.
     backplate.Render();
     FD2D_CHECK(scene.tip->Frames() == 2);
     Canvas::Counts counts = scene.ReadCounts();

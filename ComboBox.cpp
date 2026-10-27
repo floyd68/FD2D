@@ -80,7 +80,7 @@ namespace FD2D
         if (boundsChanged)
         {
             // Re-measure and re-arrange: the box's text rect follows the
-            // text's measured size. RequestLayout also renders.
+            // text's measured size. RequestLayout also requests a render.
             NotifyContentLayoutChanged();
         }
         else

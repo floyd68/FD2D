@@ -96,6 +96,14 @@ namespace FD2D
 
         HRESULT EnsureRenderTarget();
         void Resize(UINT width, UINT height);
+        // Immediate render: lays out (if needed), renders and presents one
+        // frame now, and clears any pending render request (RequestRender).
+        // Use it only where a frame is needed right away: the startup warm-up
+        // before the window is shown, before ReadComposedPixels(), the first
+        // frame in Show(), and WM_PAINT. Everything else (Wnd::Invalidate(),
+        // RequestLayout(), async redraws, animation ticks) requests a
+        // coalesced render instead. A Render() call made while rendering adds
+        // one more pass to the current frame.
         void Render();
         void Show(int nCmdShow);
 
@@ -139,9 +147,10 @@ namespace FD2D
         // composed frame. Call it on a backplate without a window, before or
         // after adding children; calling it again re-creates the device stack
         // at the new size (new device and target generations). Nothing renders
-        // implicitly in this mode (Wnd::Invalidate() is a no-op without a
-        // window): each Render() call draws exactly one frame unless a
-        // re-entrant Render() request asks for another.
+        // implicitly in this mode (Wnd::Invalidate() only marks a render
+        // pending; RenderIfPending() or Render() draws it): each Render() call
+        // draws exactly one frame unless a re-entrant Render() request asks
+        // for another.
         HRESULT InitializeWindowless(UINT logicalWidth, UINT logicalHeight, float dpiScale = 1.0f);
         bool IsWindowless() const { return m_windowless; }
 
@@ -220,13 +229,14 @@ namespace FD2D
         bool IsRendering() const { return m_isRendering; }
         bool IsInSizeMove() const { return m_inSizeMove; }
 
-        // Batches multiple state changes (e.g. drag-hover overlay updates across
-        // several children during a single OLE DragOver callback) into one Render()
-        // call. While deferring, Wnd::Invalidate() marks the window dirty via
-        // InvalidateRect() instead of rendering immediately, so callers doing a
-        // "clear old state, then set new state" sequence don't present an
-        // intermediate frame in between (which would look like flicker). Nestable;
-        // remember to call EndDeferredRender() once per BeginDeferredRender().
+        // Marks a batch of state changes (e.g. drag-hover overlay updates across
+        // several children during a single OLE DragOver callback) whose owner
+        // requests the frame when the batch ends. Invalidations are coalesced
+        // anyway (Wnd::Invalidate() never renders synchronously), so this no
+        // longer changes how an invalidation is handled; it tells nested
+        // batching scopes (IsDeferringRender()) that an enclosing scope
+        // requests the frame. Nestable; call EndDeferredRender() once per
+        // BeginDeferredRender().
         void BeginDeferredRender() { ++m_deferRenderDepth; }
         void EndDeferredRender() { if (m_deferRenderDepth > 0) --m_deferRenderDepth; }
         bool IsDeferringRender() const { return m_deferRenderDepth > 0; }
@@ -237,6 +247,28 @@ namespace FD2D
         // be attributed to a specific trigger instead of just an aggregate frame time.
         enum class RenderTrigger { Other, Tick, Invalidate, Paint };
         void NoteRenderTrigger(RenderTrigger trigger) { m_pendingRenderTrigger = trigger; }
+
+        // Coalesced render request: what Wnd::Invalidate(), RequestLayout(),
+        // async redraws and animation ticks use. It never renders
+        // synchronously; it marks the backplate dirty, and any number of
+        // requests before the next render produce one frame:
+        // - Application::RunMessageLoop renders every pending backplate once
+        //   per loop iteration, after its bounded message drain (so all
+        //   invalidations from one input message, e.g. a pan and the view
+        //   sync of a second pane, land in the same present);
+        // - the window is also invalidated, so a modal loop (size/move, menu,
+        //   OLE drag, message box) renders it on WM_PAINT.
+        // A request made while rendering is for the next frame. Without a
+        // window (windowless mode, tests) it only marks the request.
+        void RequestRender(RenderTrigger trigger = RenderTrigger::Invalidate);
+        bool IsRenderPending() const { return m_renderPending; }
+        // Renders now if a request is pending (and not already rendering);
+        // returns true when it rendered. The message loop's flush.
+        bool RenderIfPending();
+        // Number of Render() calls that drew (or tried to draw) a frame. The
+        // message loop uses it to render each backplate at most once per
+        // iteration (a WM_PAINT in the drain already rendered it).
+        unsigned long long RenderCount() const { return m_renderCount; }
 
         // Per-rect clear for the D3D swapchain backend (e.g. per-pane backgrounds).
         // Returns false if not supported/available (e.g., D2D-only backend).
@@ -290,9 +322,6 @@ namespace FD2D
         // (Re)arms the timer for NextHoverToastDeadline(), or kills it.
         void ScheduleHoverToastTimer(unsigned long long nowMs);
         void OnHoverToastTimer(unsigned long long nowMs);
-        // Renders now, like Wnd::Invalidate(): synchronously outside a render,
-        // a live resize or a deferred-render scope, otherwise via WM_PAINT.
-        void RenderOrInvalidate();
         void DrawHoverAndToast(
             ID2D1RenderTarget* target,
             bool drawHover,
@@ -438,6 +467,9 @@ namespace FD2D
         // Prevent recursive rendering (e.g., when layout changes during OnRender)
         bool m_isRendering { false };
         bool m_renderRequested { false };
+        // A coalesced render request (RequestRender) not rendered yet.
+        bool m_renderPending { false };
+        unsigned long long m_renderCount { 0 };
         int m_deferRenderDepth { 0 };
 
         // Diagnostic-only frame-time/FPS aggregation (see Render()). Logged once per

@@ -71,6 +71,17 @@ namespace FD2D
         // The deadline the hover/toast timer is armed for (0 = not armed).
         static unsigned long long HoverToastTimerDueMs(const Backplate& backplate) { return backplate.m_hoverToastTimerDueMs; }
 
+        // The OLE drop target's DragOver / DragLeave handling.
+        static bool FileDragOver(Backplate& backplate, const std::wstring& path, POINT pt)
+        {
+            return backplate.HandleFileDragOver(path, pt);
+        }
+
+        static void FileDragLeave(Backplate& backplate)
+        {
+            backplate.HandleFileDragLeave();
+        }
+
         // Layout requests (Backplate::RequestLayout) mark the layout dirty.
         static bool LayoutDirty(const Backplate& backplate) { return backplate.m_layoutDirty; }
         static void ClearLayoutDirty(Backplate& backplate) { backplate.m_layoutDirty = false; }
