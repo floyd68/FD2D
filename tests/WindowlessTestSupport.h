@@ -2,7 +2,8 @@
 
 // Helpers for FD2D tests that render through Backplate's windowless mode
 // (Backplate::InitializeWindowless). Deliberately does not define
-// FD2D::BackplateTestAccess: each test executable defines its own.
+// FD2D::BackplateTestAccess: FD2D's tests share BackplateTestAccess.h, and
+// each other test executable defines its own.
 
 #include "Backplate.h"
 #include "Core.h"

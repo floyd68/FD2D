@@ -4,6 +4,7 @@
 add_executable(FD2DTests
     TestHarness.h
     TestMain.cpp
+    BackplateTestAccess.h
     AsyncRedrawDispatchTests.cpp
     AsyncRedrawSignalTests.cpp
     ImageTransformTests.cpp

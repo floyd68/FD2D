@@ -1,4 +1,5 @@
 #include "TestHarness.h"
+#include "BackplateTestAccess.h"
 #include "WindowlessTestSupport.h"
 
 #include "Backplate.h"
@@ -31,23 +32,6 @@
 // (D2DERR_WRONG_FACTORY at EndDraw), exactly like stale resources after a
 // real recreation. The backplate's generations are changed through
 // BackplateTestAccess, as Backplate itself does on recreation.
-
-namespace FD2D
-{
-    struct BackplateTestAccess
-    {
-        static void TargetRecreated(Backplate& backplate)
-        {
-            backplate.InvalidateGraphics(GraphicsInvalidationReason::TargetRecreated, false, true, false);
-        }
-
-        static void DeviceLost(Backplate& backplate)
-        {
-            backplate.DiscardDeviceResources();
-            backplate.InvalidateGraphics(GraphicsInvalidationReason::DeviceLost, true, true, false);
-        }
-    };
-}
 
 using Microsoft::WRL::ComPtr;
 using FD2D::BackplateTestAccess;
