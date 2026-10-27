@@ -1,5 +1,6 @@
 #include "Util.h"
 #include "Wnd.h"
+#include <algorithm>
 #include <cmath>
 
 namespace FD2D::Util
@@ -135,6 +136,118 @@ namespace FD2D::Util
             rect.bottom += panY;
         }
         return rect;
+    }
+
+    D2D1_RECT_F MapRectToPreRotationFrame(
+        const D2D1_RECT_F& clipRect,
+        const D2D1_RECT_F& layoutRect,
+        int rotationQuarters)
+    {
+        const int q = ((rotationQuarters % 4) + 4) % 4;
+        if (q == 0)
+        {
+            return clipRect;
+        }
+
+        const float cx = (layoutRect.left + layoutRect.right) * 0.5f;
+        const float cy = (layoutRect.top + layoutRect.bottom) * 0.5f;
+        // Clip edges relative to the center.
+        const float l = clipRect.left - cx;
+        const float t = clipRect.top - cy;
+        const float r = clipRect.right - cx;
+        const float b = clipRect.bottom - cy;
+
+        // Image draws with Matrix3x2F::Rotation(q * 90, center): a pre-rotation
+        // offset (x, y) lands at (-y, x) for 90, (-x, -y) for 180 and (y, -x)
+        // for 270 degrees. The inverse maps an on-screen offset (x, y) back to
+        // (y, -x), (-x, -y) and (-y, x).
+        switch (q)
+        {
+        case 1:
+            return D2D1::RectF(cx + t, cy - r, cx + b, cy - l);
+        case 2:
+            return D2D1::RectF(cx - r, cy - b, cx - l, cy - t);
+        default:
+            return D2D1::RectF(cx - b, cy + l, cx - t, cy + r);
+        }
+    }
+
+    D2D1_RECT_F CheckerboardTiles::Bounds() const
+    {
+        return D2D1::RectF(
+            originX + tileSize * static_cast<float>(firstColumn),
+            originY + tileSize * static_cast<float>(firstRow),
+            originX + tileSize * static_cast<float>(endColumn),
+            originY + tileSize * static_cast<float>(endRow));
+    }
+
+    D2D1_POINT_2F CheckerboardTiles::PatternOrigin() const
+    {
+        // Columns and rows are never negative, so clearing bit 0 rounds down
+        // to an even index: the parity of (i + j), and so the color of every
+        // tile, is unchanged relative to this anchor.
+        return D2D1::Point2F(
+            originX + tileSize * static_cast<float>(firstColumn & ~1),
+            originY + tileSize * static_cast<float>(firstRow & ~1));
+    }
+
+    namespace
+    {
+        // Index range [first, end) of the tiles of size `tile` starting at
+        // `origin` (index 0) that overlap [origin, coverTo) and
+        // [visibleFrom, visibleTo). Empty (0, 0) when they do not intersect.
+        void VisibleTileRange(
+            double origin,
+            double coverTo,
+            double visibleFrom,
+            double visibleTo,
+            double tile,
+            int& first,
+            int& end)
+        {
+            first = 0;
+            end = 0;
+            constexpr double kMaxIndex = 2147483647.0;
+            // The tiles overlapping [origin, coverTo) are those starting before coverTo.
+            const double total = std::ceil((coverTo - origin) / tile);
+            const double from = (std::max)(0.0, std::floor((visibleFrom - origin) / tile));
+            const double to = (std::min)((std::min)(total, kMaxIndex), std::ceil((visibleTo - origin) / tile));
+            if (!(to > from))
+            {
+                return;
+            }
+            first = static_cast<int>(from);
+            end = static_cast<int>(to);
+        }
+    }
+
+    CheckerboardTiles ComputeCheckerboardTiles(
+        const D2D1_RECT_F& destRect,
+        const D2D1_RECT_F& visibleRect,
+        float tileSize)
+    {
+        CheckerboardTiles tiles {};
+        tiles.tileSize = tileSize;
+        if (!(tileSize > 0.0f) ||
+            !(destRect.right > destRect.left) || !(destRect.bottom > destRect.top))
+        {
+            return tiles;
+        }
+
+        tiles.originX = std::floor(destRect.left / tileSize) * tileSize;
+        tiles.originY = std::floor(destRect.top / tileSize) * tileSize;
+        VisibleTileRange(tiles.originX, destRect.right, visibleRect.left, visibleRect.right,
+            tileSize, tiles.firstColumn, tiles.endColumn);
+        VisibleTileRange(tiles.originY, destRect.bottom, visibleRect.top, visibleRect.bottom,
+            tileSize, tiles.firstRow, tiles.endRow);
+        if (tiles.Empty())
+        {
+            tiles.firstColumn = 0;
+            tiles.endColumn = 0;
+            tiles.firstRow = 0;
+            tiles.endRow = 0;
+        }
+        return tiles;
     }
 }
 

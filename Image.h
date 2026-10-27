@@ -57,6 +57,8 @@ namespace FD2D
     private:
         bool TryGetContentSize(D2D1_SIZE_F& outSize) const;
         void ResetCheckerBrushes();
+        // The cached two-tile checkerboard pattern brush (see OnRender).
+        bool EnsureCheckerBrush(ID2D1RenderTarget* target);
         // Drops content whose resource domain changed: the D2D bitmap on a new
         // target generation, the SRV on a new device generation (an SRV survives
         // target-only recreation). Returns true if anything was dropped.
@@ -69,8 +71,9 @@ namespace FD2D
         UINT m_srvHeight { 0 };
         DrawState m_drawState {};
 
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_checkerLightBrush {};
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_checkerDarkBrush {};
+        // 16x16 DIP wrap-sampled bitmap brush: one light and one dark 8 px
+        // tile per row, alternating per row.
+        Microsoft::WRL::ComPtr<ID2D1BitmapBrush> m_checkerBrush {};
 
         // Generations the content and brushes were created under.
         GraphicsResourceStamp m_bitmapStamp {};

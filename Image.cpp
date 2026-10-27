@@ -825,8 +825,69 @@ namespace FD2D
 
     void Image::ResetCheckerBrushes()
     {
-        m_checkerLightBrush.Reset();
-        m_checkerDarkBrush.Reset();
+        m_checkerBrush.Reset();
+    }
+
+    namespace
+    {
+        constexpr float kCheckerTile = 8.0f;
+        // Light and dark checkerboard tiles (opaque gray levels 0.94 and 0.44).
+        constexpr float kCheckerLight = 0.94f;
+        constexpr float kCheckerDark = 0.44f;
+
+        uint32_t OpaqueGrayBgra(float level)
+        {
+            const uint32_t v = static_cast<uint32_t>(level * 255.0f + 0.5f);
+            return 0xFF000000u | (v << 16) | (v << 8) | v;
+        }
+    }
+
+    bool Image::EnsureCheckerBrush(ID2D1RenderTarget* target)
+    {
+        if (RefreshTargetResourceStamp(m_checkerStamp))
+        {
+            ResetCheckerBrushes();
+        }
+        if (m_checkerBrush)
+        {
+            return true;
+        }
+
+        // One pattern period: 2 x 2 tiles of 8 x 8 pixels at 96 DPI (so 16 x 16
+        // DIPs at any target DPI), light at (0, 0) and (1, 1).
+        constexpr UINT kTile = static_cast<UINT>(kCheckerTile);
+        constexpr UINT kPeriod = kTile * 2u;
+        const uint32_t light = OpaqueGrayBgra(kCheckerLight);
+        const uint32_t dark = OpaqueGrayBgra(kCheckerDark);
+        std::vector<uint32_t> pixels(static_cast<size_t>(kPeriod) * kPeriod);
+        for (UINT y = 0; y < kPeriod; ++y)
+        {
+            for (UINT x = 0; x < kPeriod; ++x)
+            {
+                const bool isDark = (((x / kTile) + (y / kTile)) & 1u) != 0;
+                pixels[static_cast<size_t>(y) * kPeriod + x] = isDark ? dark : light;
+            }
+        }
+
+        Microsoft::WRL::ComPtr<ID2D1Bitmap> pattern;
+        const D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+            96.0f,
+            96.0f);
+        if (FAILED(target->CreateBitmap(
+                D2D1::SizeU(kPeriod, kPeriod), pixels.data(), kPeriod * 4u, &props, &pattern)) ||
+            !pattern)
+        {
+            return false;
+        }
+        (void)target->CreateBitmapBrush(
+            pattern.Get(),
+            D2D1::BitmapBrushProperties(
+                D2D1_EXTEND_MODE_WRAP,
+                D2D1_EXTEND_MODE_WRAP,
+                D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR),
+            &m_checkerBrush);
+        return m_checkerBrush != nullptr;
     }
 
     void Image::SetBitmap(Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap)
@@ -1034,36 +1095,22 @@ namespace FD2D
 
                 if (m_drawState.alphaCheckerboardEnabled)
                 {
-                    if (RefreshTargetResourceStamp(m_checkerStamp))
+                    // Only the tiles inside the clip: the clip (pushed in the
+                    // incoming frame) rotated back into this pre-rotation frame,
+                    // where destRect (with zoom and pan) lives. One fill with the
+                    // wrap-sampled pattern brush, anchored in phase with the
+                    // tile grid origin, draws all of them.
+                    const D2D1_RECT_F visibleRect = Util::MapRectToPreRotationFrame(
+                        clipRect,
+                        layoutRect,
+                        m_drawState.rotationQuarters);
+                    const Util::CheckerboardTiles tiles =
+                        Util::ComputeCheckerboardTiles(destRect, visibleRect, kCheckerTile);
+                    if (!tiles.Empty() && EnsureCheckerBrush(target))
                     {
-                        ResetCheckerBrushes();
-                    }
-                    if (!m_checkerLightBrush || !m_checkerDarkBrush)
-                    {
-                        (void)target->CreateSolidColorBrush(
-                            D2D1::ColorF(0.94f, 0.94f, 0.94f, 1.0f), &m_checkerLightBrush);
-                        (void)target->CreateSolidColorBrush(
-                            D2D1::ColorF(0.44f, 0.44f, 0.44f, 1.0f), &m_checkerDarkBrush);
-                    }
-
-                    if (m_checkerLightBrush && m_checkerDarkBrush)
-                    {
-                        constexpr float tile = 8.0f;
-                        const float startX = std::floor(destRect.left / tile) * tile;
-                        const float startY = std::floor(destRect.top / tile) * tile;
-                        for (float y = startY; y < destRect.bottom; y += tile)
-                        {
-                            for (float x = startX; x < destRect.right; x += tile)
-                            {
-                                const int ix = static_cast<int>(std::floor((x - startX) / tile));
-                                const int iy = static_cast<int>(std::floor((y - startY) / tile));
-                                const bool dark = (((ix + iy) & 1) != 0);
-                                const D2D1_RECT_F r { x, y, x + tile, y + tile };
-                                target->FillRectangle(
-                                    r,
-                                    dark ? m_checkerDarkBrush.Get() : m_checkerLightBrush.Get());
-                            }
-                        }
+                        const D2D1_POINT_2F origin = tiles.PatternOrigin();
+                        m_checkerBrush->SetTransform(D2D1::Matrix3x2F::Translation(origin.x, origin.y));
+                        target->FillRectangle(tiles.Bounds(), m_checkerBrush.Get());
                     }
                 }
 
