@@ -836,6 +836,10 @@ namespace FD2D
         m_tipShown = false;
         // Arms the dwell deadline for a new tip (or drops the old one).
         ScheduleHoverToastTimer(m_hoverSinceMs);
+        if (!m_hoverTip.empty())
+        {
+            FD2D_LOG_INFO("[Tooltip] dwell started ({}ms)", kTooltipDwellMs);
+        }
         if (m_hoverTip.empty() && wasShown && m_window != nullptr)
         {
             InvalidateRect(m_window, nullptr, FALSE); // erase the tooltip that was showing
@@ -864,6 +868,7 @@ namespace FD2D
         m_toastText = text;
         m_toastExpireMs = nowMs + kToastDurationMs;
         ScheduleHoverToastTimer(nowMs);
+        FD2D_LOG_INFO("[Toast] shown, expires in {}ms", kToastDurationMs);
         if (m_window != nullptr)
         {
             InvalidateRect(m_window, nullptr, FALSE);
@@ -974,7 +979,17 @@ namespace FD2D
         }
         m_hoverToastTimerDueMs = 0;
 
+        const bool tipWasShown = m_tipShown;
+        const bool toastWasShown = !m_toastText.empty();
         const bool changed = AdvanceHoverToast(nowMs);
+        if (m_tipShown && !tipWasShown)
+        {
+            FD2D_LOG_INFO("[Tooltip] shown after {}ms", nowMs - m_hoverSinceMs);
+        }
+        if (toastWasShown && m_toastText.empty())
+        {
+            FD2D_LOG_INFO("[Toast] expired");
+        }
         // The next deadline, or the same one again if the timer fired early.
         ScheduleHoverToastTimer(nowMs);
         if (changed)
