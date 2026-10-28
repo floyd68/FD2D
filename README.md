@@ -34,6 +34,20 @@ FD2D uses a modern **Measure/Arrange** pass:
 
 The goal is to avoid hard-coded absolute positioning in user code.
 
+## Rendering and the message loop
+
+`Wnd::Invalidate()`, `Backplate::RequestLayout()`, async redraws and animation ticks never render synchronously: they call `Backplate::RequestRender()`, and any number of requests before the next render produce one frame. `Application::RunMessageLoop()` runs, per iteration:
+
+1. a blocking wait for a message or an async-redraw event (it does not block while a render is pending, and it works with no backplate, so the loop never spins and returns the `WM_QUIT` code);
+2. every signaled async-redraw event, once;
+3. a bounded message drain (64 messages or 10 ms, and it ends after a `WM_PAINT`), so a queue that never empties cannot starve steps 2, 4 and 5;
+4. the animation tick;
+5. one render of each backplate with a pending request that has not rendered in this iteration.
+
+All invalidations caused by one input message (for example a pan and the view sync of a second pane on the same backplate) therefore land in one present. A request also invalidates the window, so modal loops (size/move, menus, OLE drag, message boxes) render it on `WM_PAINT`. `Backplate::Render()` is the explicit immediate path, for when a frame is needed right away: a warm-up render before the window is shown, before `ReadComposedPixels()`, the first frame in `Show()`, and `WM_PAINT`. A layout request is arranged by the next render, or earlier by `Backplate::LayoutIfPending()`, which the backplate runs before it routes an input message or a file drag/drop, so input never hit-tests a stale arrangement; code that needs arranged bounds right after a change calls it instead of relying on a synchronous render.
+
+Render instrumentation (`RenderStats`) is off by default; set the environment variable `FD2D_RENDER_STATS=1` to log a once-per-second `[RenderStats]` line per window with presents per second, presents per mouse move, frame time (median, p95) and input-to-present latency.
+
 ## Graphics resources and invalidation
 
 `Backplate::GetGraphicsGeneration()` returns monotonic `device`, `target`, and `renderer` generations; they, not `GraphicsInvalidationReason`, decide whether a cached resource is still valid:

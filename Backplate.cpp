@@ -2,7 +2,9 @@
 #include "Core.h"
 #include "Util.h"
 #include "FD2DLog.h"
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <dxgi1_3.h>
 #include <string>
@@ -15,6 +17,13 @@
 
 namespace FD2D
 {
+    // High-resolution monotonic milliseconds (render instrumentation only).
+    static double SteadyNowMs()
+    {
+        return std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
     static bool IsDeviceRemovedHr(HRESULT hr)
     {
         return hr == DXGI_ERROR_DEVICE_REMOVED
@@ -259,10 +268,9 @@ namespace FD2D
 
     void Backplate::ScheduleNextFrame()
     {
-        if (m_window != nullptr && IsWindow(m_window))
-        {
-            InvalidateRect(m_window, nullptr, FALSE);
-        }
+        // A recovery frame: rendered by the next message-loop iteration (or a
+        // WM_PAINT in a modal loop), never re-entrantly from the failed one.
+        RequestRender(RenderTrigger::Other);
     }
 
     void Backplate::LogDeviceRemovedReason(HRESULT triggerHr, const char* where) const
@@ -600,12 +608,15 @@ namespace FD2D
 
     bool Backplate::HandleFileDragOver(const std::wstring& path, const POINT& ptClient)
     {
+        LayoutIfPending();
+
         // OLE calls DragOver on every mouse-move during a drag (many times/sec).
-        // Clearing stale visuals and setting the new one each call Invalidate(),
-        // which normally renders+presents immediately -- so without batching, a
-        // single DragOver could present one frame with the overlay cleared and
-        // another with it set, visible as a flicker on every drag move. Defer all
-        // Invalidate() calls triggered below into a single Render() at the end.
+        // Clearing stale visuals and setting the new one each call Invalidate().
+        // Invalidations are coalesced, so this whole update ("clear old, set
+        // new" across several children) ends in one render request with the
+        // final overlay state; no intermediate frame is presented. The
+        // deferred-render scope tells nested batching scopes (for example an
+        // application's) that this callback requests the frame.
         BeginDeferredRender();
 
         // Clear any prior visuals from children that are no longer the drag target
@@ -631,10 +642,9 @@ namespace FD2D
 
         EndDeferredRender();
 
-        if (m_window != nullptr)
-        {
-            Render();
-        }
+        // One coalesced render: the message loop renders it after this
+        // callback, or a WM_PAINT does inside a modal OLE drag loop.
+        RequestRender();
 
         return handled;
     }
@@ -651,14 +661,13 @@ namespace FD2D
         }
         EndDeferredRender();
 
-        if (m_window != nullptr)
-        {
-            Render();
-        }
+        RequestRender();
     }
 
     bool Backplate::HandleFileDropPaths(const std::vector<std::wstring>& paths, const POINT& ptClient)
     {
+        LayoutIfPending();
+
         if (paths.empty())
         {
             return false;
@@ -694,26 +703,14 @@ namespace FD2D
         }
 
         // Reset the event and clear the pending flag (in that order) before the
-        // repaint below, so a completion that lands during the repaint signals a
-        // fresh wakeup and one that landed just before it is covered by the repaint.
+        // render it requests, so a completion that lands after this point
+        // signals a fresh wakeup and one that landed just before it is covered
+        // by that render.
         (void)m_asyncRedrawSignal.Drain();
 
-        // During interactive resizing, avoid synchronous repaint pressure.
-        if (m_inSizeMove)
-        {
-            InvalidateRect(m_window, nullptr, FALSE);
-        }
-        else
-        {
-            // Trigger a prompt repaint (once per coalesced burst).
-            FD2D_TIMER_START(t_redraw);
-            RedrawWindow(m_window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
-            const auto redrawMs = FD2D_ELAPSED_MS(t_redraw);
-            if (redrawMs > 50)
-            {
-                FD2D_LOG_INFO("[UI stall] ProcessAsyncRedraw: RedrawWindow(UPDATENOW) took {}ms", redrawMs);
-            }
-        }
+        // One coalesced render per burst, in this message-loop iteration
+        // together with any input-driven invalidation.
+        RequestRender(RenderTrigger::Other);
     }
 
     void Backplate::RequestAnimationFrame()
@@ -771,22 +768,9 @@ namespace FD2D
         }
         m_lastAnimationTickMs.store(nowMs);
 
-        // Direct rendering: bypass message loop for smoother 60fps animation.
-        // Log frames that take > 100ms (rate-limited to one log per 100ms to avoid flooding).
-        FD2D_TIMER_START(t_frame);
-        NoteRenderTrigger(RenderTrigger::Tick);
-        Render();
-        const auto frameMs = FD2D_ELAPSED_MS(t_frame);
-        if (frameMs > 100)
-        {
-            static std::chrono::steady_clock::time_point s_lastSlowFrameLog {};
-            const auto nowTp = std::chrono::steady_clock::now();
-            if (nowTp - s_lastSlowFrameLog >= std::chrono::milliseconds(100))
-            {
-                FD2D_LOG_INFO("[UI stall] ProcessAnimationTick: Render took {}ms", frameMs);
-                s_lastSlowFrameLog = nowTp;
-            }
-        }
+        // Request the animation frame; the message loop renders it after the
+        // tick, coalesced with any other request of the same iteration.
+        RequestRender(RenderTrigger::Tick);
     }
 
     Wnd* Backplate::FindTargetWnd(const POINT& ptClient)
@@ -845,7 +829,7 @@ namespace FD2D
             // Erase the tooltip that was showing now, also when the cursor
             // moved straight onto another tooltip target: nothing else
             // renders until that target's dwell deadline.
-            RenderOrInvalidate();
+            RequestRender();
         }
     }
 
@@ -858,10 +842,7 @@ namespace FD2D
         if (m_tipShown)
         {
             m_tipShown = false;
-            if (m_window != nullptr)
-            {
-                InvalidateRect(m_window, nullptr, FALSE);
-            }
+            RequestRender();
         }
     }
 
@@ -872,10 +853,7 @@ namespace FD2D
         m_toastExpireMs = nowMs + kToastDurationMs;
         ScheduleHoverToastTimer(nowMs);
         FD2D_LOG_INFO("[Toast] shown, expires in {}ms", kToastDurationMs);
-        if (m_window != nullptr)
-        {
-            InvalidateRect(m_window, nullptr, FALSE);
-        }
+        RequestRender();
     }
 
     bool Backplate::CopyTextToClipboard(const std::wstring& text)
@@ -997,24 +975,7 @@ namespace FD2D
         ScheduleHoverToastTimer(nowMs);
         if (changed)
         {
-            RenderOrInvalidate();
-        }
-    }
-
-    void Backplate::RenderOrInvalidate()
-    {
-        if (m_window == nullptr || !IsWindow(m_window))
-        {
-            return;
-        }
-        if (m_inSizeMove || m_isRendering || IsDeferringRender())
-        {
-            InvalidateRect(m_window, nullptr, FALSE);
-        }
-        else
-        {
-            NoteRenderTrigger(RenderTrigger::Invalidate);
-            Render();
+            RequestRender();
         }
     }
 
@@ -1215,6 +1176,14 @@ namespace FD2D
 
         if (self != nullptr)
         {
+            if (message == WM_MOUSEMOVE && RenderStats::Enabled())
+            {
+                self->m_renderStats.OnMouseMove(
+                    static_cast<std::uint32_t>(GetMessageTime()),
+                    static_cast<std::uint32_t>(GetTickCount()),
+                    SteadyNowMs());
+            }
+
             LRESULT result = 0;
             if (self->HandleMessage(hWnd, message, wParam, lParam, result))
             {
@@ -1444,6 +1413,10 @@ namespace FD2D
 
         if (isInputMessage)
         {
+            // Hit tests below and in the controls read arranged bounds: a
+            // layout request since the last frame is arranged first.
+            LayoutIfPending();
+
             InputEvent inputEvent {};
             inputEvent.type = inputType;
             inputEvent.button = ToMouseButton(message, wParam);
@@ -1665,10 +1638,7 @@ namespace FD2D
         }
         m_focusedWnd = wnd;
         UpdateTitleBarInfo();
-        if (m_window != nullptr)
-        {
-            Render();
-        }
+        RequestRender();
     }
 
     void Backplate::ClearFocusIf(Wnd* wnd)
@@ -2371,10 +2341,8 @@ namespace FD2D
                 }
             }
 
-            if (m_window != nullptr)
-            {
-                InvalidateRect(m_window, nullptr, FALSE);
-            }
+            // The size/move modal loop renders it (WM_PAINT).
+            RequestRender();
             return;
         }
 
@@ -2439,9 +2407,10 @@ namespace FD2D
         // Skip rendering if the window is not yet visible — the first visible render
         // will pick up the new size via m_layoutDirty. This avoids a DXGI Present()
         // VSync stall (~16 ms per frame) that SetWindowPlacement triggers before Show().
+        // Otherwise one coalesced render shows the new size.
         if (m_window != nullptr && IsWindowVisible(m_window))
         {
-            Render();
+            RequestRender();
         }
     }
 
@@ -2452,12 +2421,11 @@ namespace FD2D
         // Before Show() is called, Render() would be the very first D3D/D2D
         // rendering operation and triggers GPU driver cold-start (shader
         // compilation, pipeline state caching) — typically 150–200 ms.
-        // Once the window is visible, the next WM_PAINT will pick up the
-        // new clear color anyway, so an immediate Render() is only needed
-        // to prevent a momentary flash when the user changes the color live.
+        // Once the window is visible, one coalesced render shows the new
+        // color when the user changes it live.
         if (m_window != nullptr && IsWindowVisible(m_window))
         {
-            Render();
+            RequestRender();
         }
     }
 
@@ -2519,18 +2487,46 @@ namespace FD2D
 
     void Backplate::RequestLayout()
     {
+        // The layout pass runs at the start of the next render, which this
+        // requests (coalesced).
         m_layoutDirty = true;
-        if (m_window != nullptr)
+        RequestRender();
+    }
+
+    void Backplate::RequestRender(RenderTrigger trigger)
+    {
+        if (m_renderPending)
         {
-            if (m_inSizeMove || m_isRendering)
-            {
-                InvalidateRect(m_window, nullptr, FALSE);
-            }
-            else
-            {
-                Render();
-            }
+            return;
         }
+        m_renderPending = true;
+        if (m_pendingRenderTrigger == RenderTrigger::Other)
+        {
+            m_pendingRenderTrigger = trigger;
+        }
+        // Also invalidate the window: modal loops (menus, size/move, OLE
+        // drag, message boxes) do not run Application::RunMessageLoop, and
+        // their WM_PAINT renders the request there. Render() validates the
+        // window, so a render from the loop leaves no duplicate WM_PAINT.
+        if (m_window != nullptr && IsWindow(m_window))
+        {
+            InvalidateRect(m_window, nullptr, FALSE);
+        }
+    }
+
+    bool Backplate::RenderIfPending()
+    {
+        if (!m_renderPending || m_isRendering)
+        {
+            return false;
+        }
+        if (!m_windowless && (m_window == nullptr || !IsWindow(m_window)))
+        {
+            m_renderPending = false;
+            return false;
+        }
+        Render();
+        return true;
     }
 
     HRESULT Backplate::ReadComposedPixels(
@@ -2677,6 +2673,18 @@ namespace FD2D
             return;
         }
 
+        // This frame covers every request made so far: clear the pending
+        // request and the window's update region (so no WM_PAINT repeats the
+        // frame). A request made while it renders (an invalidation from a
+        // render callback) marks a new one for the next message-loop
+        // iteration; it never adds a pass to this frame.
+        m_renderPending = false;
+        ++m_renderCount;
+        if (m_window != nullptr)
+        {
+            ValidateRect(m_window, nullptr);
+        }
+
         // Always clear m_isRendering, including early returns (e.g. D2DERR_RECREATE_TARGET).
         struct RenderingGuard
         {
@@ -2697,6 +2705,8 @@ namespace FD2D
         const RenderTrigger renderTrigger = m_pendingRenderTrigger;
         m_pendingRenderTrigger = RenderTrigger::Other;
         const bool asyncPendingAtStart = m_asyncRedrawSignal.IsPending();
+        m_statsPresentWaitMs = 0.0;
+        m_statsPresented = false;
 
         // Render loop: continue until no more render requests
         int renderLoopIterations = 0;
@@ -2891,6 +2901,8 @@ namespace FD2D
                 }
             }
             m_endDrawFailureStreak = 0;
+            // EndDraw of the HWND target is this backend's present.
+            m_statsPresented = true;
             
             // D2D-only path complete - continue to check if re-render needed
         }
@@ -3145,6 +3157,12 @@ namespace FD2D
         {
             const auto t_present = std::chrono::steady_clock::now();
             const HRESULT hrPresent = m_swapChain->Present(1, 0);
+            if (RenderStats::Enabled())
+            {
+                m_statsPresentWaitMs += std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - t_present).count();
+                m_statsPresented = m_statsPresented || SUCCEEDED(hrPresent);
+            }
             const auto presentMs = FD2D_ELAPSED_MS(t_present);
             if (presentMs > 30)
             {
@@ -3176,6 +3194,23 @@ namespace FD2D
         // period (e.g. right after startup while async work is still completing) shows up
         // as objective fps/frame-time numbers, broken down by what triggered each frame
         // and whether an async decode-completion redraw was pending at the time.
+        if (RenderStats::Enabled())
+        {
+            const double totalMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t_renderLoop).count();
+            const std::string line = m_renderStats.OnFrame(
+                (std::max)(0.0, totalMs - m_statsPresentWaitMs),
+                m_statsPresentWaitMs,
+                m_statsPresented,
+                static_cast<std::uint32_t>(GetTickCount()),
+                SteadyNowMs(),
+                Util::NowMs());
+            if (!line.empty())
+            {
+                FD2D_LOG_INFO("{} hwnd={}", line, static_cast<const void*>(m_window));
+            }
+        }
+
         {
             const double frameMs = static_cast<double>(FD2D_ELAPSED_MS(t_renderLoop));
             const unsigned long long nowMs = Util::NowMs();
@@ -3244,6 +3279,16 @@ namespace FD2D
         m_layoutDirty = false;
     }
 
+    bool Backplate::LayoutIfPending()
+    {
+        if (!m_layoutDirty || m_isRendering)
+        {
+            return false;
+        }
+        Layout();
+        return true;
+    }
+
     void Backplate::Show(int nCmdShow)
     {
         if (m_window)
@@ -3279,11 +3324,8 @@ namespace FD2D
 
         m_layoutDirty = true;
 
-        if (m_window != nullptr)
-        {
-            Render();
-            FD2D_LOG_STEP(t_addwnd, "[AddWnd] Render (first frame)");
-        }
+        // The new child is drawn by the next (coalesced) render.
+        RequestRender();
 
         return true;
     }

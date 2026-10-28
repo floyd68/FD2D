@@ -664,29 +664,12 @@ namespace FD2D
             return;
         }
 
-        HWND hwnd = m_backplate->Window();
-        if (hwnd == nullptr || !IsWindow(hwnd))
-        {
-            return;
-        }
-
-        // Use InvalidateRect (post WM_PAINT) if we are inside a resize, already
-        // inside Render(), or a caller is batching several state changes into one
-        // render (IsDeferringRender(), e.g. drag-hover overlay updates during a
-        // single OLE DragOver). Calling Render() re-entrantly would set
-        // m_renderRequested=true and cause the do-while render loop to spin
-        // once per Invalidate() call, leading to multi-second stalls when
-        // many components (e.g. loading spinners) call Invalidate() during
-        // a single frame.
-        if (m_backplate->IsInSizeMove() || m_backplate->IsRendering() || m_backplate->IsDeferringRender())
-        {
-            InvalidateRect(hwnd, nullptr, FALSE);
-        }
-        else
-        {
-            m_backplate->NoteRenderTrigger(Backplate::RenderTrigger::Invalidate);
-            m_backplate->Render();
-        }
+        // Coalesced: any number of invalidations before the next render (from
+        // one input message, a render callback, several panes) produce one
+        // frame, rendered by the message loop after its message drain (or by
+        // WM_PAINT in a modal loop). Never renders synchronously, so an
+        // invalidation from a render callback cannot add a render pass.
+        m_backplate->RequestRender(Backplate::RenderTrigger::Invalidate);
     }
 }
 

@@ -13,6 +13,9 @@ add_executable(FD2DTests
     ComboBoxTests.cpp
     ScrollViewTests.cpp
     GraphicsGenerationTests.cpp
+    RenderStatsTests.cpp
+    CoalescedRenderTests.cpp
+    MessagePumpTests.cpp
     WindowlessTestSupport.h
     WindowlessRenderTests.cpp
 )
@@ -62,5 +65,13 @@ add_test(NAME FD2D.WindowlessRender COMMAND FD2DTests WindowlessRender_)
 add_test(NAME FD2D.ImageCheckerboard COMMAND FD2DTests ImageCheckerboard_)
 add_test(NAME FD2D.BackplateHoverToast COMMAND FD2DTests BackplateHoverToast_)
 add_test(NAME FD2D.ComboBox COMMAND FD2DTests ComboBox_)
+add_test(NAME FD2D.RenderStats COMMAND FD2DTests RenderStats_)
+add_test(NAME FD2D.CoalescedRender COMMAND FD2DTests CoalescedRender_)
+add_test(NAME FD2D.MessagePump COMMAND FD2DTests MessagePump_)
+# The real loop on a worker thread: a loop that spins without pumping cannot be
+# stopped, so the test bounds each wait (5 s) and ends the process on timeout;
+# the ctest TIMEOUT below is the outer guard.
+add_test(NAME FD2D.MessageLoopQuit COMMAND FD2DTests MessageLoopQuit_)
+set_tests_properties(FD2D.MessageLoopQuit PROPERTIES TIMEOUT 30)
 # Safety net only: every wait inside the tests is bounded.
-set_tests_properties(FD2D.AsyncRedrawSignal FD2D.AsyncRedrawDispatch FD2D.ImageTransform FD2D.GraphicsGeneration FD2D.ScrollView FD2D.WindowlessRender FD2D.ImageCheckerboard FD2D.BackplateHoverToast FD2D.ComboBox PROPERTIES TIMEOUT 120)
+set_tests_properties(FD2D.AsyncRedrawSignal FD2D.AsyncRedrawDispatch FD2D.ImageTransform FD2D.GraphicsGeneration FD2D.ScrollView FD2D.WindowlessRender FD2D.ImageCheckerboard FD2D.BackplateHoverToast FD2D.ComboBox FD2D.RenderStats FD2D.CoalescedRender FD2D.MessagePump PROPERTIES TIMEOUT 120)

@@ -1,8 +1,11 @@
 #include "Application.h"
 #include "AsyncRedrawDispatch.h"
+#include "MessagePump.h"
 #include "Util.h"
 #include <cstddef>
 #include <memory>
+#include <optional>
+#include <utility>
 #include <vector>
 
 namespace FD2D
@@ -98,118 +101,180 @@ namespace FD2D
         return nullptr;
     }
 
-    int Application::RunMessageLoop()
+    namespace
     {
-        for (;;)
+        // Application::RunMessageLoop's side of the pump policy (MessagePump.h):
+        // the real wait, queue and backplates.
+        class BackplatePumpHost
         {
-            // Build the set of async redraw events (one per backplate), keeping the
-            // owning backplate at the same index so a fired event maps back to it.
-            // Owners are held by shared_ptr for the iteration so a backplate that
-            // is unregistered while another one repaints stays valid until the
-            // pass completes (ProcessAsyncRedraw itself checks the HWND).
-            std::vector<HANDLE> events;
-            std::vector<std::shared_ptr<Backplate>> eventOwners;
-            events.reserve(m_backplates.size());
-            eventOwners.reserve(m_backplates.size());
-            for (const auto& kv : m_backplates)
+        public:
+            explicit BackplatePumpHost(const std::unordered_map<std::wstring, std::shared_ptr<Backplate>>& backplates)
+                : m_backplates(backplates)
             {
-                if (kv.second)
+            }
+
+            bool HasPendingRender() const
+            {
+                for (const auto& kv : m_backplates)
                 {
-                    HANDLE ev = kv.second->AsyncRedrawEvent();
-                    if (ev)
+                    if (kv.second && kv.second->IsRenderPending())
                     {
-                        events.push_back(ev);
-                        eventOwners.push_back(kv.second);
+                        return true;
                     }
                 }
+                return false;
             }
 
-            const DWORD waitCount = static_cast<DWORD>(events.size());
-
-            // If any backplate has an active animation, wake at ~60fps to paint smoothly.
-            // Otherwise, keep a safety heartbeat (prevents "stuck forever" if a wakeup is missed).
-            DWORD timeoutMs = 1000;
-            const unsigned long long now = Util::NowMs();
-            for (const auto& kv : m_backplates)
+            // With an active animation, wake at ~60fps to paint smoothly.
+            // Otherwise keep a safety heartbeat (an idle wake renders nothing).
+            DWORD IdleTimeoutMs() const
             {
-                if (kv.second && kv.second->HasActiveAnimation(now))
+                const unsigned long long now = Util::NowMs();
+                for (const auto& kv : m_backplates)
                 {
-                    timeoutMs = 16;
-                    break;
+                    if (kv.second && kv.second->HasActiveAnimation(now))
+                    {
+                        return 16;
+                    }
                 }
+                return 1000;
             }
 
-            DWORD waitRes = WAIT_TIMEOUT;
-            if (waitCount > 0)
+            // Waits for a message (MWMO_INPUTAVAILABLE: also one already seen
+            // but left in the queue by a bounded drain) or an async-redraw
+            // event. With no event (no backplate) it waits for messages only.
+            bool Wait(DWORD timeoutMs)
             {
-                waitRes = MsgWaitForMultipleObjectsEx(
-                    waitCount,
-                    waitCount > 0 ? events.data() : nullptr,
+                // A new iteration: remember what each backplate has rendered so
+                // far (see FlushRenders).
+                m_renderCountsAtStart.clear();
+                for (const auto& backplate : Snapshot())
+                {
+                    m_renderCountsAtStart.emplace_back(backplate, backplate->RenderCount());
+                }
+                CollectEvents();
+                const DWORD count = static_cast<DWORD>(m_events.size());
+                const DWORD result = MsgWaitForMultipleObjectsEx(
+                    count,
+                    count > 0 ? m_events.data() : nullptr,
                     timeoutMs,
                     QS_ALLINPUT,
                     MWMO_INPUTAVAILABLE);
-
-                if (waitRes == WAIT_FAILED)
-                {
-                    return -1;
-                }
-
-                // At least one async redraw event fired. The wait reports only the
-                // lowest signaled index, so service every owner whose event is
-                // signaled right now, once each, starting at the reported one. A
-                // busy owner that re-signals during its repaint cannot starve the
-                // others: it is not revisited until the next iteration.
-                if (waitRes >= WAIT_OBJECT_0 && waitRes < WAIT_OBJECT_0 + waitCount)
-                {
-                    ServiceSignaledEvents(events, waitRes - WAIT_OBJECT_0, [&](std::size_t index)
-                    {
-                        eventOwners[index]->ProcessAsyncRedraw();
-                    });
-                    // Do NOT continue here:
-                    // When worker completions arrive frequently (e.g., heavy I/O), we can starve the animation tick
-                    // and make spinners/fades appear to "pause". We'll fall through to drain messages and run a
-                    // throttled animation tick each loop.
-                }
+                return result != WAIT_FAILED;
             }
 
-            // Animation tick timeout (no messages/events, but animations are active).
-            if (waitRes == WAIT_TIMEOUT)
+            // Services every owner whose event is signaled now, once each. A busy
+            // owner that re-signals during its servicing cannot starve the
+            // others: it is not revisited until the next iteration. Owners are
+            // held by shared_ptr for the pass.
+            void ServiceAsyncEvents()
             {
-                const unsigned long long t = Util::NowMs();
-                for (const auto& kv : m_backplates)
+                ServiceSignaledEvents(m_events, 0, [&](std::size_t index)
                 {
-                    if (kv.second)
-                    {
-                        kv.second->ProcessAnimationTick(t);
-                    }
-                }
-                continue;
+                    m_eventOwners[index]->ProcessAsyncRedraw();
+                });
             }
 
-            // Process all pending Windows messages.
-            MSG msg {};
-            while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+            bool Peek(MSG& msg) const
             {
-                if (msg.message == WM_QUIT)
-                {
-                    return static_cast<int>(msg.wParam);
-                }
+                return PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE) != FALSE;
+            }
 
+            void Dispatch(const MSG& msg) const
+            {
                 TranslateMessage(&msg);
                 DispatchMessage(&msg);
             }
 
-            // Important: animations must advance even when the message queue is busy and we never hit WAIT_TIMEOUT.
-            // So after draining messages, run a throttled animation tick.
-            const unsigned long long t = Util::NowMs();
-            for (const auto& kv : m_backplates)
+            unsigned long long NowMs() const
             {
-                if (kv.second)
+                return Util::NowMs();
+            }
+
+            void Tick(unsigned long long nowMs)
+            {
+                for (const auto& backplate : Snapshot())
                 {
-                    kv.second->ProcessAnimationTick(t);
+                    backplate->ProcessAnimationTick(nowMs);
                 }
             }
-            Sleep(0);
+
+            // Renders each backplate with a pending request once, unless it
+            // already rendered in this iteration (a WM_PAINT in the drain, or an
+            // explicit Render()): then a request made during that render waits
+            // for the next iteration, which does not block while it is pending.
+            // At most one render per backplate per iteration.
+            void FlushRenders()
+            {
+                for (const auto& [backplate, countAtStart] : m_renderCountsAtStart)
+                {
+                    if (backplate->RenderCount() == countAtStart)
+                    {
+                        (void)backplate->RenderIfPending();
+                    }
+                }
+                m_renderCountsAtStart.clear();
+            }
+
+        private:
+            // The async redraw events (one per backplate), with the owning
+            // backplate at the same index so a signaled event maps back to it.
+            void CollectEvents()
+            {
+                m_events.clear();
+                m_eventOwners.clear();
+                for (const auto& kv : m_backplates)
+                {
+                    if (kv.second)
+                    {
+                        HANDLE ev = kv.second->AsyncRedrawEvent();
+                        if (ev)
+                        {
+                            m_events.push_back(ev);
+                            m_eventOwners.push_back(kv.second);
+                        }
+                    }
+                }
+            }
+
+            // Held for a pass so a backplate dropped while another renders stays
+            // valid until the pass completes.
+            std::vector<std::shared_ptr<Backplate>> Snapshot() const
+            {
+                std::vector<std::shared_ptr<Backplate>> backplates;
+                backplates.reserve(m_backplates.size());
+                for (const auto& kv : m_backplates)
+                {
+                    if (kv.second)
+                    {
+                        backplates.push_back(kv.second);
+                    }
+                }
+                return backplates;
+            }
+
+            const std::unordered_map<std::wstring, std::shared_ptr<Backplate>>& m_backplates;
+            std::vector<HANDLE> m_events {};
+            std::vector<std::shared_ptr<Backplate>> m_eventOwners {};
+            std::vector<std::pair<std::shared_ptr<Backplate>, unsigned long long>> m_renderCountsAtStart {};
+        };
+    }
+
+    int Application::RunMessageLoop()
+    {
+        // Each iteration waits (without spinning, also with no backplate),
+        // services the signaled async redraws, drains a bounded number of
+        // messages, runs the animation tick and renders every backplate with a
+        // pending request once (see MessagePump.h). Returns the WM_QUIT exit
+        // code, or -1 if the wait fails.
+        BackplatePumpHost host(m_backplates);
+        const MessagePumpBudget budget {};
+        for (;;)
+        {
+            if (const std::optional<int> exitCode = PumpMessagesOnce(host, budget))
+            {
+                return *exitCode;
+            }
         }
     }
 
