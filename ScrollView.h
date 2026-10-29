@@ -40,11 +40,13 @@ namespace FD2D
         // bar) or right edge (vertical bar), and the bar is drawn there. Off by
         // default (bars drawn over the content).
         //
-        // Overflow is decided once per Arrange, so it cannot toggle between
-        // arranges: an axis overflows if the content exceeds the viewport
-        // without gutters, or exceeds it once the other axis's gutter narrows
-        // it; the gutter of an axis whose content, re-measured for the reduced
-        // viewport, no longer overflows is dropped again.
+        // Overflow is decided anew in each Arrange, from the content and the
+        // size alone, so it cannot toggle between arranges: starting without
+        // gutters, every axis whose content overflows the current viewport gets
+        // its gutter and the content is measured again for the reduced
+        // viewport, until no further axis overflows. A gutter is never dropped
+        // in that Arrange, even if the content then fits (the bar is hidden and
+        // the gutter stays empty), so a visible bar is always in its gutter.
         void SetScrollBarGutter(bool reserve);
         bool ScrollBarGutter() const { return m_reserveGutter; }
 

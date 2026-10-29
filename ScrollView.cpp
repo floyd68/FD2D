@@ -334,32 +334,28 @@ namespace FD2D
 
             if (m_showScrollBars && m_reserveGutter)
             {
-                // See SetScrollBarGutter for the rule. Gutters are only added
-                // until the content is re-measured, so this cannot cycle.
-                bool h = m_enableHScroll && (desired.w - childArea.w) > 0.5f;
-                bool v = m_enableVScroll && (desired.h - childArea.h) > 0.5f;
-                if (v && !h)
+                // See SetScrollBarGutter for the rule. Gutters are only ever
+                // added (at most one per axis), so this ends after two
+                // re-measures at most and cannot cycle; an axis that overflows
+                // after the last measure has its gutter, so a visible bar is
+                // always in one.
+                bool h = false;
+                bool v = false;
+                for (;;)
                 {
-                    h = m_enableHScroll && (desired.w - (childArea.w - kScrollBarGutter)) > 0.5f;
-                }
-                if (h && !v)
-                {
-                    v = m_enableVScroll && (desired.h - (childArea.h - kScrollBarGutter)) > 0.5f;
-                }
-                if (h || v)
-                {
+                    const bool addH = !h && m_enableHScroll && (desired.w - viewport.w) > 0.5f;
+                    const bool addV = !v && m_enableVScroll && (desired.h - viewport.h) > 0.5f;
+                    if (!addH && !addV)
+                    {
+                        break;
+                    }
+                    h = h || addH;
+                    v = v || addV;
                     viewport = withGutters(h, v);
                     desired = measureFor(viewport);
-                    const bool keepH = h && (desired.w - viewport.w) > 0.5f;
-                    const bool keepV = v && (desired.h - viewport.h) > 0.5f;
-                    if (keepH != h || keepV != v)
-                    {
-                        viewport = withGutters(keepH, keepV);
-                        desired = measureFor(viewport);
-                    }
-                    m_hGutter = keepH;
-                    m_vGutter = keepV;
                 }
+                m_hGutter = h;
+                m_vGutter = v;
             }
 
             const float arrangedW = m_enableHScroll ? (std::max)(viewport.w, desired.w) : viewport.w;

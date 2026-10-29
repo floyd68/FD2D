@@ -206,29 +206,64 @@ FD2D_TEST(ScrollViewGutter_NoOverflowOrOptionOffKeepsTheGeometry)
 
 FD2D_TEST(ScrollViewGutter_ContentAtTheThresholdSettles)
 {
+    // Every visible bar lies in its gutter, clear of the content viewport.
+    const auto barsClear = [](const FD2D::ScrollView& scroll)
+    {
+        const D2D1_RECT_F viewport = scroll.ContentViewportRect();
+        D2D1_RECT_F track {}, thumb {};
+        const bool hClear = !scroll.HScrollBarRects(track, thumb) || !Intersects(viewport, track);
+        const bool vClear = !scroll.VScrollBarRects(track, thumb) || !Intersects(viewport, track);
+        return hClear && vClear;
+    };
+
     // 4.1 widths per height: 205 wide at the full 50 (overflows a 200 viewport),
-    // 151.7 at the 37 left by a gutter (fits). The gutter is dropped, and every
-    // later arrange decides the same way.
+    // 151.7 at the 37 left by a gutter (fits). The gutter stays and the bar is
+    // hidden (nothing to scroll), and every later arrange decides the same way.
     auto scroll = MakeView(std::make_shared<AspectContent>(4.1f), true, false, true, 200.0f, 50.0f);
-    const D2D1_RECT_F first = scroll->ContentViewportRect();
-    FD2D_CHECK(SameRect(first, scroll->LayoutRect()));
+    D2D1_RECT_F track {}, thumb {};
+    FD2D_CHECK(Near(scroll->ContentViewportRect().bottom, 50.0f - kGutter));
+    FD2D_CHECK(!scroll->HScrollBarRects(track, thumb));
+    FD2D_CHECK(barsClear(*scroll));
     for (int i = 0; i < 5; ++i)
     {
         scroll->Measure({ 200.0f, 50.0f });
         scroll->Arrange({ 0.0f, 0.0f, 200.0f, 50.0f });
-        FD2D_CHECK(SameRect(scroll->ContentViewportRect(), first));
+        FD2D_CHECK(Near(scroll->ContentViewportRect().bottom, 50.0f - kGutter));
+        FD2D_CHECK(barsClear(*scroll));
     }
 
-    // Wide enough to overflow with the gutter too: the gutter stays, every time.
+    // Wide enough to overflow with the gutter too: the gutter stays and the bar
+    // shows in it, every time.
     auto wide = MakeView(std::make_shared<AspectContent>(10.0f), true, false, true, 200.0f, 50.0f);
     for (int i = 0; i < 5; ++i)
     {
         wide->Measure({ 200.0f, 50.0f });
         wide->Arrange({ 0.0f, 0.0f, 200.0f, 50.0f });
         FD2D_CHECK(Near(wide->ContentViewportRect().bottom, 50.0f - kGutter));
+        FD2D_CHECK(wide->HScrollBarRects(track, thumb));
+        FD2D_CHECK(barsClear(*wide));
     }
-}
 
+    // Around the threshold, at several heights: the bar never overlaps the
+    // content viewport, and a second arrange decides like the first.
+    size_t cases = 0;
+    for (float height = 30.0f; height <= 70.0f; height += 5.0f)
+    {
+        for (float ratio = 2.0f; ratio <= 8.0f; ratio += 0.05f)
+        {
+            auto probe = MakeView(std::make_shared<AspectContent>(ratio), true, false, true, 200.0f, height);
+            const D2D1_RECT_F first = probe->ContentViewportRect();
+            const bool firstBar = probe->HScrollBarRects(track, thumb);
+            FD2D_CHECK(barsClear(*probe));
+            probe->Measure({ 200.0f, height });
+            probe->Arrange({ 0.0f, 0.0f, 200.0f, height });
+            FD2D_CHECK(SameRect(probe->ContentViewportRect(), first));
+            FD2D_CHECK(probe->HScrollBarRects(track, thumb) == firstBar);
+            ++cases;
+        }
+    }
+    FD2D_CHECK(cases > 500);
+}
 FD2D_TEST(ScrollViewGutter_VerticalAndBothAxes)
 {
     // Vertical overflow: the right gutter narrows the viewport; the range uses
