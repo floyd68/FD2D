@@ -26,6 +26,40 @@ namespace FD2D
         void SetScrollBarsVisible(bool visible);
         bool ScrollBarsVisible() const { return m_showScrollBars; }
 
+        // Scrollbar geometry: a bar kScrollBarThickness thick, kScrollBarInset
+        // from the viewport edges; with a gutter, kScrollBarGutter is reserved
+        // for it (an inset on both sides of the bar).
+        static constexpr float kScrollBarThickness = 9.0f;
+        static constexpr float kScrollBarInset = 2.0f;
+        static constexpr float kScrollBarGutter = kScrollBarThickness + 2.0f * kScrollBarInset;
+
+        // Reserve a gutter for each visible scrollbar (needs SetScrollBarsVisible)
+        // so the bar never covers content: on an axis that overflows, the content
+        // viewport - the size content is arranged to, the scroll range and the
+        // content clip - leaves kScrollBarGutter free along the bottom (horizontal
+        // bar) or right edge (vertical bar), and the bar is drawn there. Off by
+        // default (bars drawn over the content).
+        //
+        // Overflow is decided anew in each Arrange, from the content and the
+        // size alone, so it cannot toggle between arranges: starting without
+        // gutters, every axis whose content overflows the current viewport gets
+        // its gutter and the content is measured again for the reduced
+        // viewport, until no further axis overflows. A gutter is never dropped
+        // in that Arrange, even if the content then fits (the bar is hidden and
+        // the gutter stays empty), so a visible bar is always in its gutter.
+        void SetScrollBarGutter(bool reserve);
+        bool ScrollBarGutter() const { return m_reserveGutter; }
+
+        // Where content is visible and receives input (client coordinates): the
+        // LayoutRect() without the gutters reserved in the last Arrange.
+        D2D1_RECT_F ContentViewportRect() const;
+
+        // Scrollbar geometry (client coords), as drawn and hit-tested. Returns
+        // false when that axis has no visible bar (no overflow). outThumb is
+        // the draggable handle inside outTrack.
+        bool HScrollBarRects(D2D1_RECT_F& outTrack, D2D1_RECT_F& outThumb) const;
+        bool VScrollBarRects(D2D1_RECT_F& outTrack, D2D1_RECT_F& outThumb) const;
+
         void SetVerticalScrollEnabled(bool enabled);
         bool VerticalScrollEnabled() const { return m_enableVScroll; }
 
@@ -71,11 +105,6 @@ namespace FD2D
     private:
         void ClampScroll();
         bool IsPointInViewport(int x, int y) const;
-        // Scrollbar geometry (client coords). Returns false when that axis has
-        // no overflow (so no bar is drawn/hit-tested). outThumb is the draggable
-        // handle inside outTrack.
-        bool HScrollBarRects(D2D1_RECT_F& outTrack, D2D1_RECT_F& outThumb) const;
-        bool VScrollBarRects(D2D1_RECT_F& outTrack, D2D1_RECT_F& outThumb) const;
         void ClampTargetScroll();
         void SetTargetScrollX(float x);
         void SetTargetScrollY(float y);
@@ -92,6 +121,10 @@ namespace FD2D
         bool m_enableHScroll { true };
         bool m_enableVScroll { true };
         bool m_showScrollBars { false };
+        bool m_reserveGutter { false };
+        // Gutters reserved in the last Arrange (horizontal bar: bottom; vertical: right).
+        bool m_hGutter { false };
+        bool m_vGutter { false };
         // Scrollbar drag: 0 = horizontal thumb, 1 = vertical thumb, -1 = none.
         int m_barDragAxis { -1 };
         float m_barDragMouse { 0.0f };  // cursor pos on the drag axis at grab

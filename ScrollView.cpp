@@ -50,10 +50,34 @@ namespace FD2D
         Invalidate();
     }
 
+    void ScrollView::SetScrollBarGutter(bool reserve)
+    {
+        if (m_reserveGutter == reserve)
+        {
+            return;
+        }
+        m_reserveGutter = reserve;
+        Invalidate();
+    }
+
+    D2D1_RECT_F ScrollView::ContentViewportRect() const
+    {
+        D2D1_RECT_F rect = LayoutRect();
+        if (m_hGutter)
+        {
+            rect.bottom = (std::max)(rect.top, rect.bottom - kScrollBarGutter);
+        }
+        if (m_vGutter)
+        {
+            rect.right = (std::max)(rect.left, rect.right - kScrollBarGutter);
+        }
+        return rect;
+    }
+
     namespace
     {
-        constexpr float kBarThick = 9.0f;   // scrollbar thickness
-        constexpr float kBarPad = 2.0f;     // inset from the viewport edges
+        constexpr float kBarThick = ScrollView::kScrollBarThickness;
+        constexpr float kBarPad = ScrollView::kScrollBarInset;
         constexpr float kBarMinThumb = 28.0f;
     }
 
@@ -167,7 +191,7 @@ namespace FD2D
 
     void ScrollView::EnsureCentered(const D2D1_RECT_F& rect, bool Immediate)
     {
-        const D2D1_RECT_F viewportOuter = LayoutRect();
+        const D2D1_RECT_F viewportOuter = ContentViewportRect();
 
         float newScrollX = m_scrollX;
         float newScrollY = m_scrollY;
@@ -281,28 +305,68 @@ namespace FD2D
         m_bounds = inset;
         m_layoutRect = ToD2D(inset);
 
-        Rect childArea = Inset(inset, m_padding);
-        m_viewportSize = { childArea.w, childArea.h };
+        const Rect childArea = Inset(inset, m_padding);
+        Rect viewport = childArea;
+        m_hGutter = false;
+        m_vGutter = false;
 
         if (m_content)
         {
             // Measure content with "infinite only on scrollable axes" to learn intrinsic size without exploding
             // desired size for controls that scale to available space.
-            Size probeAvailable
+            const auto measureFor = [&](const Rect& area)
             {
-                m_enableHScroll ? FLT_MAX : childArea.w,
-                m_enableVScroll ? FLT_MAX : childArea.h
+                const Size probeAvailable
+                {
+                    m_enableHScroll ? FLT_MAX : area.w,
+                    m_enableVScroll ? FLT_MAX : area.h
+                };
+                return m_content->Measure(probeAvailable);
             };
-            Size desired = m_content->Measure(probeAvailable);
+            const auto withGutters = [&](bool h, bool v)
+            {
+                Rect area = childArea;
+                area.h = (std::max)(0.0f, area.h - (h ? kScrollBarGutter : 0.0f));
+                area.w = (std::max)(0.0f, area.w - (v ? kScrollBarGutter : 0.0f));
+                return area;
+            };
+            Size desired = measureFor(childArea);
 
-            const float arrangedW = m_enableHScroll ? (std::max)(childArea.w, desired.w) : childArea.w;
-            const float arrangedH = m_enableVScroll ? (std::max)(childArea.h, desired.h) : childArea.h;
+            if (m_showScrollBars && m_reserveGutter)
+            {
+                // See SetScrollBarGutter for the rule. Gutters are only ever
+                // added (at most one per axis), so this ends after two
+                // re-measures at most and cannot cycle; an axis that overflows
+                // after the last measure has its gutter, so a visible bar is
+                // always in one.
+                bool h = false;
+                bool v = false;
+                for (;;)
+                {
+                    const bool addH = !h && m_enableHScroll && (desired.w - viewport.w) > 0.5f;
+                    const bool addV = !v && m_enableVScroll && (desired.h - viewport.h) > 0.5f;
+                    if (!addH && !addV)
+                    {
+                        break;
+                    }
+                    h = h || addH;
+                    v = v || addV;
+                    viewport = withGutters(h, v);
+                    desired = measureFor(viewport);
+                }
+                m_hGutter = h;
+                m_vGutter = v;
+            }
+
+            const float arrangedW = m_enableHScroll ? (std::max)(viewport.w, desired.w) : viewport.w;
+            const float arrangedH = m_enableVScroll ? (std::max)(viewport.h, desired.h) : viewport.h;
             m_contentSize = { arrangedW, arrangedH };
 
             // Arrange content within the viewport (scrolling will translate during render).
-            Rect contentRect { childArea.x, childArea.y, arrangedW, arrangedH };
+            Rect contentRect { viewport.x, viewport.y, arrangedW, arrangedH };
             m_content->Arrange(contentRect);
         }
+        m_viewportSize = { viewport.w, viewport.h };
 
         ClampScroll();
         ClampTargetScroll();
@@ -418,14 +482,9 @@ namespace FD2D
 
         AdvanceSmoothScroll(Util::NowMs());
 
-        // Clip to viewport + apply translation
-        const D2D1_RECT_F clip = LayoutRect();
-        
-        // Debug: Check if clip rect is valid
-        if (Name() == L"thumbScroll")
-        {
-        }
-        
+        // Clip to the content viewport (the scrollbar gutters stay outside it) +
+        // apply translation.
+        const D2D1_RECT_F clip = ContentViewportRect();
         target->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
         D2D1_MATRIX_3X2_F oldTransform {};
@@ -663,16 +722,12 @@ namespace FD2D
                 return m_content->OnInputEvent(event);
             }
 
-            // If we're not in an active drag/capture sequence, ignore events outside the viewport.
+            // If we're not in an active drag/capture sequence, ignore events
+            // outside the content viewport (a gutter belongs to its scrollbar).
             if (!m_forwardCapture)
             {
-                if (!event.hasPoint)
-                {
-                    return false;
-                }
-                const int x = event.point.x;
-                const int y = event.point.y;
-                if (!IsPointInViewport(x, y))
+                if (!event.hasPoint ||
+                    !Util::RectContainsPoint(ContentViewportRect(), POINT { event.point.x, event.point.y }))
                 {
                     return false;
                 }
