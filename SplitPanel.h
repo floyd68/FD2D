@@ -26,6 +26,10 @@ namespace FD2D
         void SetSecondChild(const std::shared_ptr<Wnd>& child);
         void SetSplitRatio(float ratio);  // 0.0 ~ 1.0
         float SplitRatio() const { return m_splitRatio; }
+        // The ratio asked for, which later arranges clamp again for their size
+        // (SplitRatio() is the clamped one from the last Arrange). Give it to
+        // another split that should follow this one across resizes.
+        float RequestedSplitRatio() const { return m_requestedSplitRatio; }
 
         // Constrain pane extents (width for Horizontal, height for Vertical)
         void SetFirstPaneMinExtent(float extent);

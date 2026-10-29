@@ -12,6 +12,7 @@ add_executable(FD2DTests
     BackplateHoverToastTests.cpp
     ComboBoxTests.cpp
     ScrollViewTests.cpp
+    SplitPanelTests.cpp
     GraphicsGenerationTests.cpp
     RenderStatsTests.cpp
     CoalescedRenderTests.cpp
@@ -61,6 +62,7 @@ add_test(NAME FD2D.AsyncRedrawDispatch COMMAND FD2DTests AsyncRedrawDispatch_)
 add_test(NAME FD2D.ImageTransform COMMAND FD2DTests ImageTransform_)
 add_test(NAME FD2D.GraphicsGeneration COMMAND FD2DTests GraphicsGeneration_)
 add_test(NAME FD2D.ScrollView COMMAND FD2DTests ScrollViewShift_)
+add_test(NAME FD2D.SplitPanel COMMAND FD2DTests SplitPanel_)
 add_test(NAME FD2D.WindowlessRender COMMAND FD2DTests WindowlessRender_)
 add_test(NAME FD2D.ImageCheckerboard COMMAND FD2DTests ImageCheckerboard_)
 add_test(NAME FD2D.BackplateHoverToast COMMAND FD2DTests BackplateHoverToast_)
