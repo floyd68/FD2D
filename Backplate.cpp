@@ -2545,9 +2545,27 @@ namespace FD2D
         {
             return E_NOINTERFACE;
         }
-        if ((!m_useOffscreenBuffer && !m_windowless) ||
-            m_inSizeMove ||
-            !m_offscreenTexture)
+        if ((!m_useOffscreenBuffer && !m_windowless) || m_inSizeMove)
+        {
+            return HRESULT_FROM_WIN32(ERROR_NOT_READY);
+        }
+        if (!m_windowless && !m_lastFrameOffscreen)
+        {
+            // The last frame went straight to the back buffer: compose the
+            // current scene offscreen once (see the header).
+            if (m_isRendering)
+            {
+                return HRESULT_FROM_WIN32(ERROR_NOT_READY);
+            }
+            m_composeOffscreenNextFrame = true;
+            Render();
+            m_composeOffscreenNextFrame = false;
+            if (!m_lastFrameOffscreen || !m_d3dDevice || !m_d3dContext)
+            {
+                return HRESULT_FROM_WIN32(ERROR_NOT_READY);
+            }
+        }
+        if (!m_offscreenTexture)
         {
             return HRESULT_FROM_WIN32(ERROR_NOT_READY);
         }
@@ -2908,9 +2926,14 @@ namespace FD2D
         }
         else
         {
-        // Create D3D11 off-screen resources if enabled (always in windowless mode,
-        // where the off-screen texture is the only target).
-        const bool useOffscreenThisFrame = m_windowless || (m_useOffscreenBuffer && !m_inSizeMove);
+        // Off-screen texture: always in windowless mode (the only target);
+        // otherwise only for a frame ReadComposedPixels asked to compose. An
+        // ordinary frame goes straight to the back buffer, without the
+        // full-frame copy.
+        const bool useOffscreenThisFrame = m_windowless ||
+            (m_useOffscreenBuffer && !m_inSizeMove && m_composeOffscreenNextFrame);
+        m_composeOffscreenNextFrame = false;
+        m_lastFrameOffscreen = false;
         if (useOffscreenThisFrame && m_d3dDevice && m_size.width > 0 && m_size.height > 0)
         {
             if (!m_offscreenTexture || !m_offscreenRTV)
@@ -3106,6 +3129,7 @@ namespace FD2D
                 nullptr,
                 D2D1_INTERPOLATION_MODE_LINEAR,
                 D2D1_COMPOSITE_MODE_SOURCE_COPY);
+            ++m_offscreenCopies;
             
             const auto t_endDraw2 = std::chrono::steady_clock::now();
             hr = m_d2dContext->EndDraw();
@@ -3146,6 +3170,7 @@ namespace FD2D
             return;
         }
         m_endDrawFailureStreak = 0;
+        m_lastFrameOffscreen = useOffscreenThisFrame && m_offscreenD2DTarget;
 
         // Detach target before Present for clean interop.
         if (m_d2dContext)

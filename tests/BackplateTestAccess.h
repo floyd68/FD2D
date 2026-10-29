@@ -89,5 +89,10 @@ namespace FD2D
         static ID2D1SolidColorBrush* TipBrush(const Backplate& backplate) { return backplate.m_tipBrush.Get(); }
         static IDWriteTextLayout* TooltipLayout(const Backplate& backplate) { return backplate.m_tipLayout.Get(); }
         static IDWriteTextLayout* ToastLayout(const Backplate& backplate) { return backplate.m_toastLayout.Get(); }
+
+        // Full-frame offscreen-to-back-buffer copies the D3D path has done.
+        static std::size_t OffscreenCopies(const Backplate& backplate) { return backplate.m_offscreenCopies; }
+        // Live resize (WM_ENTERSIZEMOVE .. WM_EXITSIZEMOVE).
+        static void SetInSizeMove(Backplate& backplate, bool inSizeMove) { backplate.m_inSizeMove = inSizeMove; }
     };
 }
