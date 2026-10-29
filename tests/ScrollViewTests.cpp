@@ -260,3 +260,34 @@ FD2D_TEST(ScrollViewGutter_VerticalAndBothAxes)
     auto narrowed = MakeView(std::make_shared<FixedContent>(195.0f, 1000.0f), true, true, true, 200.0f, 200.0f);
     FD2D_CHECK(SameRect(narrowed->ContentViewportRect(), D2D1::RectF(0.0f, 0.0f, 200.0f - kGutter, 200.0f - kGutter)));
 }
+FD2D_TEST(ScrollViewGutter_TrackClicksWheelAndCenteringStillWork)
+{
+    auto scroll = MakeView(std::make_shared<FixedContent>(1000.0f, 50.0f), true, false, true, 200.0f, 50.0f);
+    D2D1_RECT_F track {}, thumb {};
+    FD2D_REQUIRE(scroll->HScrollBarRects(track, thumb));
+    const float barY = 0.5f * (track.top + track.bottom);
+
+    // A press on the track beside the thumb pages by 0.9 viewport widths.
+    FD2D_CHECK(scroll->OnInputEvent(Mouse(FD2D::InputEventType::MouseDown, thumb.right + 10.0f, barY)));
+    FD2D_CHECK(Near(scroll->ScrollX(), 180.0f));
+    FD2D_REQUIRE(scroll->HScrollBarRects(track, thumb));
+    FD2D_CHECK(scroll->OnInputEvent(Mouse(FD2D::InputEventType::MouseDown, thumb.left - 2.0f, barY)));
+    FD2D_CHECK(Near(scroll->ScrollX(), 0.0f));
+
+    // The wheel scrolls over the content and over the bar's gutter alike.
+    FD2D::InputEvent wheel = Mouse(FD2D::InputEventType::MouseWheel, 100.0f, 10.0f);
+    wheel.wheelDelta = -WHEEL_DELTA;
+    FD2D_CHECK(scroll->OnInputEvent(wheel));
+    FD2D_CHECK(Near(scroll->TargetScrollX(), scroll->ScrollStep()));
+    wheel.point.y = static_cast<LONG>(barY);
+    FD2D_CHECK(scroll->OnInputEvent(wheel));
+    FD2D_CHECK(Near(scroll->TargetScrollX(), 2.0f * scroll->ScrollStep()));
+
+    // Centering in the content viewport; items near the ends snap to them.
+    scroll->EnsureCentered(D2D1::RectF(480.0f, 0.0f, 520.0f, 37.0f), true);
+    FD2D_CHECK(Near(scroll->ScrollX(), 400.0f));
+    scroll->EnsureCentered(D2D1::RectF(950.0f, 0.0f, 1000.0f, 37.0f), true);
+    FD2D_CHECK(Near(scroll->ScrollX(), 800.0f));
+    scroll->EnsureCentered(D2D1::RectF(10.0f, 0.0f, 60.0f, 37.0f), true);
+    FD2D_CHECK(Near(scroll->ScrollX(), 0.0f));
+}
