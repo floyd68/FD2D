@@ -123,7 +123,6 @@ namespace FD2D
             }
         }
 
-        m_bounds = finalRect;
         m_layoutRect = ToD2D(finalRect);
     }
 }

@@ -88,7 +88,6 @@ namespace FD2D
             }
         }
 
-        m_bounds = r;
         m_layoutRect = ToD2D(r);
     }
 }

@@ -91,7 +91,6 @@ namespace FD2D
     void Wnd::Arrange(Rect finalRect)
     {
         Rect inset = Inset(finalRect, m_margin);
-        m_bounds = inset;
         m_layoutRect = ToD2D(inset);
 
         Rect childArea = Inset(inset, m_padding);

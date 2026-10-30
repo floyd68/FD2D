@@ -42,7 +42,6 @@ namespace FD2D
 
     void Panel::Arrange(Rect finalRect)
     {
-        m_bounds = finalRect;
         m_layoutRect = ToD2D(finalRect);
         for (auto& child : ChildrenInOrder())
         {

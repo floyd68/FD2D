@@ -226,7 +226,6 @@ namespace FD2D
             child->Arrange({ x, y, w, h });
         }
 
-        m_bounds = finalRect;
         m_layoutRect = ToD2D(finalRect);
     }
 }

@@ -302,7 +302,6 @@ namespace FD2D
     void ScrollView::Arrange(Rect finalRect)
     {
         Rect inset = Inset(finalRect, m_margin);
-        m_bounds = inset;
         m_layoutRect = ToD2D(inset);
 
         const Rect childArea = Inset(inset, m_padding);

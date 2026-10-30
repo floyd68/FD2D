@@ -282,7 +282,6 @@ namespace
 
         void Arrange(FD2D::Rect finalRect) override
         {
-            m_bounds = finalRect;
             m_layoutRect = FD2D::ToD2D(finalRect);
             for (auto& child : m_childrenOrdered)
             {
