@@ -1216,6 +1216,11 @@ namespace FD2D
         case WM_ENTERSIZEMOVE:
         {
             m_inSizeMove = true;
+            m_sizeAtSizeMoveStart = m_size;
+            if (m_window != nullptr)
+            {
+                (void)SetTimer(m_window, kModalLoopTimerId, kModalLoopTimerMs, nullptr);
+            }
             result = 0;
             return true;
         }
@@ -1223,6 +1228,10 @@ namespace FD2D
         case WM_EXITSIZEMOVE:
         {
             m_inSizeMove = false;
+            if (m_window != nullptr)
+            {
+                KillTimer(m_window, kModalLoopTimerId);
+            }
             if (m_resizeResourcesPending)
             {
                 m_resizeResourcesPending = false;
@@ -1348,6 +1357,22 @@ namespace FD2D
 
         case WM_TIMER:
         {
+            if (wParam == kModalLoopTimerId)
+            {
+                // The move/size loop's stand-in for RunMessageLoop's servicing
+                // (see kModalLoopTimerId): a pending async redraw and the
+                // animation tick request a render, and the request is rendered
+                // here, once per tick (not left to WM_PAINT, which a drag's
+                // input can hold back; Render() validates the window).
+                if (m_asyncRedrawSignal.IsValid() && m_asyncRedrawSignal.IsPending())
+                {
+                    ProcessAsyncRedraw();
+                }
+                ProcessAnimationTick(Util::NowMs());
+                (void)RenderIfPending();
+                result = 0;
+                return true;
+            }
             if (wParam == kHoverToastTimerId)
             {
                 OnHoverToastTimer(Util::NowMs());
@@ -1395,6 +1420,10 @@ namespace FD2D
             {
                 KillTimer(m_window, kHoverToastTimerId);
                 m_hoverToastTimerDueMs = 0;
+            }
+            if (m_window != nullptr)
+            {
+                KillTimer(m_window, kModalLoopTimerId);
             }
             // HWND is about to become invalid; clear before any late Invalidate/Render.
             m_window = nullptr;
