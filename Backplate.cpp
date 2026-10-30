@@ -2927,12 +2927,12 @@ namespace FD2D
         else
         {
         // Off-screen texture: always in windowless mode (the only target);
-        // otherwise only for a frame ReadComposedPixels asked to compose. An
-        // ordinary frame goes straight to the back buffer, without the
-        // full-frame copy.
+        // otherwise only while ReadComposedPixels composes a frame (the flag
+        // holds for every pass of that Render call, including one a render
+        // callback requested). An ordinary frame goes straight to the back
+        // buffer, without the full-frame copy.
         const bool useOffscreenThisFrame = m_windowless ||
             (m_useOffscreenBuffer && !m_inSizeMove && m_composeOffscreenNextFrame);
-        m_composeOffscreenNextFrame = false;
         m_lastFrameOffscreen = false;
         if (useOffscreenThisFrame && m_d3dDevice && m_size.width > 0 && m_size.height > 0)
         {

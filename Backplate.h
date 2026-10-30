@@ -408,9 +408,10 @@ namespace FD2D
         bool m_useOffscreenBuffer { true };
         // Full-frame offscreen-to-back-buffer copies done (tests and diagnostics).
         std::size_t m_offscreenCopies { 0 };
-        // Swap-chain renderer: the next frame goes through the offscreen
-        // texture (set by ReadComposedPixels), and whether the last frame
-        // completed there (its contents are then the current composed frame).
+        // Swap-chain renderer: frames go through the offscreen texture (set by
+        // ReadComposedPixels around its whole Render call), and whether the
+        // last frame completed there (its contents are then the current
+        // composed frame).
         bool m_composeOffscreenNextFrame { false };
         bool m_lastFrameOffscreen { false };
 

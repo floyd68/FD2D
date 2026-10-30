@@ -92,6 +92,16 @@ namespace FD2D
 
         // Full-frame offscreen-to-back-buffer copies the D3D path has done.
         static std::size_t OffscreenCopies(const Backplate& backplate) { return backplate.m_offscreenCopies; }
+        // What a recoverable EndDraw failure does: the swap-chain targets and
+        // the offscreen resources are discarded and the next frame recreates
+        // them under a new target generation.
+        static void RecreateTargetsAfterEndDrawFailure(Backplate& backplate)
+        {
+            backplate.DiscardD2DTargets();
+            backplate.OnRecoverableEndDrawFailure(D2DERR_RECREATE_TARGET, "test");
+        }
+        static ID2D1Bitmap1* SwapChainTargetBitmap(const Backplate& backplate) { return backplate.m_d2dTargetBitmap.Get(); }
+        static ID3D11Texture2D* OffscreenTexture(const Backplate& backplate) { return backplate.m_offscreenTexture.Get(); }
         // Live resize (WM_ENTERSIZEMOVE .. WM_EXITSIZEMOVE).
         static void SetInSizeMove(Backplate& backplate, bool inSizeMove) { backplate.m_inSizeMove = inSizeMove; }
     };

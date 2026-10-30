@@ -265,18 +265,67 @@ FD2D_TEST(SwapChainReadback_ReadsAfterResizeAndRecreation)
     backplate.Render();
     FD2D_CHECK(ReadsColumns(backplate, kGreen, kBlueOverGreen));
 
-    // Target recreation, then a device loss: the first capture after each
-    // shows the current frame.
-    FD2D::BackplateTestAccess::TargetRecreated(backplate);
+    // A real target recreation (what a recoverable EndDraw failure does): the
+    // swap-chain targets and the offscreen resources are discarded, the next
+    // frame recreates the swap-chain targets, and the first capture composes
+    // into a new offscreen texture. Ordinary frames then go direct again.
+    FD2D_REQUIRE(FD2D::BackplateTestAccess::OffscreenTexture(backplate) != nullptr);   // from the last read
+    FD2D::BackplateTestAccess::RecreateTargetsAfterEndDrawFailure(backplate);
+    FD2D_CHECK(FD2D::BackplateTestAccess::SwapChainTargetBitmap(backplate) == nullptr);
+    FD2D_CHECK(FD2D::BackplateTestAccess::OffscreenTexture(backplate) == nullptr);
     scene.d3d->SetColor(kRedColor);
     backplate.Render();
+    FD2D_CHECK(FD2D::BackplateTestAccess::SwapChainTargetBitmap(backplate) != nullptr);
+    FD2D_CHECK(FD2D::BackplateTestAccess::OffscreenTexture(backplate) == nullptr);   // a direct frame
     FD2D_CHECK(ReadsColumns(backplate, kRed, kBlueOverRed));
-
-    FD2D::BackplateTestAccess::DeviceLost(backplate);
+    FD2D_CHECK(FD2D::BackplateTestAccess::OffscreenTexture(backplate) != nullptr);
+    const std::size_t copies = FD2D::BackplateTestAccess::OffscreenCopies(backplate);
     scene.d3d->SetColor(kGreenColor);
     backplate.Render();
-    FD2D_REQUIRE(backplate.D3DDevice() != nullptr);
+    backplate.Render();
+    FD2D_CHECK(FD2D::BackplateTestAccess::OffscreenCopies(backplate) == copies);
     FD2D_CHECK(ReadsColumns(backplate, kGreen, kBlueOverGreen));
+
+    // A device loss: the first capture after it shows the current frame.
+    FD2D::BackplateTestAccess::DeviceLost(backplate);
+    scene.d3d->SetColor(kRedColor);
+    backplate.Render();
+    FD2D_REQUIRE(backplate.D3DDevice() != nullptr);
+    FD2D_CHECK(ReadsColumns(backplate, kRed, kBlueOverRed));
+}
+
+FD2D_TEST(SwapChainReadback_CaptureSurvivesARenderRequestedByARenderCallback)
+{
+    // A render callback that calls Render() makes the outer Render run one
+    // more pass; the capture keeps composing offscreen through it, so the
+    // read succeeds with the current frame.
+    WindowScene scene;
+    FD2D_REQUIRE(scene.Create(320, 200));
+    FD2D::Backplate& backplate = scene.backplate;
+    backplate.Render();
+
+    int passes = 0;
+    backplate.SetBetweenPassesHook([&]
+    {
+        ++passes;
+        if (passes == 1)
+        {
+            backplate.Render();   // a nested request: one more pass of this Render
+        }
+    });
+    scene.d3d->SetColor(kGreenColor);
+    const std::size_t copies = FD2D::BackplateTestAccess::OffscreenCopies(backplate);
+    FD2D_CHECK(ReadsColumns(backplate, kGreen, kBlueOverGreen));
+    backplate.SetBetweenPassesHook({});
+    std::printf("  capture with a nested render request: %d passes, %zu offscreen copies\n", passes,
+        FD2D::BackplateTestAccess::OffscreenCopies(backplate) - copies);
+    FD2D_CHECK(passes == 2);
+    FD2D_CHECK(FD2D::BackplateTestAccess::OffscreenCopies(backplate) - copies == 2);
+
+    // The next ordinary frames go direct again.
+    const std::size_t after = FD2D::BackplateTestAccess::OffscreenCopies(backplate);
+    backplate.Render();
+    FD2D_CHECK(FD2D::BackplateTestAccess::OffscreenCopies(backplate) == after);
 }
 
 FD2D_TEST(SwapChainReadback_SizeMoveAndD2DOnlyKeepTheirErrors)
