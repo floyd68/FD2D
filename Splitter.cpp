@@ -89,7 +89,6 @@ namespace FD2D
 
     void Splitter::Arrange(Rect finalRect)
     {
-        m_bounds = finalRect;
         m_layoutRect = ToD2D(finalRect);
     }
 

@@ -119,7 +119,6 @@ namespace FD2D
             p.wnd->Arrange({ childArea.x + p.x, childArea.y + p.y, p.w, p.h });
         }
 
-        m_bounds = finalRect;
         m_layoutRect = ToD2D(finalRect);
     }
 }

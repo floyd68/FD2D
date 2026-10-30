@@ -196,8 +196,9 @@ namespace FD2D
 
     void SplitPanel::OnSplitRatioChanged(float ratio)
     {
-        // Clamp ratio based on current bounds and second-pane constraints
-        Rect inset = Inset(m_bounds, m_margin);
+        // Clamp ratio based on the arranged rect and second-pane constraints
+        const Rect bounds = BoundsRect();
+        Rect inset = Inset(bounds, m_margin);
         Rect childArea = Inset(inset, m_padding);
 
         float splitterExtent = 0.0f;
@@ -220,11 +221,11 @@ namespace FD2D
         }
         
         // Call Measure/Arrange to recalculate layout
-        if (BackplateRef() && m_bounds.w > 0.0f && m_bounds.h > 0.0f)
+        if (BackplateRef() && bounds.w > 0.0f && bounds.h > 0.0f)
         {
-            // Recalculate layout using current bounds
-            Measure({ m_bounds.w, m_bounds.h });
-            Arrange(m_bounds);
+            // Recalculate layout in the arranged rect
+            Measure({ bounds.w, bounds.h });
+            Arrange(bounds);
         }
         
         Invalidate();
@@ -501,7 +502,6 @@ namespace FD2D
             }
         }
 
-        m_bounds = finalRect;
         m_layoutRect = ToD2D(finalRect);
     }
 }

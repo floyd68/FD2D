@@ -266,7 +266,6 @@ namespace FD2D
         std::vector<std::shared_ptr<Wnd>> m_childrenOrdered {};
         D2D1_RECT_F m_layoutDesired { 0.0f, 0.0f, 100.0f, 30.0f };
         D2D1_RECT_F m_layoutRect { 0.0f, 0.0f, 100.0f, 30.0f };
-        Rect m_bounds { 0.0f, 0.0f, 100.0f, 30.0f };
         Size m_desired { 100.0f, 30.0f };
         bool m_anchorLeft { true };
         bool m_anchorTop { true };

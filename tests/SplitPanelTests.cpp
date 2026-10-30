@@ -177,3 +177,34 @@ FD2D_TEST(SplitPanel_SplitterRatioChangeReArrangesInTheArrangedRect)
         FD2D_CHECK(SameRect(dragged.split->LayoutRect(), D2D1::RectF(10.0f, 20.0f, 410.0f, 320.0f)));   // the arranged rect
     }
 }
+
+FD2D_TEST(SplitPanel_RatioChangeOfASplitPlacedBySetLayoutRectStaysInIt)
+{
+    // The one behaviour change of dropping Wnd::m_bounds: a split positioned
+    // only through SetLayoutRect (never arranged) re-arranges within that
+    // rect on a ratio change, as an arranged one does. It used to re-arrange
+    // within the stale default bounds (0, 0, 100, 30).
+    FD2DWindowlessTest::ComScope com;
+    FD2DWindowlessTest::CoreScope core;
+    FD2D::Backplate backplate(L"split-layoutrect-test");
+    FD2D_REQUIRE(SUCCEEDED(backplate.InitializeWindowless(420, 330)));
+    const FD2D::Rect rect { 10.0f, 20.0f, 400.0f, 300.0f };
+    for (const auto orientation : { FD2D::SplitterOrientation::Horizontal, FD2D::SplitterOrientation::Vertical })
+    {
+        auto split = std::make_shared<FD2D::SplitPanel>(
+            orientation == FD2D::SplitterOrientation::Horizontal ? L"placed_h" : L"placed_v", orientation);
+        auto first = std::make_shared<FD2D::Wnd>(L"first");
+        auto second = std::make_shared<FD2D::Wnd>(L"second");
+        split->SetFirstChild(first);
+        split->SetSecondChild(second);
+        split->SetMargin(3.0f);
+        split->SetPadding(5.0f);
+        FD2D_REQUIRE(backplate.AddWnd(split));
+        split->SetLayoutRect(FD2D::ToD2D(rect));
+
+        FD2D::SplitPanelTestAccess::OnSplitRatioChanged(*split, 0.3f);
+        const ArrangedSplit reference = MakeArranged(orientation, split->SplitRatio(), rect);
+        FD2D_CHECK(SameLayout(*split, *reference.split));
+        FD2D_CHECK(SameRect(second->LayoutRect(), reference.second->LayoutRect()));
+    }
+}
