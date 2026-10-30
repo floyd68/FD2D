@@ -49,6 +49,8 @@ namespace FD2D
         void OnRender(ID2D1RenderTarget* target) override;
 
     private:
+        friend struct SplitPanelTestAccess;   // tests: drive OnSplitRatioChanged as a splitter drag does
+
         void OnSplitRatioChanged(float ratio);
         float ClampRatioForPaneConstraints(const Rect& childArea, float splitterExtent, float ratio) const;
 
