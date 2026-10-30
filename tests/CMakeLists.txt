@@ -20,6 +20,7 @@ add_executable(FD2DTests
     WindowlessTestSupport.h
     WindowlessRenderTests.cpp
     SwapChainReadbackTests.cpp
+    ModalLoopRedrawTests.cpp
 )
 
 target_include_directories(FD2DTests PRIVATE
@@ -67,6 +68,7 @@ add_test(NAME FD2D.ScrollViewGutter COMMAND FD2DTests ScrollViewGutter_)
 add_test(NAME FD2D.SplitPanel COMMAND FD2DTests SplitPanel_)
 add_test(NAME FD2D.WindowlessRender COMMAND FD2DTests WindowlessRender_)
 add_test(NAME FD2D.SwapChainReadback COMMAND FD2DTests SwapChainReadback_)
+add_test(NAME FD2D.ModalLoopRedraw COMMAND FD2DTests ModalLoopRedraw_)
 add_test(NAME FD2D.ImageCheckerboard COMMAND FD2DTests ImageCheckerboard_)
 add_test(NAME FD2D.BackplateHoverToast COMMAND FD2DTests BackplateHoverToast_)
 add_test(NAME FD2D.ComboBox COMMAND FD2DTests ComboBox_)

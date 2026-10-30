@@ -247,6 +247,14 @@ namespace FD2D
         // Check if currently rendering (to prevent recursive layout changes)
         bool IsRendering() const { return m_isRendering; }
         bool IsInSizeMove() const { return m_inSizeMove; }
+        // Inside the move/size modal loop once the client size has changed
+        // since it began (a live resize); false during a pure move, where
+        // work deferred for resizing can go on.
+        bool IsInLiveResize() const
+        {
+            return m_inSizeMove &&
+                (m_size.width != m_sizeAtSizeMoveStart.width || m_size.height != m_sizeAtSizeMoveStart.height);
+        }
 
         // Marks a batch of state changes (e.g. drag-hover overlay updates across
         // several children during a single OLE DragOver callback) whose owner
@@ -450,6 +458,7 @@ namespace FD2D
         std::function<void(HWND)> m_onWindowPlacementChanged {};
         UINT_PTR m_placeAutosaveTimerId { 0 };
         bool m_inSizeMove { false };
+        D2D1_SIZE_U m_sizeAtSizeMoveStart { 0, 0 };   // client size at WM_ENTERSIZEMOVE
         bool m_resizeResourcesPending { false };
         bool m_offscreenResizePending { false };
 
@@ -474,6 +483,13 @@ namespace FD2D
         // Tooltip-dwell / toast-expiry deadline timer (SetTimer on m_window)
         // and the deadline it is armed for (0 = not armed).
         static constexpr UINT_PTR kHoverToastTimerId = 0xFD23;
+        // While the move/size modal loop runs, Application::RunMessageLoop does
+        // not: this timer (armed on WM_ENTERSIZEMOVE, killed on
+        // WM_EXITSIZEMOVE) services the async-redraw event and the animation
+        // tick in its place and renders a pending request (at most once per
+        // tick); with nothing pending a tick renders nothing.
+        static constexpr UINT_PTR kModalLoopTimerId = 0xFD24;
+        static constexpr UINT kModalLoopTimerMs = 16;
         unsigned long long m_hoverToastTimerDueMs { 0 };
         // Lazily created DWrite format for tooltip/toast text, and the text
         // layouts built from it, rebuilt only when their text changes. DirectWrite
