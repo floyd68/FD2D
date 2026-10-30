@@ -126,10 +126,19 @@ namespace FD2D
         D2D1_SIZE_U ClientSize() const { return m_size; }
         D2D1_SIZE_U RenderSurfaceSize() const { return m_renderSurfaceSize; }
         D2D1_SIZE_F LogicalToRenderScale() const { return m_logicalToRenderScale; }
-        // Reads a logical client-space rectangle from the last fully composed
-        // offscreen frame (D3D + D2D) into tightly packed BGRA8 pixels. This is
-        // independent of desktop occlusion. Call Render() first when a current
-        // frame is required. Returns E_NOINTERFACE for the D2D-only backend.
+        // Reads a logical client-space rectangle of the composed frame (D3D +
+        // D2D) into tightly packed BGRA8 pixels, independent of desktop
+        // occlusion. Call Render() first when a current frame is required.
+        //
+        // On the swap-chain renderer an ordinary frame goes straight to the
+        // back buffer (no full-frame offscreen copy). When the last frame did,
+        // this composes the current scene once into the offscreen texture (a
+        // Render() through the offscreen path, which also presents it) and
+        // reads that, so it never returns a frame left over from an earlier
+        // read; reading again with no frame in between reads the same one.
+        // Windowless mode always renders offscreen. Returns E_NOINTERFACE for
+        // the D2D-only backend and ERROR_NOT_READY during size/move, while
+        // rendering, or with the offscreen buffer disabled.
         HRESULT ReadComposedPixels(
             const D2D1_RECT_F& logicalRect,
             std::vector<std::uint8_t>& pixels,
@@ -228,7 +237,10 @@ namespace FD2D
         void SetClearColor(const D2D1_COLOR_F& color);
         D2D1_COLOR_F ClearColor() const { return m_clearColor; }
 
-        // Enable/disable off-screen double-buffering (reduces flicker, default: enabled)
+        // Enable/disable the off-screen buffer (default: enabled). The
+        // swap-chain renderer uses it only to compose frames for
+        // ReadComposedPixels(); with it disabled that returns ERROR_NOT_READY.
+        // The D2D-only renderer renders every frame through it.
         void SetUseOffscreenBuffer(bool enable) { m_useOffscreenBuffer = enable; }
         bool UseOffscreenBuffer() const { return m_useOffscreenBuffer; }
 
@@ -394,6 +406,14 @@ namespace FD2D
         ID3D11RenderTargetView* m_activeD3DRenderTarget { nullptr };       // Current-frame D3D target (swapchain or offscreen)
         
         bool m_useOffscreenBuffer { true };
+        // Full-frame offscreen-to-back-buffer copies done (tests and diagnostics).
+        std::size_t m_offscreenCopies { 0 };
+        // Swap-chain renderer: frames go through the offscreen texture (set by
+        // ReadComposedPixels around its whole Render call), and whether the
+        // last frame completed there (its contents are then the current
+        // composed frame).
+        bool m_composeOffscreenNextFrame { false };
+        bool m_lastFrameOffscreen { false };
 
         // Windowless render mode (InitializeWindowless): the offscreen texture
         // is the only target, sized m_windowlessSurfaceSize pixels.
